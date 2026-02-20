@@ -469,10 +469,6 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			if rws == nil || rws.Release == nil || !rws.Available || rws.Release.Link == "" {
 				continue
 			}
-			ct := strings.ToLower(rws.CompressionType)
-			if ct != "" && ct != "direct" && ct != "7z" && ct != "rar" {
-				continue
-			}
 			availReleases = append(availReleases, rws.Release)
 		}
 		if len(availReleases) > 0 {

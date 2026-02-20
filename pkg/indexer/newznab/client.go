@@ -104,7 +104,7 @@ func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
 		apiPath: apiPath,
 		apiKey:  cfg.APIKey,
 		client: &http.Client{
-			Timeout:   30 * time.Second,
+			Timeout:   10 * time.Second,
 			Transport: transport,
 		},
 		apiLimit:          cfg.APIHitsDay,

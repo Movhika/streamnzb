@@ -243,7 +243,7 @@ func Load() (*Config, error) {
 		AdminUsername:           "admin",
 		CacheTTLSeconds:         300,
 		ValidationSampleSize:    5,
-		MaxStreams:              6,
+		MaxStreams:              5,
 		MaxStreamsPerResolution: 0, // 0 = disabled
 		ProxyPort:               119,
 		ProxyHost:               "0.0.0.0",
