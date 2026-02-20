@@ -96,9 +96,12 @@ func (m *UsageManager) GetIndexerUsage(name string) *UsageData {
 
 	if data.LastResetDay != today {
 		logger.Debug("Resetting daily usage for indexer", "name", name, "last_reset", data.LastResetDay, "today", today)
+		data.AllTimeAPIHitsUsed += data.APIHitsUsed
+		data.AllTimeDownloadsUsed += data.DownloadsUsed
 		data.LastResetDay = today
 		data.APIHitsUsed = 0
 		data.DownloadsUsed = 0
+		_ = m.save()
 	}
 
 	return data

@@ -311,14 +311,6 @@ func (n *NZB) CompressionType() string {
 
 	// 3. If we have .rar/.r00 anywhere, it's RAR (including when largest is .001-style)
 	if hasRarFiles {
-		largest := n.GetLargestContentFile()
-		if largest != nil {
-			logger.Debug("CompressionType detected rar",
-				"filename", largest.Filename,
-				"extension", largest.Extension,
-				"reason", "release contains .rar or .r00-style files",
-				"largest_size", largest.Size)
-		}
 		return "rar"
 	}
 

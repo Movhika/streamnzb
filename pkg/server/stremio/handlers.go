@@ -52,6 +52,7 @@ type Server struct {
 	tmdbClient           *tmdb.Client
 	tvdbClient           *tvdb.Client
 	deviceManager        *auth.DeviceManager
+	recentFailures       sync.Map // normalizedTitle → time.Time; short-lived cache to avoid re-validating known-dead releases across requests
 	webHandler           http.Handler
 	apiHandler           http.Handler
 }
@@ -531,8 +532,31 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			return nil, err
 		}
 		candidates := s.triageCandidates(device, indexerReleases)
-		indexerCandidatesCount = len(candidates)
-		logger.Debug("Indexer candidates after triage", "count", indexerCandidatesCount)
+		logger.Debug("Indexer candidates after triage", "count", len(candidates))
+
+		// Filter candidates that recently failed validation (across requests)
+		{
+			const recentFailureTTL = 5 * time.Minute
+			now := time.Now()
+			before := len(candidates)
+			filtered := candidates[:0]
+			for _, c := range candidates {
+				if c.Release != nil && c.Release.Title != "" {
+					key := release.NormalizeTitle(c.Release.Title)
+					if v, ok := s.recentFailures.Load(key); ok {
+						if failedAt, ok := v.(time.Time); ok && now.Sub(failedAt) < recentFailureTTL {
+							continue
+						}
+						s.recentFailures.Delete(key)
+					}
+				}
+				filtered = append(filtered, c)
+			}
+			candidates = filtered
+			if removed := before - len(candidates); removed > 0 {
+				logger.Debug("Filtered candidates by recent failures", "removed", removed, "remaining", len(candidates))
+			}
+		}
 
 		if availResult != nil && len(availResult.Releases) > 0 {
 			ourProviders := make(map[string]bool)
@@ -584,6 +608,9 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			}
 		}
 
+		// Set candidate count after all filtering for accurate placeholder messaging
+		indexerCandidatesCount = len(candidates)
+
 		// Validate candidates in parallel until we have enough streams
 		// Limit validation attempts to maxStreams * 2 to avoid excessive downloads
 		maxAttempts := maxStreams * 2
@@ -624,6 +651,9 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 				stream, err := s.validateCandidate(validationCtx, cand, device, contentIDs)
 				if err != nil {
 					logger.Trace("validateCandidate failed", "title", cand.Release.Title, "err", err)
+					if cand.Release != nil && cand.Release.Title != "" {
+						s.recentFailures.Store(release.NormalizeTitle(cand.Release.Title), time.Now())
+					}
 					return
 				}
 				resultChan <- stream
@@ -731,7 +761,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		placeholder := Stream{
 			URL:   errorVideoURL,
 			Name:  "StreamNZB⚡",
-			Title: fmt.Sprintf("0/%d OK\n%d total\nNo streams from first batch.\nRetry to validate more.", indexerAttempted, indexerCandidatesCount),
+			Title: fmt.Sprintf("0/%d OK\n%d remaining\nNo streams from first batch.\nRetry to validate more.", indexerAttempted, indexerCandidatesCount-indexerAttempted),
 		}
 		streams = []Stream{placeholder}
 		logger.Info("Adding placeholder stream", "attempted", indexerAttempted, "candidates", indexerCandidatesCount)

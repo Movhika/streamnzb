@@ -198,20 +198,16 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 		}
 	}
 
-	// Update persistent storage
-	if c.usageManager != nil {
-		// Calculate used from headers if possible
+	// Update persistent storage from header-derived absolute values.
+	// Only call UpdateUsage when we have authoritative limits from headers;
+	// unlimited accounts track incrementally via IncrementUsed in Search/DownloadNZB.
+	if c.usageManager != nil && (c.apiLimit > 0 || c.downloadLimit > 0) {
 		if c.apiLimit > 0 {
 			c.apiUsed = c.apiLimit - c.apiRemaining
-		} else {
-			// If no limit, we can't derive "used" from "remaining".
-			// We should have incremented it locally.
 		}
-
 		if c.downloadLimit > 0 {
 			c.downloadUsed = c.downloadLimit - c.downloadRemaining
 		}
-
 		c.usageManager.UpdateUsage(c.name, c.apiUsed, c.downloadUsed)
 	}
 }
@@ -322,7 +318,6 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 	defer resp.Body.Close()
 
-	// Local increment as fallback
 	c.mu.Lock()
 	c.apiUsed++
 	if c.apiRemaining > 0 {
@@ -331,6 +326,11 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	c.mu.Unlock()
 
 	c.updateUsageFromHeaders(resp.Header)
+
+	// For unlimited accounts (no header-derived limits), persist incrementally
+	if c.usageManager != nil && c.apiLimit == 0 {
+		c.usageManager.IncrementUsed(c.name, 1, 0)
+	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -401,9 +401,8 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	}
 	defer resp.Body.Close()
 
-	// Local increment as fallback
 	c.mu.Lock()
-	c.apiUsed++ // Download also counts as API hit usually
+	c.apiUsed++
 	c.downloadUsed++
 	if c.apiRemaining > 0 {
 		c.apiRemaining--
@@ -414,6 +413,13 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	c.mu.Unlock()
 
 	c.updateUsageFromHeaders(resp.Header)
+
+	// For unlimited accounts (no header-derived limits), persist incrementally
+	if c.usageManager != nil && c.apiLimit == 0 && c.downloadLimit == 0 {
+		c.usageManager.IncrementUsed(c.name, 1, 1)
+	} else if c.usageManager != nil && c.apiLimit == 0 {
+		c.usageManager.IncrementUsed(c.name, 1, 0)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s NZB download returned status %d", c.Name(), resp.StatusCode)
