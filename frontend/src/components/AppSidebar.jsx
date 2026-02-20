@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Settings, Server, Globe, Filter, ArrowUpDown,
   MonitorSmartphone, LogOut, Tv, Clipboard, Check,
-  Sun, Moon, Monitor, Zap, FileText
+  Sun, Moon, Monitor, Zap, FileText, Coffee
 } from "lucide-react"
 import {
   Sidebar,
@@ -151,7 +151,7 @@ export function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Theme selector - pushed to bottom */}
+        {/* Buy me a coffee + Theme selector - pushed to bottom */}
         <SidebarGroup className="mt-auto">
           <SidebarGroupContent>
             <SidebarMenu>
@@ -179,6 +179,15 @@ export function AppSidebar({
       </SidebarContent>
 
       <SidebarFooter>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            tooltip="Buy me a coffee"
+            onClick={() => window.open('https://buymeacoffee.com/gaisberg', '_blank')}
+          >
+            <Coffee className="size-4" />
+            <span>Buy me a coffee</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         {currentUser && currentUser !== 'legacy' && (
           <SidebarMenu>
             <SidebarMenuItem>
