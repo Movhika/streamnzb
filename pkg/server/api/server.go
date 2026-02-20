@@ -163,8 +163,8 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 		}
 		s.sessionMgr.UpdatePools(s.streamingPools)
 
-		// 4. Restart Proxy if enabled
-		if comp.Config.ProxyEnabled {
+		// 4. Restart NNTP Proxy
+		{
 			logger.Info("Restarting NNTP Proxy...", "host", comp.Config.ProxyHost, "port", comp.Config.ProxyPort)
 			newProxy, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, s.streamingPools, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
 			if err != nil {
@@ -225,16 +225,21 @@ func (s *Server) cleanupIndexerUsage() {
 		return
 	}
 
-	var activeNames []string
-	if agg, ok := s.indexer.(*indexer.Aggregator); ok {
-		for _, idx := range agg.GetIndexers() {
-			activeNames = append(activeNames, idx.Name())
+	// Use all configured indexer names (enabled and disabled) so that disabling
+	// an indexer does not remove its usage stats; only indexers removed from
+	// config are pruned.
+	var configuredNames []string
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+	if cfg != nil {
+		for _, idx := range cfg.Indexers {
+			if idx.URL != "" && idx.Name != "" {
+				configuredNames = append(configuredNames, idx.Name)
+			}
 		}
-	} else if s.indexer != nil {
-		activeNames = append(activeNames, s.indexer.Name())
 	}
-
-	usageMgr.SyncUsage(activeNames)
+	usageMgr.SyncUsage(configuredNames)
 }
 
 func (s *Server) cleanupProviderUsage() {
@@ -243,12 +248,21 @@ func (s *Server) cleanupProviderUsage() {
 		return
 	}
 
-	var activeNames []string
-	for name := range s.providerPools {
-		activeNames = append(activeNames, name)
+	// Use all configured provider names (enabled and disabled) so that disabling
+	// a provider does not remove its usage stats; only providers removed from
+	// config are pruned.
+	var configuredNames []string
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+	if cfg != nil {
+		for _, p := range cfg.Providers {
+			if p.Name != "" {
+				configuredNames = append(configuredNames, p.Name)
+			}
+		}
 	}
-
-	usageMgr.SyncUsage(activeNames)
+	usageMgr.SyncUsage(configuredNames)
 }
 
 // Handler returns the HTTP handler for the API

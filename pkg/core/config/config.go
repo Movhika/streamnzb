@@ -151,6 +151,7 @@ type IndexerConfig struct {
 	Type         string `json:"type"`     // "newznab", "easynews"
 	APIHitsDay   int    `json:"api_hits_day"`
 	DownloadsDay int    `json:"downloads_day"`
+	Enabled      *bool  `json:"enabled,omitempty"` // Whether this indexer is enabled. nil = not set (old config)
 	// Easynews-specific fields
 	Username string `json:"username"` // Easynews username
 	Password string `json:"password"` // Easynews password
@@ -181,8 +182,7 @@ type Config struct {
 	// NNTP Providers
 	Providers []Provider `json:"providers"`
 
-	// NNTP Proxy
-	ProxyEnabled  bool   `json:"proxy_enabled"`
+	// NNTP Proxy (always enabled when configured)
 	ProxyPort     int    `json:"proxy_port"`
 	ProxyHost     string `json:"proxy_host"`
 	ProxyAuthUser string `json:"proxy_auth_user"`
@@ -384,8 +384,15 @@ func (c *Config) ApplyProviderDefaults() bool {
 	return changed
 }
 
-// MigrateLegacyIndexers applies any one-off config migrations (currently a no-op).
-func (c *Config) MigrateLegacyIndexers() {}
+// MigrateLegacyIndexers applies any one-off config migrations for indexers.
+func (c *Config) MigrateLegacyIndexers() {
+	for i := range c.Indexers {
+		if c.Indexers[i].Enabled == nil {
+			enabled := true
+			c.Indexers[i].Enabled = &enabled
+		}
+	}
+}
 
 // Save saves the current configuration to the file it was loaded from
 func (c *Config) Save() error {
@@ -437,9 +444,6 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	if keySet(keys, env.KeyValidationSize) {
 		cfg.ValidationSampleSize = o.ValidationSampleSize
 	}
-	if keySet(keys, env.KeyProxyEnabled) {
-		cfg.ProxyEnabled = o.ProxyEnabled
-	}
 	if keySet(keys, env.KeyProxyPort) {
 		cfg.ProxyPort = o.ProxyPort
 	}
@@ -482,11 +486,16 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	if keySet(keys, env.KeyIndexers) {
 		cfg.Indexers = make([]IndexerConfig, len(o.Indexers))
 		for i, idx := range o.Indexers {
+			enabled := true
+			if idx.Enabled != nil {
+				enabled = *idx.Enabled
+			}
 			cfg.Indexers[i] = IndexerConfig{
-				Name:   idx.Name,
-				URL:    idx.URL,
-				APIKey: idx.APIKey,
-				Type:   "newznab",
+				Name:    idx.Name,
+				URL:     idx.URL,
+				APIKey:  idx.APIKey,
+				Type:    "newznab",
+				Enabled: &enabled,
 			}
 		}
 	}
@@ -529,8 +538,6 @@ func CopyEnvOverridesFrom(src, dst *Config) {
 			dst.CacheTTLSeconds = src.CacheTTLSeconds
 		case env.KeyValidationSize:
 			dst.ValidationSampleSize = src.ValidationSampleSize
-		case env.KeyProxyEnabled:
-			dst.ProxyEnabled = src.ProxyEnabled
 		case env.KeyProxyPort:
 			dst.ProxyPort = src.ProxyPort
 		case env.KeyProxyHost:

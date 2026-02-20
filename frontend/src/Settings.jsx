@@ -3,44 +3,29 @@ import { useForm, useFieldArray } from 'react-hook-form'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Label } from "@/components/ui/label"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Trash2, Plus, Loader2, RotateCcw, Info, AlertCircle, Check, Key, Copy, AlertTriangle } from "lucide-react"
+import { Loader2, Info, AlertTriangle } from "lucide-react"
 import { FiltersSection } from "@/components/FiltersSection"
 import { SortingSection } from "@/components/SortingSection"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import { 
-  DropdownMenu, 
-  DropdownMenuContent, 
-  DropdownMenuItem, 
-  DropdownMenuTrigger 
-} from "@/components/ui/dropdown-menu"
-import { ChevronDown, Menu } from "lucide-react"
 import { IndexerSettings } from "@/components/IndexerSettings"
 import { ProviderSettings } from "@/components/ProviderSettings"
 import DeviceManagement from "@/components/DeviceManagement"
 
-
-// Shown under a setting when an env var will overwrite it on restart
 function EnvOverrideNote({ show }) {
   if (!show) return null
   return (
-    <p className="text-xs text-amber-600 dark:text-amber-500 flex items-center gap-1 mt-1">
+    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
       <AlertTriangle className="h-3.5 w-3 shrink-0" />
       Overwritten by environment variable on restart.
     </p>
   )
 }
 
-function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, adminToken }) {
+function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken, activePage }) {
   const [loading, setLoading] = useState(!initialConfig)
-  const [activeTab, setActiveTab] = useState("general")
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [initialFormValues, setInitialFormValues] = useState(null)
   const deviceManagementRef = useRef(null)
@@ -53,7 +38,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
       addon_port: 7000,
       addon_base_url: '',
       log_level: 'INFO',
-      proxy_enabled: false,
       proxy_port: 119,
       proxy_host: '',
       proxy_auth_user: '',
@@ -136,10 +120,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
     }
   })
 
-  // Keys that have env var overrides (overwritten on restart) - for showing warnings
   const envOverrides = initialConfig?.env_overrides ?? []
-
-  // Destructure for easy access
   const { control, handleSubmit, reset, setError, formState, setValue, watch, getValues } = form
   const { fields, append, remove } = useFieldArray({
     control,
@@ -153,84 +134,29 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
 
   useEffect(() => {
     if (initialConfig) {
-      // Default sorting config
       const defaultSorting = {
-        resolution_weights: {
-          '4k': 4000000,
-          '1080p': 3000000,
-          '720p': 2000000,
-          'sd': 1000000
-        },
-        codec_weights: {
-          'HEVC': 1000,
-          'x265': 1000,
-          'x264': 500,
-          'AVC': 500
-        },
-        audio_weights: {
-          'Atmos': 1500,
-          'TrueHD': 1200,
-          'DTS-HD': 1000,
-          'DTS-X': 1000,
-          'DTS': 500,
-          'DD+': 400,
-          'DD': 300,
-          'AC3': 200,
-          '5.1': 500,
-          '7.1': 1000
-        },
-        quality_weights: {
-          'BluRay': 2000,
-          'WEB-DL': 1500,
-          'WEBRip': 1200,
-          'HDTV': 1000,
-          'Blu-ray': 2000
-        },
-        visual_tag_weights: {
-          'DV': 1500,
-          'HDR10+': 1200,
-          'HDR': 1000,
-          '3D': 800
-        },
-        grab_weight: 0.5,
-        age_weight: 1.0,
-        preferred_groups: [],
-        preferred_languages: []
+        resolution_weights: { '4k': 4000000, '1080p': 3000000, '720p': 2000000, 'sd': 1000000 },
+        codec_weights: { 'HEVC': 1000, 'x265': 1000, 'x264': 500, 'AVC': 500 },
+        audio_weights: { 'Atmos': 1500, 'TrueHD': 1200, 'DTS-HD': 1000, 'DTS-X': 1000, 'DTS': 500, 'DD+': 400, 'DD': 300, 'AC3': 200, '5.1': 500, '7.1': 1000 },
+        quality_weights: { 'BluRay': 2000, 'WEB-DL': 1500, 'WEBRip': 1200, 'HDTV': 1000, 'Blu-ray': 2000 },
+        visual_tag_weights: { 'DV': 1500, 'HDR10+': 1200, 'HDR': 1000, '3D': 800 },
+        grab_weight: 0.5, age_weight: 1.0, preferred_groups: [], preferred_languages: []
       }
 
-      // Default filters config
       const defaultFilters = {
-        allowed_qualities: [],
-        blocked_qualities: [],
-        min_resolution: '',
-        max_resolution: '',
-        allowed_codecs: [],
-        blocked_codecs: [],
-        required_audio: [],
-        allowed_audio: [],
-        min_channels: '',
-        require_hdr: false,
-        allowed_hdr: [],
-        blocked_hdr: [],
-        block_sdr: false,
-        required_languages: [],
-        allowed_languages: [],
-        block_dubbed: false,
-        block_cam: false,
-        require_proper: false,
-        allow_repack: true,
-        block_hardcoded: false,
-        min_bit_depth: '',
-        min_size_gb: 0,
-        max_size_gb: 0,
-        blocked_groups: []
+        allowed_qualities: [], blocked_qualities: [], min_resolution: '', max_resolution: '',
+        allowed_codecs: [], blocked_codecs: [], required_audio: [], allowed_audio: [],
+        min_channels: '', require_hdr: false, allowed_hdr: [], blocked_hdr: [], block_sdr: false,
+        required_languages: [], allowed_languages: [], block_dubbed: false, block_cam: false,
+        require_proper: false, allow_repack: true, block_hardcoded: false, min_bit_depth: '',
+        min_size_gb: 0, max_size_gb: 0, blocked_groups: []
       }
 
       const { env_overrides: _envOverrides, ...configForForm } = initialConfig
       const formattedData = {
         ...configForForm,
         admin_username: initialConfig.admin_username || 'admin',
-        admin_password: '', // Never sent from server; leave blank on load
+        admin_password: '',
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
         cache_ttl_seconds: Number(initialConfig.cache_ttl_seconds),
@@ -239,49 +165,33 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
         max_streams_per_resolution: Number(initialConfig.max_streams_per_resolution || 0),
         providers: initialConfig.providers?.map((p, index) => ({
           ...p,
-          priority: p.priority != null ? p.priority : index + 1, // Default to index+1 if null/undefined (old config)
-          enabled: p.enabled != null ? p.enabled : true, // Default to enabled if null/undefined (old config)
+          priority: p.priority != null ? p.priority : index + 1,
+          enabled: p.enabled != null ? p.enabled : true,
           port: Number(p.port),
           connections: Number(p.connections)
         })) || [],
         indexers: initialConfig.indexers?.map(idx => ({
           ...idx,
+          enabled: idx.enabled != null ? idx.enabled : true,
           api_path: idx.api_path || '/api',
           api_hits_day: Number(idx.api_hits_day || 0),
           downloads_day: Number(idx.downloads_day || 0),
           username: idx.username || '',
           password: idx.password || ''
         })) || [],
-        // Merge sorting config with defaults (deep merge)
         sorting: {
           ...defaultSorting,
           ...(initialConfig.sorting || {}),
-          resolution_weights: {
-            ...defaultSorting.resolution_weights,
-            ...(initialConfig.sorting?.resolution_weights || {})
-          },
-          codec_weights: {
-            ...defaultSorting.codec_weights,
-            ...(initialConfig.sorting?.codec_weights || {})
-          },
-          audio_weights: {
-            ...defaultSorting.audio_weights,
-            ...(initialConfig.sorting?.audio_weights || {})
-          },
-          quality_weights: {
-            ...defaultSorting.quality_weights,
-            ...(initialConfig.sorting?.quality_weights || {})
-          },
-          visual_tag_weights: {
-            ...defaultSorting.visual_tag_weights,
-            ...(initialConfig.sorting?.visual_tag_weights || {})
-          },
+          resolution_weights: { ...defaultSorting.resolution_weights, ...(initialConfig.sorting?.resolution_weights || {}) },
+          codec_weights: { ...defaultSorting.codec_weights, ...(initialConfig.sorting?.codec_weights || {}) },
+          audio_weights: { ...defaultSorting.audio_weights, ...(initialConfig.sorting?.audio_weights || {}) },
+          quality_weights: { ...defaultSorting.quality_weights, ...(initialConfig.sorting?.quality_weights || {}) },
+          visual_tag_weights: { ...defaultSorting.visual_tag_weights, ...(initialConfig.sorting?.visual_tag_weights || {}) },
           grab_weight: initialConfig.sorting?.grab_weight ?? defaultSorting.grab_weight,
           age_weight: initialConfig.sorting?.age_weight ?? defaultSorting.age_weight,
           preferred_groups: initialConfig.sorting?.preferred_groups || defaultSorting.preferred_groups,
           preferred_languages: initialConfig.sorting?.preferred_languages || defaultSorting.preferred_languages
         },
-        // Merge filters config with defaults (deep merge)
         filters: {
           ...defaultFilters,
           ...(initialConfig.filters || {}),
@@ -305,11 +215,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
     }
   }, [initialConfig, reset])
 
-  // Track form changes
   useEffect(() => {
     const subscription = watch((value) => {
       const currentValues = JSON.stringify(value)
-      
       if (initialFormValues && currentValues !== initialFormValues) {
         setHasUnsavedChanges(true)
       } else {
@@ -319,7 +227,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
     return () => subscription.unsubscribe()
   }, [watch, initialFormValues])
 
-  // Map backend errors to form fields
   useEffect(() => {
       if (saveStatus.errors) {
           Object.keys(saveStatus.errors).forEach(key => {
@@ -330,11 +237,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
 
   const onSubmit = async (data) => {
     try {
-      // Save device configs via WebSocket (they're stored in state.json, not config.json)
       if (deviceManagementRef.current) {
         const deviceConfigs = deviceManagementRef.current.getDeviceConfigs()
         if (Object.keys(deviceConfigs).length > 0) {
-          // Filter out admin and prepare configs for WebSocket
           const configsToSave = {}
           const adminUsername = data.admin_username || 'admin'
           for (const [username, deviceConfig] of Object.entries(deviceConfigs)) {
@@ -350,14 +255,11 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
         }
       }
       
-      // Recursive trim function
       const trimData = (obj) => {
         if (typeof obj !== 'object' || obj === null) return obj;
-        
         if (Array.isArray(obj)) {
           return obj.map(item => trimData(item));
         }
-        
         const newObj = {};
         for (const key in obj) {
           if (typeof obj[key] === 'string') {
@@ -410,528 +312,274 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
     }
   }
 
-  const handleClose = (open) => {
-    if (!open && hasUnsavedChanges) {
-      if (confirm('You have unsaved changes. Are you sure you want to close without saving?')) {
-        onClose()
-        setHasUnsavedChanges(false)
-      }
-    } else if (!open) {
-      onClose()
-    }
-  }
-
   if (loading) return null
+
+  const saveFooter = (
+    <div className="sticky bottom-0 z-10 -mx-4 -mb-4 mt-6 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 border-t bg-background px-4 py-4 sm:px-0 sm:pb-0 sm:pt-6">
+      <div className={`flex items-center text-sm min-w-0 ${saveStatus.type === 'error' ? 'text-destructive' : saveStatus.type === 'success' ? 'text-primary' : 'text-muted-foreground'}`}>
+        {saveStatus.msg}
+      </div>
+      <div className="flex shrink-0 justify-end">
+        <Button type="submit" variant="default" onClick={handleSubmit(onSubmit)} disabled={isSaving || formState.isSubmitting} className="w-full sm:w-auto">
+          {(isSaving || formState.isSubmitting) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          Save Changes
+        </Button>
+      </div>
+    </div>
+  )
   
   return (
-    <Dialog open={true} onOpenChange={handleClose}>
-      <DialogContent className="max-w-[90vw] h-[90vh] flex flex-col p-0 gap-0 overflow-hidden [&>*]:overflow-visible">
-        <DialogHeader className="p-6 pb-4 border-b shrink-0">
-          <DialogTitle>Configuration</DialogTitle>
-          <DialogDescription>
-            Configure your indexers and Usenet providers.
-          </DialogDescription>
-        </DialogHeader>
-
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full flex flex-col flex-1 min-h-0">
-          {/* Fixed Tabs Navigation */}
-          <div className="px-6 pt-4 pb-2 border-b shrink-0">
-            {/* Desktop Tabs */}
-            <div className="hidden md:block">
-              <TabsList className="flex w-full bg-muted/50 p-1">
-                <TabsTrigger value="general" className="flex-1">General</TabsTrigger>
-                <TabsTrigger value="indexers" className="flex-1">Indexers</TabsTrigger>
-                <TabsTrigger value="providers" className="flex-1">Providers</TabsTrigger>
-                <TabsTrigger value="filters" className="flex-1">Filters</TabsTrigger>
-                <TabsTrigger value="sorting" className="flex-1">Sorting</TabsTrigger>
-                <TabsTrigger value="devices" className="flex-1">Devices</TabsTrigger>
-                <TabsTrigger value="advanced" className="flex-1">Advanced</TabsTrigger>
-              </TabsList>
+    <Form {...form}>
+      <form onSubmit={handleSubmit(onSubmit)}>
+        {activePage === 'general' && (
+          <div className="space-y-8">
+            <div>
+              <h2 className="text-2xl font-semibold tracking-tight">Settings</h2>
+              <p className="text-muted-foreground mt-1">Manage addon, dashboard access, NNTP proxy, and advanced options.</p>
             </div>
 
-            {/* Mobile Navigation Dropdown */}
-            <div className="md:hidden">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="w-full justify-between bg-muted/30">
-                    <div className="flex items-center gap-2">
-                      <Menu className="h-4 w-4 text-muted-foreground" />
-                      <span className="capitalize">{activeTab}</span>
-                    </div>
-                    <ChevronDown className="h-4 w-4 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[calc(100vw-5rem)]">
-                  <DropdownMenuItem onClick={() => setActiveTab("general")}>General</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setActiveTab("indexers")}>Indexers</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setActiveTab("providers")}>Providers</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setActiveTab("filters")}>Filters</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setActiveTab("sorting")}>Sorting</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setActiveTab("devices")}>Devices</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setActiveTab("advanced")}>Advanced</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+            <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Addon Settings</CardTitle>
+                <CardDescription>Configure how the Stremio addon listens and is accessed.</CardDescription>
+              </CardHeader>
+              <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField control={control} name="addon_base_url" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Base URL</FormLabel>
+                    <FormControl><Input placeholder="http://localhost:7000" {...field} /></FormControl>
+                    <FormMessage />
+                    <EnvOverrideNote show={envOverrides.includes('addon_base_url')} />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="addon_port" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Port (Requires Restart)</FormLabel>
+                    <FormControl><Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
+                    <FormMessage />
+                    <EnvOverrideNote show={envOverrides.includes('addon_port')} />
+                  </FormItem>
+                )} />
+              </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Dashboard credentials</CardTitle>
+                <CardDescription>Username and password to log in to this dashboard. Save to apply. Leave password blank to keep the current one.</CardDescription>
+              </CardHeader>
+              <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField control={control} name="admin_username" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Username</FormLabel>
+                    <FormControl><Input placeholder="admin" {...field} /></FormControl>
+                    <FormMessage />
+                    <EnvOverrideNote show={envOverrides.includes('admin_username')} />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="admin_password" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">New password</FormLabel>
+                    <FormControl><PasswordInput placeholder="Leave blank to keep current" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>NNTP Proxy Server</CardTitle>
+                <CardDescription>Allow other apps (SABnzbd, NZBGet) to use StreamNZB as a localized news server.</CardDescription>
+                {(envOverrides.includes('proxy_port') || envOverrides.includes('proxy_host') || envOverrides.includes('proxy_auth_user') || envOverrides.includes('proxy_auth_pass')) && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                    <AlertTriangle className="h-3.5 w-3 shrink-0" />
+                    Some settings overwritten by environment variables (NNTP_PROXY_*) on restart.
+                  </p>
+                )}
+              </CardHeader>
+              <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField control={control} name="proxy_host" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Bind Host</FormLabel>
+                    <FormControl><Input placeholder="0.0.0.0" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="proxy_port" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Port</FormLabel>
+                    <FormControl><Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="proxy_auth_user" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Proxy Username</FormLabel>
+                    <FormControl><Input {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="proxy_auth_pass" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Proxy Password</FormLabel>
+                    <FormControl><PasswordInput {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Advanced</CardTitle>
+                <CardDescription>Log level, cache, validation, and stream limits.</CardDescription>
+              </CardHeader>
+              <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField control={control} name="log_level" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Log Level</FormLabel>
+                    <FormControl>
+                      <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" {...field}>
+                        <option value="DEBUG">DEBUG</option>
+                        <option value="INFO">INFO</option>
+                        <option value="WARN">WARN</option>
+                        <option value="ERROR">ERROR</option>
+                      </select>
+                    </FormControl>
+                    <FormMessage />
+                    <EnvOverrideNote show={envOverrides.includes('log_level')} />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="cache_ttl_seconds" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium flex items-center gap-2">
+                      Cache TTL (seconds)
+                      <TooltipProvider><Tooltip><TooltipTrigger asChild><Info className="h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger><TooltipContent className="max-w-xs"><p>How long to cache validation results.</p></TooltipContent></Tooltip></TooltipProvider>
+                    </FormLabel>
+                    <FormControl><Input type="number" min="60" max="3600" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
+                    <FormDescription>Cache duration in seconds (default: 300)</FormDescription>
+                    <FormMessage />
+                    <EnvOverrideNote show={envOverrides.includes('cache_ttl_seconds')} />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="validation_sample_size" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium flex items-center gap-2">
+                      Validation Sample Size
+                      <TooltipProvider><Tooltip><TooltipTrigger asChild><Info className="h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger><TooltipContent className="max-w-xs"><p>Number of segments to check per NZB. Higher = more accurate, slower.</p></TooltipContent></Tooltip></TooltipProvider>
+                    </FormLabel>
+                    <FormControl><Input type="number" min="1" max="20" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
+                    <FormDescription>Segments to check per NZB (default: 5)</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="max_streams" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium flex items-center gap-2">
+                      Max Streams
+                      <TooltipProvider><Tooltip><TooltipTrigger asChild><Info className="h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger><TooltipContent className="max-w-xs"><p>Maximum streams to return per search.</p></TooltipContent></Tooltip></TooltipProvider>
+                    </FormLabel>
+                    <FormControl><Input type="number" min="1" max="20" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
+                    <FormDescription>Number of streams to return (default: 6)</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="max_streams_per_resolution" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium flex items-center gap-2">
+                      Max Streams per Resolution
+                      <TooltipProvider><Tooltip><TooltipTrigger asChild><Info className="h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger><TooltipContent className="max-w-xs"><p>Limit streams per resolution. 0 = disabled.</p></TooltipContent></Tooltip></TooltipProvider>
+                    </FormLabel>
+                    <FormControl><Input type="number" min="0" max="10" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
+                    <FormDescription>Max streams per resolution (0 = disabled, default: 0)</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+              </CardContent>
+            </Card>
             </div>
           </div>
+        )}
 
-          <ScrollArea className="flex-1 min-h-0 w-full">
-            <div className="p-6">
-              <Form {...form}>
-                <form onSubmit={handleSubmit(onSubmit)}>
-                  <TabsContent value="general" className="space-y-6 mt-0">
-                                {/* Addon Settings */}
-                                <Card className="border-border/80 shadow-sm">
-                                    <CardHeader className="pb-4">
-                                        <CardTitle className="text-xl font-semibold tracking-tight">Addon Settings</CardTitle>
-                                        <CardDescription className="text-muted-foreground mt-1">
-                                            Configure how the Stremio addon listens and is accessed.
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="space-y-6">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                <FormField
-                                                    control={control}
-                                                    name="addon_base_url"
-                                                    render={({ field }) => (
-                                                        <FormItem className="space-y-2">
-                                                            <FormLabel className="text-sm font-medium">Base URL</FormLabel>
-                                                            <FormControl>
-                                                                <Input
-                                                                    placeholder="http://localhost:7000"
-                                                                    className="h-10 bg-muted/30 border-border/80 focus-visible:ring-2 focus-visible:ring-ring/50"
-                                                                    {...field}
-                                                                />
-                                                            </FormControl>
-                                                            <FormMessage />
-                                                            <EnvOverrideNote show={envOverrides.includes('addon_base_url')} />
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                                <FormField
-                                                    control={control}
-                                                    name="addon_port"
-                                                    render={({ field }) => (
-                                                        <FormItem className="space-y-2">
-                                                            <FormLabel className="text-sm font-medium">Port (Requires Restart)</FormLabel>
-                                                            <FormControl>
-                                                                <Input
-                                                                    type="number"
-                                                                    className="h-10 bg-muted/30 border-border/80 focus-visible:ring-2 focus-visible:ring-ring/50"
-                                                                    {...field}
-                                                                    onChange={e => field.onChange(e.target.valueAsNumber)}
-                                                                />
-                                                            </FormControl>
-                                                            <FormMessage />
-                                                            <EnvOverrideNote show={envOverrides.includes('addon_port')} />
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                        </div>
+        {activePage === 'indexers' && (
+          <div className="space-y-6">
+            {envOverrides.includes('indexers') && (
+              <div className="rounded-lg border border-border bg-muted/50 p-3">
+                <p className="text-sm text-muted-foreground flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  Indexer list is overwritten by environment variables (INDEXER_1_*, etc.) on restart.
+                </p>
+              </div>
+            )}
+            <IndexerSettings
+              control={control}
+              indexerFields={indexerFields}
+              appendIndexer={appendIndexer}
+              removeIndexer={removeIndexer}
+              watch={watch}
+              setValue={setValue}
+            />
+          </div>
+        )}
 
-                                        <Separator className="my-6" />
+        {activePage === 'providers' && (
+          <div className="space-y-6">
+            {envOverrides.includes('providers') && (
+              <div className="rounded-lg border border-border bg-muted/50 p-3">
+                <p className="text-sm text-muted-foreground flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  Provider list is overwritten by environment variables (PROVIDER_1_*, etc.) on restart.
+                </p>
+              </div>
+            )}
+            <ProviderSettings
+              control={control}
+              fields={fields}
+              append={append}
+              remove={remove}
+              watch={watch}
+            />
+          </div>
+        )}
 
-                                        <div className="rounded-lg border border-border/60 bg-muted/20 p-4 space-y-4">
-                                            <div>
-                                                <h4 className="text-sm font-medium mb-1">Dashboard credentials</h4>
-                                                <p className="text-xs text-muted-foreground">
-                                                    Username and password to log in to this dashboard. Save changes to apply. Leave password blank to keep the current one.
-                                                </p>
-                                            </div>
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                                <FormField
-                                                    control={control}
-                                                    name="admin_username"
-                                                    render={({ field }) => (
-                                                        <FormItem className="space-y-2">
-                                                            <FormLabel className="text-sm font-medium">Username</FormLabel>
-                                                            <FormControl>
-                                                                <Input
-                                                                    placeholder="admin"
-                                                                    className="h-10 bg-muted/30 border-border/80 focus-visible:ring-2 focus-visible:ring-ring/50"
-                                                                    {...field}
-                                                                />
-                                                            </FormControl>
-                                                            <FormMessage />
-                                                            <EnvOverrideNote show={envOverrides.includes('admin_username')} />
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                                <FormField
-                                                    control={control}
-                                                    name="admin_password"
-                                                    render={({ field }) => (
-                                                        <FormItem className="space-y-2">
-                                                            <FormLabel className="text-sm font-medium">New password</FormLabel>
-                                                            <FormControl>
-                                                                <Input
-                                                                    type="password"
-                                                                    placeholder="Leave blank to keep current"
-                                                                    className="h-10 bg-muted/30 border-border/80 focus-visible:ring-2 focus-visible:ring-ring/50"
-                                                                    {...field}
-                                                                />
-                                                            </FormControl>
-                                                            <FormMessage />
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                            </div>
-                                        </div>
-                                    </CardContent>
-                                </Card>
+        {activePage === 'filters' && (
+          <div className="space-y-6">
+            <FiltersSection control={control} watch={form.watch} />
+          </div>
+        )}
 
-                                {/* NNTP Proxy Server */}
-                                <Card>
-                                    <CardHeader>
-                                        <CardTitle className="text-lg">NNTP Proxy Server</CardTitle>
-                                        <CardDescription>Allow other apps (SABnzbd, NZBGet) to use StreamNZB as a localized news server.</CardDescription>
-                                        {(envOverrides.includes('proxy_enabled') || envOverrides.includes('proxy_port') || envOverrides.includes('proxy_host') || envOverrides.includes('proxy_auth_user') || envOverrides.includes('proxy_auth_pass')) && (
-                                            <p className="text-xs text-amber-600 dark:text-amber-500 flex items-center gap-1 mt-1">
-                                                <AlertTriangle className="h-3.5 w-3 shrink-0" />
-                                                Some settings overwritten by environment variables (NNTP_PROXY_*) on restart.
-                                            </p>
-                                        )}
-                                    </CardHeader>
-                                    <CardContent className="grid gap-4">
-                                        <FormField
-                                            control={control}
-                                            name="proxy_enabled"
-                                            render={({ field }) => (
-                                                <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                                                    <div className="space-y-0.5">
-                                                        <FormLabel className="text-base">Enable Proxy</FormLabel>
-                                                    </div>
-                                                    <FormControl>
-                                                        <Checkbox
-                                                            checked={field.value}
-                                                            onCheckedChange={field.onChange}
-                                                        />
-                                                    </FormControl>
-                                                </FormItem>
-                                            )}
-                                        />
-                                        {form.watch('proxy_enabled') && (
-                                            <>
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                    <FormField
-                                                        control={control}
-                                                        name="proxy_host"
-                                                        render={({ field }) => (
-                                                            <FormItem>
-                                                                <FormLabel>Bind Host</FormLabel>
-                                                                <FormControl>
-                                                                    <Input placeholder="0.0.0.0" {...field} />
-                                                                </FormControl>
-                                                                <FormMessage />
-                                                            </FormItem>
-                                                        )}
-                                                    />
-                                                    <FormField
-                                                        control={control}
-                                                        name="proxy_port"
-                                                        render={({ field }) => (
-                                                            <FormItem>
-                                                                <FormLabel>Port</FormLabel>
-                                                                <FormControl>
-                                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
-                                                                </FormControl>
-                                                                <FormMessage />
-                                                            </FormItem>
-                                                        )}
-                                                    />
-                                                </div>
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                    <FormField
-                                                        control={control}
-                                                        name="proxy_auth_user"
-                                                        render={({ field }) => (
-                                                            <FormItem>
-                                                                <FormLabel>Proxy Username</FormLabel>
-                                                                <FormControl>
-                                                                    <Input {...field} />
-                                                                </FormControl>
-                                                                <FormMessage />
-                                                            </FormItem>
-                                                        )}
-                                                    />
-                                                    <FormField
-                                                        control={control}
-                                                        name="proxy_auth_pass"
-                                                        render={({ field }) => (
-                                                            <FormItem>
-                                                                <FormLabel>Proxy Password</FormLabel>
-                                                                <FormControl>
-                                                                    <PasswordInput {...field} />
-                                                                </FormControl>
-                                                                <FormMessage />
-                                                            </FormItem>
-                                                        )}
-                                                    />
-                                                </div>
-                                            </>
-                                        )}
-                                    </CardContent>
-                                </Card>
-                            </TabsContent>
+        {activePage === 'sorting' && (
+          <div className="space-y-6">
+            <SortingSection control={control} watch={form.watch} />
+          </div>
+        )}
 
-                            <TabsContent value="indexers" className="space-y-6">
-                                {envOverrides.includes('indexers') && (
-                                    <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40 p-3">
-                                        <p className="text-sm text-amber-800 dark:text-amber-200 flex items-center gap-2">
-                                            <AlertTriangle className="h-4 w-4 shrink-0" />
-                                            Indexer list is overwritten by environment variables (INDEXER_1_*, etc.) on restart.
-                                        </p>
-                                    </div>
-                                )}
-                                <IndexerSettings
-                                    control={control}
-                                    indexerFields={indexerFields}
-                                    appendIndexer={appendIndexer}
-                                    removeIndexer={removeIndexer}
-                                    watch={watch}
-                                    setValue={setValue}
-                                />
-                            </TabsContent>
+        {activePage === 'devices' && (
+          <div className="space-y-6">
+            <DeviceManagement
+              ref={deviceManagementRef}
+              globalFilters={getValues('filters')}
+              globalSorting={getValues('sorting')}
+              sendCommand={sendCommand}
+              ws={window.ws}
+            />
+          </div>
+        )}
 
-
-                            <TabsContent value="advanced" className="space-y-6">
-                        {/* Advanced Settings */}
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-lg">Advanced Settings</CardTitle>
-                            </CardHeader>
-                            <CardContent>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                     <FormField
-                                        control={control}
-                                        name="log_level"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>Log Level</FormLabel>
-                                                <div className="relative w-full">
-                                                    <select 
-                                                        className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                                                        {...field}
-                                                    >
-                                                        <option value="DEBUG">DEBUG</option>
-                                                        <option value="INFO">INFO</option>
-                                                        <option value="WARN">WARN</option>
-                                                        <option value="ERROR">ERROR</option>
-                                                    </select>
-                                                </div>
-                                                <FormMessage />
-                                                <EnvOverrideNote show={envOverrides.includes('log_level')} />
-                                            </FormItem>
-                                        )}
-                                    />
-                                    <FormField
-                                        control={control}
-                                        name="cache_ttl_seconds"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel className="flex items-center gap-2">
-                                                    Cache TTL (seconds)
-                                                    <TooltipProvider>
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                                                            </TooltipTrigger>
-                                                            <TooltipContent className="max-w-xs">
-                                                                <p>How long to cache validation results. Cached results avoid re-checking the same NZB files repeatedly, improving performance.</p>
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    </TooltipProvider>
-                                                </FormLabel>
-                                                <FormControl>
-                                                    <Input type="number" min="60" max="3600" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
-                                                </FormControl>
-                                                <FormDescription>
-                                                    Cache duration in seconds (default: 300)
-                                                </FormDescription>
-                                                <FormMessage />
-                                                <EnvOverrideNote show={envOverrides.includes('cache_ttl_seconds')} />
-                                            </FormItem>
-                                        )}
-                                    />
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                                    <FormField
-                                        control={control}
-                                        name="validation_sample_size"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel className="flex items-center gap-2">
-                                                    Validation Sample Size
-                                                    <TooltipProvider>
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                                                            </TooltipTrigger>
-                                                            <TooltipContent className="max-w-xs">
-                                                                <p>Number of segments to check from each NZB file. Samples first, last, and evenly distributed segments. Higher values = more accurate validation but slower.</p>
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    </TooltipProvider>
-                                                </FormLabel>
-                                                <FormControl>
-                                                    <Input type="number" min="1" max="20" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
-                                                </FormControl>
-                                                <FormDescription>
-                                                    Segments to check per NZB (default: 5)
-                                                </FormDescription>
-                                                <FormMessage />
-                                                <EnvOverrideNote show={envOverrides.includes('validation_sample_size')} />
-                                            </FormItem>
-                                        )}
-                                    />
-
-                                    <FormField
-                                        control={control}
-                                        name="max_streams"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel className="flex items-center gap-2">
-                                                    Max Streams
-                                                    <TooltipProvider>
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                                                            </TooltipTrigger>
-                                                            <TooltipContent className="max-w-xs">
-                                                                <p>Maximum number of successful streams to return per search. The system will validate up to 2x this number of releases to find healthy ones. Higher values provide more options but take longer.</p>
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    </TooltipProvider>
-                                                </FormLabel>
-                                                <FormControl>
-                                                    <Input type="number" min="1" max="20" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
-                                                </FormControl>
-                                                <FormDescription>
-                                                    Number of streams to return (default: 6)
-                                                </FormDescription>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-
-                                    <FormField
-                                        control={control}
-                                        name="max_streams_per_resolution"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel className="flex items-center gap-2">
-                                                    Max Streams per Resolution
-                                                    <TooltipProvider>
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                                                            </TooltipTrigger>
-                                                            <TooltipContent className="max-w-xs">
-                                                                <p>Limit the number of streams returned per resolution (4K, 1080p, 720p, SD). Set to 0 to disable and use Max Streams behavior instead. Useful when you want multiple resolution options but don't want all streams at the highest resolution.</p>
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    </TooltipProvider>
-                                                </FormLabel>
-                                                <FormControl>
-                                                    <Input type="number" min="0" max="10" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
-                                                </FormControl>
-                                                <FormDescription>
-                                                    Max streams per resolution (0 = disabled, default: 0)
-                                                </FormDescription>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                </div>
-                            </CardContent>
-                        </Card>
-                            </TabsContent>
-
-                            <TabsContent value="providers" className="space-y-6">
-                                {envOverrides.includes('providers') && (
-                                    <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40 p-3">
-                                        <p className="text-sm text-amber-800 dark:text-amber-200 flex items-center gap-2">
-                                            <AlertTriangle className="h-4 w-4 shrink-0" />
-                                            Provider list is overwritten by environment variables (PROVIDER_1_*, etc.) on restart.
-                                        </p>
-                                    </div>
-                                )}
-                                <ProviderSettings
-                                    control={control}
-                                    fields={fields}
-                                    append={append}
-                                    remove={remove}
-                                    watch={watch}
-                                />
-                            </TabsContent>
-
-                            <TabsContent value="filters" className="space-y-6">
-                        <FiltersSection control={control} watch={form.watch} />
-                            </TabsContent>
-
-                            <TabsContent value="sorting" className="space-y-6">
-                        <SortingSection control={control} watch={form.watch} />
-                            </TabsContent>
-
-                            <TabsContent value="devices" className="space-y-6">
-                                <DeviceManagement 
-                                  ref={deviceManagementRef}
-                                  globalFilters={getValues('filters')}
-                                  globalSorting={getValues('sorting')}
-                                  sendCommand={sendCommand}
-                                  ws={window.ws}
-                                />
-                            </TabsContent>
-                </form>
-              </Form>
-            </div>
-          </ScrollArea>
-        </Tabs>
-
-        <DialogFooter className="p-6 pt-4 border-t gap-2 sm:justify-between shrink-0">
-           <div className={`flex items-center text-sm ${saveStatus.type === 'error' ? 'text-destructive' : saveStatus.type === 'success' ? 'text-green-500' : 'text-muted-foreground'}`}>
-              {saveStatus.msg}
-           </div>
-           <div className="flex gap-2">
-              <Button type="button" variant="destructive" onClick={() => {
-                  if (confirm('Are you sure you want to restart StreamNZB?')) {
-                      // Calculate new URL based on current form values (which should be saved)
-                      const currentPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
-                      const newPort = form.getValues('addon_port').toString();
-                      
-                      // Check if we need to redirect
-                      // Note: We use existing hostname
-                      
-                      const hostname = window.location.hostname;
-                      const protocol = window.location.protocol;
-                      
-                      const newUrl = `${protocol}//${hostname}:${newPort}/`;
-                      
-                      sendCommand('restart', {})
-                      
-                      // If URL changed, redirect after a delay
-                      if (newPort !== currentPort) {
-                           // Use a slightly longer timeout to allow the backend to receive the command and die
-                           // and hopefully start coming back up.
-                          setTimeout(() => {
-                              window.location.href = newUrl;
-                          }, 3000); 
-                      }
-                  }
-              }}>
-                 <RotateCcw className="mr-2 h-4 w-4" />
-                 Restart App
-              </Button>
-              <Button type="button" onClick={handleSubmit(onSubmit)} disabled={isSaving || formState.isSubmitting}>
-                 {(isSaving || formState.isSubmitting) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                 Save Changes
-              </Button>
-           </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        {saveFooter}
+      </form>
+    </Form>
   )
 }
 
 export default Settings
-
-

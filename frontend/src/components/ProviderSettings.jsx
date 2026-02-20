@@ -1,11 +1,12 @@
 import React, { useMemo } from 'react'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Trash2, Plus } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 export function ProviderSettings({ control, fields, append, remove, watch }) {
   // Sort providers by priority (lower number = higher priority)
@@ -172,9 +173,10 @@ export function ProviderSettings({ control, fields, append, remove, watch }) {
               )
             })}
 
-            {/* Skeleton Add Card */}
-            <button
+            {/* Add Provider Card */}
+            <Button
                 type="button"
+                variant="outline"
                 onClick={() => {
                   const priorities = fields.map((_, i) => {
                     const p = watch(`providers.${i}.priority`)
@@ -192,16 +194,16 @@ export function ProviderSettings({ control, fields, append, remove, watch }) {
                     enabled: true
                   })
                 }}
-                className="flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-lg border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all min-h-[250px] group"
+                className={cn(
+                  "flex flex-col items-center justify-center p-6 h-auto min-h-[250px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
+                )}
             >
                 <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors mb-4">
                     <Plus className="w-6 h-6 text-primary" />
                 </div>
-                <div className="text-center">
-                    <div className="font-medium text-muted-foreground group-hover:text-foreground transition-colors">Add New Provider</div>
-                    <div className="text-xs text-muted-foreground/60 mt-1">Configure another news server source</div>
-                </div>
-            </button>
+                <span className="font-medium text-muted-foreground group-hover:text-foreground transition-colors">Add New Provider</span>
+                <span className="text-xs text-muted-foreground/80 mt-1">Configure another news server source</span>
+            </Button>
         </div>
     </div>
   )

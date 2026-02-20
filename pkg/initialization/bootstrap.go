@@ -81,6 +81,9 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		if idxCfg.URL == "" {
 			continue
 		}
+		if idxCfg.Enabled != nil && !*idxCfg.Enabled {
+			continue
+		}
 
 		indexerType := idxCfg.Type
 		if indexerType == "" {

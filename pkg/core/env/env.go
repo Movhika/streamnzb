@@ -20,7 +20,6 @@ const (
 	AvailNZBAPIKey        = "AVAILNZB_API_KEY"
 	TMDBAPIKey            = "TMDB_API_KEY"
 	TVDBAPIKey            = "TVDB_API_KEY"
-	NNTPProxyEnabled      = "NNTP_PROXY_ENABLED"
 	NNTPProxyPort         = "NNTP_PROXY_PORT"
 	NNTPProxyHost         = "NNTP_PROXY_HOST"
 	NNTPProxyAuthUser     = "NNTP_PROXY_AUTH_USER"
@@ -40,7 +39,6 @@ const (
 	KeyLogLevel       = "log_level"
 	KeyCacheTTL       = "cache_ttl_seconds"
 	KeyValidationSize = "validation_sample_size"
-	KeyProxyEnabled   = "proxy_enabled"
 	KeyProxyPort      = "proxy_port"
 	KeyProxyHost      = "proxy_host"
 	KeyProxyAuthUser  = "proxy_auth_user"
@@ -56,19 +54,32 @@ const (
 
 const AdminUsernameEnv = "ADMIN_USERNAME"
 
+// DefaultIndexerUserAgent is the User-Agent used for indexer requests when
+// INDEXER_QUERY_HEADER and INDEXER_GRAB_HEADER are unset. Main sets this to
+// "StreamNZB/" + Version at startup.
+var DefaultIndexerUserAgent = "StreamNZB/dev"
+
 // TZ returns the TZ environment variable (e.g. for logger timezone).
 func TZ() string {
 	return os.Getenv(TZVar)
 }
 
-// IndexerQueryHeader returns User-Agent for indexer search/query requests. Empty if not set.
+// IndexerQueryHeader returns User-Agent for indexer search/query requests.
+// Uses INDEXER_QUERY_HEADER if set, otherwise DefaultIndexerUserAgent.
 func IndexerQueryHeader() string {
-	return os.Getenv(IndexerQueryHeaderEnv)
+	if v := os.Getenv(IndexerQueryHeaderEnv); v != "" {
+		return v
+	}
+	return DefaultIndexerUserAgent
 }
 
-// IndexerGrabHeader returns User-Agent for indexer NZB download/grab requests. Empty if not set.
+// IndexerGrabHeader returns User-Agent for indexer NZB download/grab requests.
+// Uses INDEXER_GRAB_HEADER if set, otherwise DefaultIndexerUserAgent.
 func IndexerGrabHeader() string {
-	return os.Getenv(IndexerGrabHeaderEnv)
+	if v := os.Getenv(IndexerGrabHeaderEnv); v != "" {
+		return v
+	}
+	return DefaultIndexerUserAgent
 }
 
 // ProviderHeader returns User-Agent for NNTP provider connections. Empty if not set.
@@ -98,9 +109,10 @@ type Provider struct {
 }
 
 type Indexer struct {
-	Name   string
-	URL    string
-	APIKey string
+	Name    string
+	URL     string
+	APIKey  string
+	Enabled *bool
 }
 
 // ConfigOverrides holds all config values that can be set via environment variables.
@@ -115,7 +127,6 @@ type ConfigOverrides struct {
 	AvailNZBAPIKey       string
 	TMDBAPIKey           string
 	TVDBAPIKey           string
-	ProxyEnabled         bool
 	ProxyPort            int
 	ProxyHost            string
 	ProxyAuthUser        string
@@ -160,10 +171,6 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 	}
 	// Note: AvailNZBURL, AvailNZBAPIKey, TMDBAPIKey, TVDBAPIKey are not read from env vars.
 	// They are build-time constants set via ldflags and should never be modifiable at runtime.
-	if v := os.Getenv(NNTPProxyEnabled); v != "" {
-		o.ProxyEnabled = v == "true" || v == "1"
-		keys = append(keys, KeyProxyEnabled)
-	}
 	if v := os.Getenv(NNTPProxyPort); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
 			o.ProxyPort = port
@@ -239,10 +246,12 @@ func readIndexersFromEnv() []Indexer {
 		if url == "" {
 			continue
 		}
+		enabled := getEnvBool(prefix+"ENABLED", true)
 		list = append(list, Indexer{
-			Name:   getEnv(prefix+"NAME", fmt.Sprintf("Indexer %d", i)),
-			URL:    url,
-			APIKey: os.Getenv(prefix + "API_KEY"),
+			Name:    getEnv(prefix+"NAME", fmt.Sprintf("Indexer %d", i)),
+			URL:     url,
+			APIKey:  os.Getenv(prefix + "API_KEY"),
+			Enabled: &enabled,
 		})
 	}
 	return list

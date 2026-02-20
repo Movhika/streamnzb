@@ -43,6 +43,9 @@ func main() {
 		fmt.Println("No .env file found, using environment variables")
 	}
 
+	// Default User-Agent for indexer requests (overridable via INDEXER_QUERY_HEADER / INDEXER_GRAB_HEADER)
+	env.DefaultIndexerUserAgent = "StreamNZB/" + Version
+
 	// Initialize Logger early so bootstrap can use it
 	logger.Init(env.LogLevel())
 
@@ -146,8 +149,8 @@ func main() {
 	// We should mount /api/ before /.
 	mux.Handle("/api/", apiServer.Handler())
 
-	// Start NNTP proxy if enabled
-	if comp.Config.ProxyEnabled {
+	// Start NNTP proxy (always enabled)
+	{
 		proxyServer, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, comp.StreamingPools, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
 		if err != nil {
 			initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize NNTP proxy: %v", err))

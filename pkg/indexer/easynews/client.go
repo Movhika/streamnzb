@@ -288,11 +288,7 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 	}
 
 	req.SetBasicAuth(c.username, c.password)
-	if ua := env.IndexerQueryHeader(); ua != "" {
-		req.Header.Set("User-Agent", ua)
-	} else {
-		req.Header.Set("User-Agent", "StreamNZB-Easynews/1.0")
-	}
+	req.Header.Set("User-Agent", env.IndexerQueryHeader())
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("easynews search request failed: %w", err)
@@ -351,9 +347,7 @@ func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, er
 
 	req.SetBasicAuth(c.username, c.password)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if ua := env.IndexerGrabHeader(); ua != "" {
-		req.Header.Set("User-Agent", ua)
-	}
+	req.Header.Set("User-Agent", env.IndexerGrabHeader())
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("easynews NZB download request failed: %w", err)

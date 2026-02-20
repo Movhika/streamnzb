@@ -215,7 +215,12 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 // Ping checks if the indexer is reachable
 func (c *Client) Ping() error {
 	apiURL := fmt.Sprintf("%s%s?t=caps&apikey=%s", c.baseURL, c.apiPath, c.apiKey)
-	resp, err := c.client.Get(apiURL)
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", env.IndexerQueryHeader())
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -309,9 +314,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	if ua := env.IndexerQueryHeader(); ua != "" {
-		httpReq.Header.Set("User-Agent", ua)
-	}
+	httpReq.Header.Set("User-Agent", env.IndexerQueryHeader())
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query %s: %w", c.Name(), err)
@@ -392,9 +395,7 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	if ua := env.IndexerGrabHeader(); ua != "" {
-		req.Header.Set("User-Agent", ua)
-	}
+	req.Header.Set("User-Agent", env.IndexerGrabHeader())
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download NZB from %s: %w", c.Name(), err)

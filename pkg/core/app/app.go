@@ -130,8 +130,7 @@ func ConfigChanged(old, new_ *config.Config) ReloadScope {
 
 	indexersChanged := !reflect.DeepEqual(old.Indexers, new_.Indexers)
 	providersChanged := !reflect.DeepEqual(old.Providers, new_.Providers)
-	proxyChanged := old.ProxyEnabled != new_.ProxyEnabled ||
-		old.ProxyHost != new_.ProxyHost ||
+	proxyChanged := old.ProxyHost != new_.ProxyHost ||
 		old.ProxyPort != new_.ProxyPort ||
 		old.ProxyAuthUser != new_.ProxyAuthUser ||
 		old.ProxyAuthPass != new_.ProxyAuthPass

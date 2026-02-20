@@ -1,11 +1,13 @@
 import React from 'react'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Trash2, Plus } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 const INDEXER_PRESETS = [
     { name: 'abNZB', url: 'https://abnzb.com', api_path: '/api', type: 'newznab' },
@@ -57,10 +59,28 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-4 flex-grow">
+                            <FormField
+                                control={control}
+                                name={`indexers.${index}.enabled`}
+                                render={({ field }) => (
+                                    <FormItem className="flex flex-row items-center space-x-2 space-y-0">
+                                        <FormControl>
+                                            <Checkbox
+                                                checked={field.value != null ? field.value : true}
+                                                onCheckedChange={field.onChange}
+                                            />
+                                        </FormControl>
+                                        <FormLabel className="text-xs">Enabled</FormLabel>
+                                    </FormItem>
+                                )}
+                            />
                             <div className="space-y-2">
-                                <Label>Preset / Type</Label>
+                                <Label className="text-sm font-medium">Preset / Type</Label>
                                 <select
-                                    className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                    className={cn(
+                                      "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background",
+                                      "placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                    )}
                                     onChange={(e) => {
                                         const preset = INDEXER_PRESETS.find(p => p.name === e.target.value);
                                         if (preset) {
@@ -191,20 +211,21 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                 )
             })}
 
-            {/* Skeleton Add Card */}
-            <button
+            {/* Add Indexer Card */}
+            <Button
                 type="button"
-                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, username: '', password: '' })}
-                className="flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-lg border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all min-h-[250px] group"
+                variant="outline"
+                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '' })}
+                className={cn(
+                  "flex flex-col items-center justify-center p-6 h-auto min-h-[250px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
+                )}
             >
                 <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors mb-4">
                     <Plus className="w-6 h-6 text-primary" />
                 </div>
-                <div className="text-center">
-                    <div className="font-medium text-muted-foreground group-hover:text-foreground transition-colors">Add New Indexer</div>
-                    <div className="text-xs text-muted-foreground/60 mt-1">Configure another search source</div>
-                </div>
-            </button>
+                <span className="font-medium text-muted-foreground group-hover:text-foreground transition-colors">Add New Indexer</span>
+                <span className="text-xs text-muted-foreground/80 mt-1">Configure another search source</span>
+            </Button>
         </div>
 
         {indexerFields.length === 0 && (

@@ -671,7 +671,8 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 		}(i, p)
 	}
 
-	// 2. Validate Internal Indexers
+	// 2. Validate Internal Indexers (ping with timeout so save doesn't hang on slow/dead indexers)
+	const indexerPingTimeout = 5 * time.Second
 	for i, idx := range cfg.Indexers {
 		wg.Add(1)
 		go func(index int, indexerCfg config.IndexerConfig) {
@@ -682,9 +683,16 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 				mu.Unlock()
 				return
 			}
-			// Use our newznab client to ping
 			client := newznab.NewClient(indexerCfg, nil)
-			if err := client.Ping(); err != nil {
+			errCh := make(chan error, 1)
+			go func() { errCh <- client.Ping() }()
+			var err error
+			select {
+			case err = <-errCh:
+			case <-time.After(indexerPingTimeout):
+				err = fmt.Errorf("connection timeout after %v", indexerPingTimeout)
+			}
+			if err != nil {
 				mu.Lock()
 				errors[fmt.Sprintf("indexers.%d.url", index)] = err.Error()
 				mu.Unlock()
