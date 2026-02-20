@@ -44,7 +44,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       proxy_auth_pass: '',
       cache_ttl_seconds: 300,
       validation_sample_size: 5,
-      max_streams: 6,
+      max_streams: 5,
       max_streams_per_resolution: 0,
       providers: [],
       indexers: [],
@@ -315,7 +315,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   if (loading) return null
 
   const saveFooter = (
-    <div className="sticky bottom-0 z-10 -mx-4 -mb-4 mt-6 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 border-t bg-background px-4 py-4 sm:px-0 sm:pb-0 sm:pt-6">
+    <div className="sticky bottom-0 z-10 -mx-4 mt-3 pb-4 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2 border-t bg-background px-4 pt-3 sm:px-0 sm:pt-4">
       <div className={`flex items-center text-sm min-w-0 ${saveStatus.type === 'error' ? 'text-destructive' : saveStatus.type === 'success' ? 'text-primary' : 'text-muted-foreground'}`}>
         {saveStatus.msg}
       </div>
@@ -333,11 +333,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       <form onSubmit={handleSubmit(onSubmit)}>
         {activePage === 'general' && (
           <div className="space-y-8">
-            <div>
-              <h2 className="text-2xl font-semibold tracking-tight">Settings</h2>
-              <p className="text-muted-foreground mt-1">Manage addon, dashboard access, NNTP proxy, and advanced options.</p>
-            </div>
-
             <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -512,7 +507,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         )}
 
         {activePage === 'indexers' && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             {envOverrides.includes('indexers') && (
               <div className="rounded-lg border border-border bg-muted/50 p-3">
                 <p className="text-sm text-muted-foreground flex items-center gap-2">
@@ -533,7 +528,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         )}
 
         {activePage === 'providers' && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             {envOverrides.includes('providers') && (
               <div className="rounded-lg border border-border bg-muted/50 p-3">
                 <p className="text-sm text-muted-foreground flex items-center gap-2">
@@ -553,19 +548,19 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         )}
 
         {activePage === 'filters' && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             <FiltersSection control={control} watch={form.watch} />
           </div>
         )}
 
         {activePage === 'sorting' && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             <SortingSection control={control} watch={form.watch} />
           </div>
         )}
 
         {activePage === 'devices' && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             <DeviceManagement
               ref={deviceManagementRef}
               globalFilters={getValues('filters')}

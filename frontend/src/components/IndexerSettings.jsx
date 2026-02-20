@@ -36,8 +36,8 @@ const INDEXER_PRESETS = [
 
 export function IndexerSettings({ control, indexerFields, appendIndexer, removeIndexer, watch, setValue }) {
   return (
-    <div className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {indexerFields.map((field, index) => {
                 const currentType = watch(`indexers.${index}.type`) || 'newznab';
                 const isEasynews = currentType === 'easynews';
@@ -58,7 +58,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                 {watch(`indexers.${index}.name`) || `Indexer ${index + 1}`}
                             </CardTitle>
                         </CardHeader>
-                        <CardContent className="space-y-4 flex-grow">
+                        <CardContent className="space-y-3 flex-grow">
                             <FormField
                                 control={control}
                                 name={`indexers.${index}.enabled`}
@@ -217,10 +217,10 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                 variant="outline"
                 onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '' })}
                 className={cn(
-                  "flex flex-col items-center justify-center p-6 h-auto min-h-[250px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
+                  "flex flex-col items-center justify-center p-4 h-auto min-h-[180px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
                 )}
             >
-                <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors mb-4">
+                <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors mb-2">
                     <Plus className="w-6 h-6 text-primary" />
                 </div>
                 <span className="font-medium text-muted-foreground group-hover:text-foreground transition-colors">Add New Indexer</span>

@@ -367,7 +367,7 @@ function App() {
             <LogsPage logs={logs} />
           )}
           {isSettingsPage && (
-            <div className="py-4 md:py-6 px-4 lg:px-6">
+            <div className="pt-4 md:pt-5 pb-3 px-4 lg:px-5">
               <Settings
                 initialConfig={config}
                 sendCommand={sendCommand}

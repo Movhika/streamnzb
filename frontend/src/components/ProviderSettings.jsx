@@ -19,8 +19,8 @@ export function ProviderSettings({ control, fields, append, remove, watch }) {
   }, [fields, watch])
 
   return (
-    <div className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {sortedFields.map((field) => {
               const index = fields.findIndex(f => f.id === field.id)
               return (
@@ -195,7 +195,7 @@ export function ProviderSettings({ control, fields, append, remove, watch }) {
                   })
                 }}
                 className={cn(
-                  "flex flex-col items-center justify-center p-6 h-auto min-h-[250px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
+                  "flex flex-col items-center justify-center p-4 h-auto min-h-[180px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
                 )}
             >
                 <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors mb-4">

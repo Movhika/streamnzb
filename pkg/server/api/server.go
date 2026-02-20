@@ -135,26 +135,18 @@ func (s *Server) SetProxyServer(p *proxy.Server) {
 
 // ReloadFromComponents updates server components. When fullReload is false (config-only),
 // NNTP pools and proxy are not touched - active streams continue uninterrupted.
+// The lock is held only for the pointer swap; slow work (proxy stop, pool shutdown)
+// runs after release so collectStats and WebSocket handlers don't block during reload.
 func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
+	var oldProxy *proxy.Server
+	var oldPools map[string]*nntp.ClientPool
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if fullReload {
-		// 1. Stop existing Proxy
-		if s.proxyServer != nil {
-			logger.Info("Stopping NNTP Proxy for reload...")
-			if err := s.proxyServer.Stop(); err != nil {
-				logger.Error("Failed to stop proxy", "err", err)
-			}
-			s.proxyServer = nil
-		}
+		oldProxy = s.proxyServer
+		oldPools = s.providerPools
 
-		// 2. Shutdown ALL old pools
-		for _, pool := range s.providerPools {
-			pool.Shutdown()
-		}
-
-		// 3. Update pools and indexer
+		// Swap in new state (collectStats can run once we unlock)
 		s.providerPools = comp.ProviderPools
 		s.indexer = comp.Indexer
 		s.streamingPools = make([]*nntp.ClientPool, 0, len(comp.ProviderPools))
@@ -163,28 +155,40 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 		}
 		s.sessionMgr.UpdatePools(s.streamingPools)
 
-		// 4. Restart NNTP Proxy
-		{
-			logger.Info("Restarting NNTP Proxy...", "host", comp.Config.ProxyHost, "port", comp.Config.ProxyPort)
-			newProxy, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, s.streamingPools, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
-			if err != nil {
-				logger.Error("Failed to create new proxy during reload", "err", err)
-			} else {
-				s.proxyServer = newProxy
-				go func() {
-					if err := newProxy.Start(); err != nil {
-						logger.Error("Proxy server failed to start", "err", err)
-					}
-				}()
-			}
+		logger.Info("Restarting NNTP Proxy...", "host", comp.Config.ProxyHost, "port", comp.Config.ProxyPort)
+		newProxy, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, s.streamingPools, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
+		if err != nil {
+			logger.Error("Failed to create new proxy during reload", "err", err)
+		} else {
+			s.proxyServer = newProxy
 		}
-
-		s.cleanupIndexerUsage()
-		s.cleanupProviderUsage()
 	}
 
-	// Common: always update config, triage, stremio
 	s.config = comp.Config
+	s.mu.Unlock()
+
+	// Slow work after unlock so collectStats doesn't block during reload
+	if fullReload {
+		if oldProxy != nil {
+			logger.Info("Stopping NNTP Proxy for reload...")
+			if err := oldProxy.Stop(); err != nil {
+				logger.Error("Failed to stop proxy", "err", err)
+			}
+		}
+		for _, pool := range oldPools {
+			pool.Shutdown()
+		}
+		if s.proxyServer != nil {
+			go func(p *proxy.Server) {
+				if err := p.Start(); err != nil {
+					logger.Error("Proxy server failed to start", "err", err)
+				}
+			}(s.proxyServer)
+		}
+		s.cleanupIndexerUsageFromConfig(comp.Config)
+		s.cleanupProviderUsageFromConfig(comp.Config)
+	}
+
 	logger.SetLevel(comp.Config.LogLevel)
 	if s.strmServer != nil {
 		s.strmServer.Reload(comp.Config, comp.Config.AddonBaseURL, comp.Indexer, comp.Validator, comp.Triage, comp.AvailClient, comp.AvailNZBIndexerHosts, comp.TMDBClient, comp.TVDBClient, s.deviceManager)
@@ -219,19 +223,12 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 	s.ReloadFromComponents(comp, true)
 }
 
-func (s *Server) cleanupIndexerUsage() {
+func (s *Server) cleanupIndexerUsageFromConfig(cfg *config.Config) {
 	usageMgr, err := indexer.GetUsageManager(nil)
 	if err != nil || usageMgr == nil {
 		return
 	}
-
-	// Use all configured indexer names (enabled and disabled) so that disabling
-	// an indexer does not remove its usage stats; only indexers removed from
-	// config are pruned.
 	var configuredNames []string
-	s.mu.RLock()
-	cfg := s.config
-	s.mu.RUnlock()
 	if cfg != nil {
 		for _, idx := range cfg.Indexers {
 			if idx.URL != "" && idx.Name != "" {
@@ -242,19 +239,12 @@ func (s *Server) cleanupIndexerUsage() {
 	usageMgr.SyncUsage(configuredNames)
 }
 
-func (s *Server) cleanupProviderUsage() {
+func (s *Server) cleanupProviderUsageFromConfig(cfg *config.Config) {
 	usageMgr, err := nntp.GetProviderUsageManager(nil)
 	if err != nil || usageMgr == nil {
 		return
 	}
-
-	// Use all configured provider names (enabled and disabled) so that disabling
-	// a provider does not remove its usage stats; only providers removed from
-	// config are pruned.
 	var configuredNames []string
-	s.mu.RLock()
-	cfg := s.config
-	s.mu.RUnlock()
 	if cfg != nil {
 		for _, p := range cfg.Providers {
 			if p.Name != "" {
