@@ -15,6 +15,7 @@ import (
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/core/paths"
+	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/indexer/newznab"
 	"streamnzb/pkg/initialization"
 	"streamnzb/pkg/search/triage"
@@ -98,6 +99,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		// Send user-specific config
 		s.sendConfig(client)
 
+		// Send indexer capabilities (categories, search types)
+		s.sendIndexerCaps(client)
+
 		// Send log history
 		s.sendLogHistory(client)
 
@@ -166,6 +170,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				s.handleUpdatePasswordWS(client, msg.Payload)
 			case "close_session":
 				s.handleCloseSessionWS(msg.Payload)
+			case "fetch_caps":
+				s.handleFetchCapsWS(client)
 			case "restart":
 				s.handleRestartWS(conn)
 			}
@@ -239,6 +245,17 @@ func (s *Server) sendConfig(client *Client) {
 		payload, _ = json.Marshal(cfg)
 	}
 	trySendWS(client, WSMessage{Type: "config", Payload: payload})
+}
+
+func (s *Server) sendIndexerCaps(client *Client) {
+	s.mu.RLock()
+	caps := s.indexerCaps
+	s.mu.RUnlock()
+	if caps == nil {
+		caps = make(map[string]*indexer.Caps)
+	}
+	payload, _ := json.Marshal(caps)
+	trySendWS(client, WSMessage{Type: "indexer_caps", Payload: payload})
 }
 
 func (s *Server) sendLogHistory(client *Client) {
@@ -344,6 +361,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 				ProviderOrder:        base.ProviderOrder,
 				StreamingPools:       base.StreamingPools,
 				AvailNZBIndexerHosts: base.AvailNZBIndexerHosts,
+				IndexerCaps:          base.IndexerCaps,
 				Validator:            validator,
 				Triage:               triageService,
 				AvailClient:          availClient,
@@ -354,14 +372,48 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			logger.Info("Reload: configuration reloaded successfully")
 		}()
 
-		// Push updated config back to client
+		// Push updated config + caps back to client
 		s.sendConfig(client)
+		s.sendIndexerCaps(client)
 		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded."}`)})
 		return
 	}
 
 	// Regular devices cannot save via this endpoint
 	trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save global configuration"}`)})
+}
+
+// handleFetchCapsWS re-fetches capabilities for all indexers and broadcasts to the client.
+func (s *Server) handleFetchCapsWS(client *Client) {
+	s.mu.RLock()
+	idx := s.indexer
+	s.mu.RUnlock()
+
+	caps := make(map[string]*indexer.Caps)
+	if agg, ok := idx.(*indexer.Aggregator); ok {
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for _, i := range agg.Indexers {
+			if c, ok := i.(indexer.IndexerWithCaps); ok {
+				wg.Add(1)
+				go func(name string, fetcher indexer.IndexerWithCaps) {
+					defer wg.Done()
+					if result, err := fetcher.GetCaps(); err == nil {
+						mu.Lock()
+						caps[name] = result
+						mu.Unlock()
+					}
+				}(i.Name(), c)
+			}
+		}
+		wg.Wait()
+	}
+
+	s.mu.Lock()
+	s.indexerCaps = caps
+	s.mu.Unlock()
+
+	s.sendIndexerCaps(client)
 }
 
 func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, payload json.RawMessage) {

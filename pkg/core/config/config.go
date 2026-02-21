@@ -155,6 +155,10 @@ type IndexerConfig struct {
 	// Easynews-specific fields
 	Username string `json:"username"` // Easynews username
 	Password string `json:"password"` // Easynews password
+	// Per-indexer search overrides (Newznab only)
+	MovieCategories  string `json:"movie_categories,omitempty"`   // Custom movie categories, e.g. "2000,2100"
+	TVCategories     string `json:"tv_categories,omitempty"`      // Custom TV categories, e.g. "5000,5100"
+	ExtraSearchTerms string `json:"extra_search_terms,omitempty"` // Appended to every search query, e.g. "(P73|LRO)"
 }
 
 // Config holds application configuration

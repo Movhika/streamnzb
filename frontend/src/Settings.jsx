@@ -24,7 +24,7 @@ function EnvOverrideNote({ show }) {
   )
 }
 
-function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken, activePage }) {
+function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken, activePage, indexerCaps }) {
   const [loading, setLoading] = useState(!initialConfig)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [initialFormValues, setInitialFormValues] = useState(null)
@@ -523,6 +523,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
               removeIndexer={removeIndexer}
               watch={watch}
               setValue={setValue}
+              indexerCaps={indexerCaps || {}}
             />
           </div>
         )}

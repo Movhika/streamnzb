@@ -14,6 +14,7 @@ import (
 	"streamnzb/pkg/indexer/newznab"
 	"streamnzb/pkg/usenet/nntp"
 	"strings"
+	"sync"
 )
 
 // InitializedComponents holds all the components initialized during bootstrap
@@ -23,7 +24,8 @@ type InitializedComponents struct {
 	ProviderPools        map[string]*nntp.ClientPool
 	ProviderOrder        []string // Provider names in priority order (for single-provider validation)
 	StreamingPools       []*nntp.ClientPool
-	AvailNZBIndexerHosts []string // Underlying indexer hostnames for AvailNZB GetReleases filter (e.g. nzbgeek.info)
+	AvailNZBIndexerHosts []string                   // Underlying indexer hostnames for AvailNZB GetReleases filter (e.g. nzbgeek.info)
+	IndexerCaps          map[string]*indexer.Caps    // Capabilities per indexer name (from CAPS endpoint)
 }
 
 // WaitForInputAndExit prints an error and waits for user input before exiting
@@ -134,6 +136,31 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 
 	aggregator := indexer.NewAggregator(indexers...)
 
+	// Fetch capabilities for all indexers that support CAPS (in parallel)
+	indexerCaps := make(map[string]*indexer.Caps)
+	var capsMu sync.Mutex
+	var capsWg sync.WaitGroup
+	for _, idx := range indexers {
+		if c, ok := idx.(indexer.IndexerWithCaps); ok {
+			capsWg.Add(1)
+			go func(name string, capsFetcher indexer.IndexerWithCaps) {
+				defer capsWg.Done()
+				caps, err := capsFetcher.GetCaps()
+				if err != nil {
+					logger.Warn("Failed to fetch caps", "indexer", name, "err", err)
+					return
+				}
+				capsMu.Lock()
+				indexerCaps[name] = caps
+				capsMu.Unlock()
+			}(idx.Name(), c)
+		}
+	}
+	capsWg.Wait()
+	if len(indexerCaps) > 0 {
+		logger.Info("Fetched indexer capabilities", "count", len(indexerCaps))
+	}
+
 	// 3. Initialize NNTP provider pools
 	providerPools := make(map[string]*nntp.ClientPool)
 	var streamingPools []*nntp.ClientPool
@@ -219,5 +246,6 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		ProviderOrder:        providerOrder,
 		StreamingPools:       streamingPools,
 		AvailNZBIndexerHosts: availNzbHosts,
+		IndexerCaps:          indexerCaps,
 	}, nil
 }

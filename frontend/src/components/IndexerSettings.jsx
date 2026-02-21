@@ -1,12 +1,14 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/components/ui/badge"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { PasswordInput } from "@/components/ui/password-input"
-import { Trash2, Plus } from "lucide-react"
+import { Trash2, Plus, ChevronDown, Search, Tv, Film, Info, Check, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const INDEXER_PRESETS = [
@@ -34,7 +36,142 @@ const INDEXER_PRESETS = [
     //{ name: 'Custom Newznab', url: '', api_path: '/api', type: 'newznab' }
 ]
 
-export function IndexerSettings({ control, indexerFields, appendIndexer, removeIndexer, watch, setValue }) {
+function CapsInfo({ caps }) {
+  if (!caps) return null
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex items-center gap-3">
+        <span className="flex items-center gap-1">
+          <Search className="h-3 w-3" />
+          Search
+          {caps.searching?.search ? <Check className="h-3 w-3 text-green-500" /> : <X className="h-3 w-3 text-muted-foreground" />}
+        </span>
+        <span className="flex items-center gap-1">
+          <Film className="h-3 w-3" />
+          Movie
+          {caps.searching?.movie_search ? <Check className="h-3 w-3 text-green-500" /> : <X className="h-3 w-3 text-muted-foreground" />}
+        </span>
+        <span className="flex items-center gap-1">
+          <Tv className="h-3 w-3" />
+          TV
+          {caps.searching?.tv_search ? <Check className="h-3 w-3 text-green-500" /> : <X className="h-3 w-3 text-muted-foreground" />}
+        </span>
+      </div>
+      {caps.retention_days > 0 && (
+        <div className="text-muted-foreground">Retention: {caps.retention_days} days</div>
+      )}
+    </div>
+  )
+}
+
+function CategoriesHint({ caps, type }) {
+  if (!caps?.categories?.length) return null
+  const prefix = type === 'movie' ? '2' : '5'
+  const relevant = caps.categories.filter(c => c.id.startsWith(prefix))
+  if (relevant.length === 0) return null
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help hover:text-foreground shrink-0" />
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs p-3 z-[100]" side="bottom" sideOffset={5}>
+          <div className="text-xs space-y-1">
+            <div className="font-medium mb-1">Available {type === 'movie' ? 'Movie' : 'TV'} Categories</div>
+            {relevant.map(cat => (
+              <div key={cat.id}>
+                <span className="font-mono">{cat.id}</span> - {cat.name}
+                {cat.subcats?.map(sub => (
+                  <div key={sub.id} className="ml-3">
+                    <span className="font-mono">{sub.id}</span> - {sub.name}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
+function SearchSettings({ control, index, watch, indexerCaps }) {
+  const [open, setOpen] = useState(false)
+  const indexerName = watch(`indexers.${index}.name`)
+  const caps = indexerCaps?.[indexerName]
+
+  return (
+    <div className="mt-3">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors w-full"
+      >
+        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-200", open && "rotate-180")} />
+        Search Settings
+        {caps && <Badge variant="outline" className="ml-auto text-[9px] h-4 px-1">CAPS</Badge>}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-3">
+          {caps && <CapsInfo caps={caps} />}
+
+          <div className="grid grid-cols-2 gap-2">
+            <FormField
+              control={control}
+              name={`indexers.${index}.movie_categories`}
+              render={({ field }) => (
+                <FormItem>
+                  <div className="flex items-center gap-1">
+                    <FormLabel className="text-[10px]">Movie Categories</FormLabel>
+                    <CategoriesHint caps={caps} type="movie" />
+                  </div>
+                  <FormControl>
+                    <Input placeholder="2000" className="h-8 text-xs" {...field} value={field.value || ''} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={control}
+              name={`indexers.${index}.tv_categories`}
+              render={({ field }) => (
+                <FormItem>
+                  <div className="flex items-center gap-1">
+                    <FormLabel className="text-[10px]">TV Categories</FormLabel>
+                    <CategoriesHint caps={caps} type="tv" />
+                  </div>
+                  <FormControl>
+                    <Input placeholder="5000" className="h-8 text-xs" {...field} value={field.value || ''} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <FormField
+            control={control}
+            name={`indexers.${index}.extra_search_terms`}
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-[10px]">Extra Search Terms</FormLabel>
+                <FormControl>
+                  <Input placeholder="(P73|LRO)" className="h-8 text-xs" {...field} value={field.value || ''} />
+                </FormControl>
+                <FormDescription className="text-[10px]">Appended to every search query for this indexer</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function IndexerSettings({ control, indexerFields, appendIndexer, removeIndexer, watch, setValue, indexerCaps }) {
   return (
     <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -206,6 +343,8 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                     />
                                 </div>
                             )}
+
+                            {!isEasynews && <SearchSettings control={control} index={index} watch={watch} indexerCaps={indexerCaps} />}
                         </CardContent>
                     </Card>
                 )
@@ -215,7 +354,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
             <Button
                 type="button"
                 variant="outline"
-                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '' })}
+                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '', movie_categories: '', tv_categories: '', extra_search_terms: '' })}
                 className={cn(
                   "flex flex-col items-center justify-center p-4 h-auto min-h-[180px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
                 )}

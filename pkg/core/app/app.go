@@ -36,6 +36,7 @@ type Components struct {
 	ProviderOrder        []string
 	StreamingPools       []*nntp.ClientPool
 	AvailNZBIndexerHosts []string
+	IndexerCaps          map[string]*indexer.Caps // Capabilities per indexer name
 	Validator            *validation.Checker
 	Triage               *triage.Service
 	AvailClient          *availnzb.Client
@@ -103,6 +104,7 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 		ProviderOrder:        base.ProviderOrder,
 		StreamingPools:       base.StreamingPools,
 		AvailNZBIndexerHosts: base.AvailNZBIndexerHosts,
+		IndexerCaps:          base.IndexerCaps,
 		Validator:            validator,
 		Triage:               triageSvc,
 		AvailClient:          availClient,

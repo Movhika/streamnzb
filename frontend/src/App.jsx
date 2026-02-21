@@ -35,6 +35,7 @@ function App() {
   const [logs, setLogs] = useState([])
   const [copied, setCopied] = useState(false)
   const [activePage, setActivePage] = useState('dashboard')
+  const [indexerCaps, setIndexerCaps] = useState({})
 
   const chartData = history.map((h, i) => ({
     time: h.time,
@@ -176,6 +177,10 @@ function App() {
           case 'log_history': {
              setLogs(msg.payload.slice(-MAX_LOGS));
              break;
+          }
+          case 'indexer_caps': {
+            setIndexerCaps(msg.payload || {});
+            break;
           }
           case 'save_status': {
             setSaveStatus({
@@ -375,6 +380,7 @@ function App() {
                 isSaving={isSaving}
                 adminToken={currentUser && currentUser !== 'legacy' ? authToken : null}
                 activePage={activePage}
+                indexerCaps={indexerCaps}
               />
             </div>
           )}

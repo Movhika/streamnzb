@@ -134,6 +134,7 @@ func main() {
 	}
 
 	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
+	apiServer.SetIndexerCaps(comp.IndexerCaps)
 
 	// Set embedded web handler
 	stremioServer.SetWebHandler(web.Handler())

@@ -34,6 +34,7 @@ type Server struct {
 	strmServer     *stremio.Server
 	proxyServer    *proxy.Server
 	indexer        indexer.Indexer
+	indexerCaps    map[string]*indexer.Caps
 	deviceManager  *auth.DeviceManager
 	app            *app.App
 
@@ -127,6 +128,13 @@ func (s *Server) RemoveClient(client *Client) {
 }
 
 // SetProxyServer sets the proxy server instance
+// SetIndexerCaps sets the initial indexer capabilities (from bootstrap).
+func (s *Server) SetIndexerCaps(caps map[string]*indexer.Caps) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexerCaps = caps
+}
+
 func (s *Server) SetProxyServer(p *proxy.Server) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -165,6 +173,9 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 	}
 
 	s.config = comp.Config
+	if comp.IndexerCaps != nil {
+		s.indexerCaps = comp.IndexerCaps
+	}
 	s.mu.Unlock()
 
 	// Slow work after unlock so collectStats doesn't block during reload

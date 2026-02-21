@@ -25,6 +25,8 @@ type Client struct {
 	apiKey  string
 	name    string
 	client  *http.Client
+	cfg     config.IndexerConfig // full config for per-indexer search overrides
+	caps    *indexer.Caps        // populated by GetCaps(); nil until fetched
 
 	// Usage tracking
 	apiLimit          int
@@ -37,8 +39,9 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
-// Ensure Client implements indexer.Indexer at compile time.
+// Ensure Client implements indexer.Indexer and IndexerWithCaps at compile time.
 var _ indexer.Indexer = (*Client)(nil)
+var _ indexer.IndexerWithCaps = (*Client)(nil)
 
 // APIError represents a Newznab API error response
 type APIError struct {
@@ -103,6 +106,7 @@ func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
 		baseURL: strings.TrimRight(cfg.URL, "/"),
 		apiPath: apiPath,
 		apiKey:  cfg.APIKey,
+		cfg:     cfg,
 		client: &http.Client{
 			Timeout:   10 * time.Second,
 			Transport: transport,
@@ -232,6 +236,49 @@ func (c *Client) Ping() error {
 	return nil
 }
 
+// GetCaps fetches the indexer's capabilities (categories, search types, limits).
+// Results are cached on the client for use in Search().
+func (c *Client) GetCaps() (*indexer.Caps, error) {
+	apiURL := fmt.Sprintf("%s%s?t=caps", c.baseURL, c.apiPath)
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create caps request: %w", err)
+	}
+	req.Header.Set("User-Agent", env.IndexerQueryHeader())
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch caps from %s: %w", c.Name(), err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s caps returned status %d", c.Name(), resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read caps from %s: %w", c.Name(), err)
+	}
+
+	caps, err := indexer.ParseCapsXML(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse caps from %s: %w", c.Name(), err)
+	}
+
+	c.mu.Lock()
+	c.caps = caps
+	c.mu.Unlock()
+
+	logger.Debug("Fetched capabilities", "indexer", c.Name(),
+		"categories", len(caps.Categories),
+		"movie_search", caps.Searching.MovieSearch,
+		"tv_search", caps.Searching.TVSearch,
+		"retention", caps.RetentionDays)
+
+	return caps, nil
+}
+
 // checkNewznabError checks for Newznab error responses and returns appropriate errors
 func (c *Client) checkNewznabError(bodyBytes []byte) error {
 	var apiErr APIError
@@ -275,18 +322,35 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	params.Set("limit", fmt.Sprintf("%d", limit))
 	params.Set("offset", "0") // Start from beginning
 
-	// Map categories to Newznab search types
-	if req.Cat == "2000" {
+	// Determine search type from caps (with fallback)
+	c.mu.RLock()
+	caps := c.caps
+	c.mu.RUnlock()
+
+	isMovieSearch := strings.HasPrefix(req.Cat, "2")
+	isTVSearch := strings.HasPrefix(req.Cat, "5")
+
+	if isMovieSearch && (caps == nil || caps.Searching.MovieSearch) {
 		params.Set("t", "movie")
-	} else if req.Cat == "5000" {
+	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
 		params.Set("t", "tvsearch")
 	} else {
 		params.Set("t", "search")
 	}
 
-	if req.Query != "" {
-		params.Set("q", req.Query)
+	// Build query: combine request query with per-indexer extra search terms
+	query := req.Query
+	if c.cfg.ExtraSearchTerms != "" {
+		if query != "" {
+			query = query + " " + c.cfg.ExtraSearchTerms
+		} else {
+			query = c.cfg.ExtraSearchTerms
+		}
 	}
+	if query != "" {
+		params.Set("q", query)
+	}
+
 	if req.IMDbID != "" {
 		imdbID := strings.TrimPrefix(req.IMDbID, "tt")
 		params.Set("imdbid", imdbID)
@@ -297,9 +361,18 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if req.TVDBID != "" {
 		params.Set("tvdbid", req.TVDBID)
 	}
-	if req.Cat != "" {
-		params.Set("cat", req.Cat)
+
+	// Use per-indexer category overrides when configured
+	cat := req.Cat
+	if isMovieSearch && c.cfg.MovieCategories != "" {
+		cat = c.cfg.MovieCategories
+	} else if isTVSearch && c.cfg.TVCategories != "" {
+		cat = c.cfg.TVCategories
 	}
+	if cat != "" {
+		params.Set("cat", cat)
+	}
+
 	if req.Season != "" {
 		params.Set("season", req.Season)
 	}
