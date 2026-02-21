@@ -1,7 +1,26 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { FormField, FormItem, FormLabel, FormControl, FormDescription, FormMessage } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+
+function CommaSeparatedInput({ value = [], onChange, placeholder }) {
+  const [rawValue, setRawValue] = useState(value?.join(', ') || '')
+  useEffect(() => {
+    setRawValue(value?.join(', ') || '')
+  }, [value?.join?.()])
+  return (
+    <Input
+      placeholder={placeholder}
+      value={rawValue}
+      onChange={(e) => setRawValue(e.target.value)}
+      onBlur={() => {
+        const arr = rawValue.split(',').map(s => s.trim()).filter(Boolean)
+        onChange(arr)
+        setRawValue(arr.join(', '))
+      }}
+    />
+  )
+}
+import { FormField, FormItem, FormLabel, FormControl, FormDescription, FormMessage } from "@/components/ui/form"
 import { PriorityList, MultiplierSlider } from "@/components/ui/priority-list"
 import { useFormContext } from "react-hook-form"
 
@@ -170,10 +189,10 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
               <FormItem>
                 <FormLabel>Preferred Release Groups</FormLabel>
                 <FormControl>
-                  <Input
+                  <CommaSeparatedInput
+                    value={field.value}
+                    onChange={field.onChange}
                     placeholder="Enter groups separated by commas (e.g., FLUX, NTb, SWTYBLZ)"
-                    value={field.value?.join(', ') || ''}
-                    onChange={(e) => field.onChange(e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
                   />
                 </FormControl>
                 <FormDescription>Boost score for releases from these groups (+1000 points)</FormDescription>
@@ -188,10 +207,10 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
               <FormItem>
                 <FormLabel>Preferred Languages</FormLabel>
                 <FormControl>
-                  <Input
+                  <CommaSeparatedInput
+                    value={field.value}
+                    onChange={field.onChange}
                     placeholder="Enter language codes separated by commas (e.g., en, multi)"
-                    value={field.value?.join(', ') || ''}
-                    onChange={(e) => field.onChange(e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
                   />
                 </FormControl>
                 <FormDescription>Boost score for releases in these languages (future feature)</FormDescription>
