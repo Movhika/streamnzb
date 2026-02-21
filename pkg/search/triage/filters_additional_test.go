@@ -2,6 +2,7 @@ package triage
 
 import (
 	"streamnzb/pkg/core/config"
+	"streamnzb/pkg/release"
 	"streamnzb/pkg/search/parser"
 	"testing"
 )
@@ -232,6 +233,7 @@ func TestCheckLanguages(t *testing.T) {
 		name       string
 		cfg        *config.FilterConfig
 		parsed     *parser.ParsedRelease
+		rel        *release.Release
 		shouldPass bool
 	}{
 		{
@@ -274,11 +276,63 @@ func TestCheckLanguages(t *testing.T) {
 			},
 			shouldPass: false,
 		},
+		{
+			name: "Config 'en' matches parser 'en'",
+			cfg: &config.FilterConfig{
+				AllowedLanguages: []string{"en"},
+			},
+			parsed: &parser.ParsedRelease{
+				Languages: []string{"en"},
+			},
+			shouldPass: true,
+		},
+		{
+			name: "Config 'en' matches parser 'English' via normalization",
+			cfg: &config.FilterConfig{
+				AllowedLanguages: []string{"en"},
+			},
+			parsed: &parser.ParsedRelease{
+				Languages: []string{"English"},
+			},
+			shouldPass: true,
+		},
+		{
+			name: "Config 'multi' matches 'multi subs'",
+			cfg: &config.FilterConfig{
+				AllowedLanguages: []string{"multi"},
+			},
+			parsed: &parser.ParsedRelease{
+				Languages: []string{"multi subs"},
+			},
+			shouldPass: true,
+		},
+		{
+			name: "Indexer language (English) used when parser has none",
+			cfg: &config.FilterConfig{
+				AllowedLanguages: []string{"en"},
+			},
+			parsed: &parser.ParsedRelease{
+				Languages: []string{},
+			},
+			rel:        &release.Release{Languages: []string{"English"}},
+			shouldPass: true,
+		},
+		{
+			name: "Release with no language rejected when allowed list is set",
+			cfg: &config.FilterConfig{
+				AllowedLanguages: []string{"fi", "fin"},
+			},
+			parsed: &parser.ParsedRelease{
+				Languages: []string{},
+			},
+			rel:        nil,
+			shouldPass: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := checkLanguages(tt.cfg, tt.parsed)
+			result := checkLanguages(tt.cfg, tt.parsed, tt.rel)
 			if result != tt.shouldPass {
 				t.Errorf("checkLanguages() = %v, want %v", result, tt.shouldPass)
 			}

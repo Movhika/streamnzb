@@ -331,14 +331,78 @@ func checkHDR(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 	return true
 }
 
-// checkLanguages validates language filters
-func checkLanguages(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+// languageMatches returns true if the config value matches the release language.
+// Normalizes formats: "en" matches "English", "multi" matches "multi subs"/"multi audio".
+func languageMatches(configVal, releaseLang string) bool {
+	c := strings.TrimSpace(strings.ToLower(configVal))
+	r := strings.TrimSpace(strings.ToLower(releaseLang))
+	if c == r {
+		return true
+	}
+	// Map ISO 639-1 to full names (config "en" matches release "English")
+	isoToFull := map[string]string{
+		"en": "english", "de": "german", "fr": "french", "es": "spanish", "it": "italian",
+		"ja": "japanese", "ko": "korean", "zh": "chinese", "zh-tw": "chinese", "ru": "russian",
+		"pt": "portuguese", "nl": "dutch", "pl": "polish", "tr": "turkish", "ar": "arabic",
+		"hi": "hindi", "uk": "ukrainian", "da": "danish", "fi": "finnish", "fin": "finnish", "sv": "swedish",
+		"no": "norwegian", "el": "greek", "lt": "lithuanian", "lv": "latvian", "et": "estonian",
+		"cs": "czech", "sk": "slovak", "hu": "hungarian", "ro": "romanian", "bg": "bulgarian",
+		"sr": "serbian", "hr": "croatian", "sl": "slovenian", "te": "telugu", "ta": "tamil",
+		"ml": "malayalam", "kn": "kannada", "mr": "marathi", "gu": "gujarati", "pa": "punjabi",
+		"bn": "bengali", "vi": "vietnamese", "id": "indonesian", "th": "thai", "ms": "malay",
+		"he": "hebrew", "fa": "persian", "es-419": "spanish",
+	}
+	if full, ok := isoToFull[c]; ok && full == r {
+		return true
+	}
+	// Config full name matches release ISO
+	for iso, full := range isoToFull {
+		if full == c && (r == full || r == iso) {
+			return true
+		}
+	}
+	// "multi" matches "multi subs", "multi audio"
+	if c == "multi" && (strings.HasPrefix(r, "multi") || r == "multi") {
+		return true
+	}
+	return false
+}
+
+// mergeReleaseLanguages combines parser languages (ISO codes, "multi subs") with
+// indexer languages (full names like "English") for filtering.
+func mergeReleaseLanguages(parsed []string, fromRelease []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, s := range parsed {
+		k := strings.TrimSpace(strings.ToLower(s))
+		if k != "" && !seen[k] {
+			seen[k] = true
+			out = append(out, s)
+		}
+	}
+	for _, s := range fromRelease {
+		k := strings.TrimSpace(strings.ToLower(s))
+		if k != "" && !seen[k] {
+			seen[k] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// checkLanguages validates language filters using both parser output and indexer metadata.
+func checkLanguages(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *release.Release) bool {
+	languages := mergeReleaseLanguages(p.Languages, nil)
+	if rel != nil && len(rel.Languages) > 0 {
+		languages = mergeReleaseLanguages(p.Languages, rel.Languages)
+	}
+
 	// Check required languages
 	if len(cfg.RequiredLanguages) > 0 {
 		hasRequired := false
 		for _, required := range cfg.RequiredLanguages {
-			for _, lang := range p.Languages {
-				if strings.EqualFold(lang, required) {
+			for _, lang := range languages {
+				if languageMatches(required, lang) {
 					hasRequired = true
 					break
 				}
@@ -353,11 +417,15 @@ func checkLanguages(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 	}
 
 	// Check allowed languages (if specified)
-	if len(cfg.AllowedLanguages) > 0 && len(p.Languages) > 0 {
+	if len(cfg.AllowedLanguages) > 0 {
+		// Reject releases with no language info when allowed list is set
+		if len(languages) == 0 {
+			return false
+		}
 		hasAllowed := false
-		for _, lang := range p.Languages {
+		for _, lang := range languages {
 			for _, allowed := range cfg.AllowedLanguages {
-				if strings.EqualFold(lang, allowed) {
+				if languageMatches(allowed, lang) {
 					hasAllowed = true
 					break
 				}

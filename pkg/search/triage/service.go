@@ -118,7 +118,7 @@ func (s *Service) shouldInclude(rel *release.Release, parsed *parser.ParsedRelea
 	}
 
 	// Language filters
-	if !checkLanguages(cfg, parsed) {
+	if !checkLanguages(cfg, parsed, rel) {
 		return false
 	}
 

@@ -37,10 +37,11 @@ type Release struct {
 	SourceIndexer interface{} // Indexer client for DownloadNZB. Nil when from AvailNZB.
 
 	// Optional fields from indexer search (empty when from AvailNZB)
-	PubDate     string // RFC1123/RFC1123Z for age scoring
-	GUID        string // For session ID when skipping validation
-	QuerySource string // "id" or "text" — ID-based results prioritized
-	Grabs       int    // From newznab grabs attribute, for popularity scoring
+	PubDate     string   // RFC1123/RFC1123Z for age scoring
+	GUID        string   // For session ID when skipping validation
+	QuerySource string   // "id" or "text" — ID-based results prioritized
+	Grabs       int      // From newznab grabs attribute, for popularity scoring
+	Languages   []string // From Newznab language attribute (e.g. "English", "German")
 }
 
 // EqualByTitle returns true if both releases have the same normalized title.

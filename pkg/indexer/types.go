@@ -132,6 +132,15 @@ func (i *Item) ToRelease() *release.Release {
 			grabs = n
 		}
 	}
+	// Extract language(s) from Newznab attribute (e.g. "English" or "English, Spanish")
+	var languages []string
+	if lang := i.GetAttribute("language"); lang != "" {
+		for _, part := range strings.Split(lang, ",") {
+			if t := strings.TrimSpace(part); t != "" {
+				languages = append(languages, t)
+			}
+		}
+	}
 	return &release.Release{
 		Title:         i.Title,
 		Link:          i.Link,
@@ -143,6 +152,7 @@ func (i *Item) ToRelease() *release.Release {
 		GUID:          i.GUID,
 		QuerySource:   i.QuerySource,
 		Grabs:         grabs,
+		Languages:     languages,
 	}
 }
 
