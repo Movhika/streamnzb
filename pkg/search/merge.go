@@ -79,7 +79,7 @@ func MergeAndDedupeSearchResults(releases []*release.Release) []*release.Release
 		if rel == nil {
 			continue
 		}
-		normTitle := release.NormalizeTitle(rel.Title)
+		normTitle := release.NormalizeTitleForDedup(rel.Title)
 		if normTitle == "" {
 			continue
 		}

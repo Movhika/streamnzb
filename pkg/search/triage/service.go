@@ -233,8 +233,8 @@ func (s *Service) deduplicateReleases(candidates []Candidate) []Candidate {
 	for i := range candidates {
 		candidate := &candidates[i]
 
-		// Use release.NormalizeTitle for consistent comparison across the app
-		normalized := release.NormalizeTitle(candidate.Release.Title)
+		// Use release.NormalizeTitleForDedup so minor formatting differences across indexers collapse
+		normalized := release.NormalizeTitleForDedup(candidate.Release.Title)
 		if normalized == "" {
 			continue
 		}

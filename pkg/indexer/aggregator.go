@@ -172,8 +172,8 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 	uniqueItems := []Item{}
 
 	for _, item := range allItems {
-		// Use release.NormalizeTitle for consistent comparison across the app
-		normalizedTitle := release.NormalizeTitle(item.Title)
+		// Use release.NormalizeTitleForDedup so minor formatting differences across indexers collapse
+		normalizedTitle := release.NormalizeTitleForDedup(item.Title)
 
 		// Strategy 1: GUID (most reliable)
 		if item.GUID != "" {

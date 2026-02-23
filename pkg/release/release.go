@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"unicode"
 )
 
 // IsPrivateReleaseURL returns true if the URL host is private/local (localhost).
@@ -56,4 +57,18 @@ func (r *Release) EqualByTitle(other *Release) bool {
 // NormalizeTitle normalizes a release title for comparison (lowercase, trimmed).
 func NormalizeTitle(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// NormalizeTitleForDedup normalizes a title for deduplication by keeping only
+// alphanumeric characters (letters and digits). Used so minor formatting
+// differences (spaces, dots, parentheses, dashes) across indexers collapse.
+func NormalizeTitleForDedup(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
