@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"streamnzb/pkg/core/logger"
@@ -20,6 +20,9 @@ type Client struct {
 	BaseURL string
 	APIKey  string
 	HTTP    *http.Client
+
+	backbonesMu sync.RWMutex
+	backbones   map[string]string // hostname -> backbone; populated by RefreshBackbones
 }
 
 // ReportRequest is the body for POST /api/v1/report (authenticated).
@@ -39,24 +42,29 @@ type ReportRequest struct {
 	Episode         int    `json:"episode,omitempty"`          // Required for TV
 }
 
-// ProviderStatus is one provider's status in a summary.
-type ProviderStatus struct {
+// BackboneStatus is one backbone's status in a summary (Summary keys are backbone names, e.g. Omicron, Eweka).
+type BackboneStatus struct {
 	Text        string    `json:"text"`
 	LastUpdated time.Time `json:"last_updated"`
 	Healthy     bool      `json:"healthy"`
 }
 
-// StatusResponse is the response from GET /api/v1/status?url=...
+// ProviderStatus is an alias for backward compatibility; API summary is keyed by backbone.
+type ProviderStatus = BackboneStatus
+
+// StatusResponse is the response from GET /api/v1/status/url?url=...
+// Summary keys are backbone names (use GetBackbones to map provider hostnames to backbones).
 type StatusResponse struct {
 	URL          string                    `json:"url"`
 	Available    bool                      `json:"available"`
 	ReleaseName  string                    `json:"release_name,omitempty"`
 	DownloadLink string                    `json:"download_link,omitempty"`
 	Size         int64                     `json:"size,omitempty"`
-	Summary      map[string]ProviderStatus `json:"summary"`
+	Summary      map[string]BackboneStatus `json:"summary"`
 }
 
-// releaseItemJSON is the JSON shape for GET /api/v1/releases (unmarshal only).
+// releaseItemJSON is the JSON shape for status/imdb and status/tvdb responses (unmarshal only).
+// Summary keys are backbone names.
 type releaseItemJSON struct {
 	URL             string                    `json:"url"`
 	ReleaseName     string                    `json:"release_name,omitempty"`
@@ -65,16 +73,16 @@ type releaseItemJSON struct {
 	CompressionType string                    `json:"compression_type,omitempty"`
 	Indexer         string                    `json:"indexer"`
 	Available       bool                      `json:"available"`
-	Summary         map[string]ProviderStatus `json:"summary"`
+	Summary         map[string]BackboneStatus `json:"summary"`
 }
 
 // ReleaseWithStatus wraps release.Release with AvailNZB-specific status.
-// Returned by GetReleases so handlers work with a single type.
+// Summary keys are backbone names (use GetBackbones to map provider hostnames to backbones).
 type ReleaseWithStatus struct {
 	*release.Release
 	Available       bool
 	CompressionType string
-	Summary         map[string]ProviderStatus
+	Summary         map[string]BackboneStatus
 }
 
 // ReleasesResult is the return value of GetReleases.
@@ -175,9 +183,65 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 	return nil
 }
 
-// GetStatus returns availability for a release by URL (GET /api/v1/status?url=...).
-// provider is optional; if non-empty, filters by that provider.
-func (c *Client) GetStatus(releaseURL string, provider string) (*StatusResponse, error) {
+// backboneEntryJSON is one item from GET /api/v1/backbones (provider hostname -> backbone name).
+type backboneEntryJSON struct {
+	ProviderURL string `json:"provider_url"`
+	Backbone    string `json:"backbone"`
+}
+
+// RefreshBackbones fetches GET /api/v1/backbones and updates the cached hostname->backbone map.
+// Call on startup and when provider config changes (e.g. on Reload).
+func (c *Client) RefreshBackbones() error {
+	if c.BaseURL == "" {
+		return nil
+	}
+	reqURL := c.BaseURL + apiPath + "/backbones"
+	resp, err := c.HTTP.Get(reqURL)
+	if err != nil {
+		logger.Error("AvailNZB RefreshBackbones request failed", "err", err)
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Error("AvailNZB RefreshBackbones unexpected status", "status", resp.StatusCode)
+		return fmt.Errorf("availnzb backbones: status %d", resp.StatusCode)
+	}
+	var list []backboneEntryJSON
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		logger.Error("AvailNZB RefreshBackbones decode failed", "err", err)
+		return err
+	}
+	m := make(map[string]string)
+	for _, e := range list {
+		if e.ProviderURL != "" && e.Backbone != "" {
+			m[strings.ToLower(strings.TrimSpace(e.ProviderURL))] = e.Backbone
+		}
+	}
+	c.backbonesMu.Lock()
+	c.backbones = m
+	c.backbonesMu.Unlock()
+	logger.Debug("AvailNZB RefreshBackbones", "entries", len(m))
+	return nil
+}
+
+// GetBackbones returns the cached map of provider hostname -> backbone name.
+// Populated by RefreshBackbones (call on start and on provider config changes).
+func (c *Client) GetBackbones() (map[string]string, error) {
+	c.backbonesMu.RLock()
+	defer c.backbonesMu.RUnlock()
+	if c.backbones == nil {
+		return nil, nil
+	}
+	out := make(map[string]string, len(c.backbones))
+	for k, v := range c.backbones {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// GetStatus returns availability for a release by URL (GET /api/v1/status/url?url=...).
+// Summary keys in the response are backbone names.
+func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {
 	if c.BaseURL == "" {
 		logger.Trace("AvailNZB GetStatus skipped", "reason", "no base URL")
 		return nil, nil
@@ -185,12 +249,9 @@ func (c *Client) GetStatus(releaseURL string, provider string) (*StatusResponse,
 
 	params := url.Values{}
 	params.Set("url", releaseURL)
-	if provider != "" {
-		params.Set("provider", provider)
-	}
-	reqURL := c.BaseURL + apiPath + "/status?" + params.Encode()
+	reqURL := c.BaseURL + apiPath + "/status/url?" + params.Encode()
 
-	logger.Debug("AvailNZB GetStatus", "url", releaseURL, "provider", provider)
+	logger.Debug("AvailNZB GetStatus", "url", releaseURL)
 
 	resp, err := c.HTTP.Get(reqURL)
 	if err != nil {
@@ -215,44 +276,46 @@ func (c *Client) GetStatus(releaseURL string, provider string) (*StatusResponse,
 		return nil, err
 	}
 
-	logger.Debug("AvailNZB GetStatus", "url", releaseURL, "available", status.Available, "providers", len(status.Summary))
+	logger.Debug("AvailNZB GetStatus", "url", releaseURL, "available", status.Available, "backbones", len(status.Summary))
 	return &status, nil
 }
 
-// releasesResponseJSON is the JSON shape for GET /api/v1/releases (unmarshal only).
+// releasesResponseJSON is the JSON shape for status/imdb and status/tvdb (unmarshal only).
 type releasesResponseJSON struct {
 	ImdbID   string            `json:"imdb_id,omitempty"`
 	Count    int               `json:"count"`
 	Releases []releaseItemJSON `json:"releases"`
 }
 
-// GetReleases returns all cached releases for content (GET /api/v1/releases).
-// Pass empty compressionTypes to get all; filter/split streamable vs RAR client-side.
-func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, indexers []string, compressionTypes string) (*ReleasesResult, error) {
+// GetReleases returns cached releases for content via GET /api/v1/status/imdb/{id} or status/tvdb/{id}/{s}/{e}.
+// indexers and providers (NNTP hostnames) are optional filters; Summary keys in results are backbone names.
+func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, indexers []string, providers []string) (*ReleasesResult, error) {
 	if c.BaseURL == "" {
 		logger.Trace("AvailNZB GetReleases skipped", "reason", "no base URL")
 		return nil, nil
 	}
 
-	params := url.Values{}
+	var path string
 	if imdbID != "" {
-		params.Set("imdb_id", imdbID)
+		path = apiPath + "/status/imdb/" + url.PathEscape(imdbID)
 	} else if tvdbID != "" {
-		params.Set("tvdb_id", tvdbID)
-		params.Set("season", strconv.Itoa(season))
-		params.Set("episode", strconv.Itoa(episode))
+		path = fmt.Sprintf("%s/status/tvdb/%s/%d/%d", apiPath, url.PathEscape(tvdbID), season, episode)
 	} else {
 		return nil, fmt.Errorf("availnzb releases: need imdb_id or tvdb_id+season+episode")
 	}
+	params := url.Values{}
 	if len(indexers) > 0 {
 		params.Set("indexers", strings.Join(indexers, ","))
 	}
-	if compressionTypes != "" {
-		params.Set("compression_types", compressionTypes)
+	if len(providers) > 0 {
+		params.Set("providers", strings.Join(providers, ","))
 	}
-	reqURL := c.BaseURL + apiPath + "/releases?" + params.Encode()
+	reqURL := c.BaseURL + path
+	if len(params) > 0 {
+		reqURL += "?" + params.Encode()
+	}
 
-	logger.Debug("AvailNZB GetReleases", "imdb_id", imdbID, "tvdb_id", tvdbID, "season", season, "episode", episode, "indexer_filter", len(indexers))
+	logger.Debug("AvailNZB GetReleases", "imdb_id", imdbID, "tvdb_id", tvdbID, "season", season, "episode", episode, "indexers", len(indexers), "providers", len(providers))
 
 	resp, err := c.HTTP.Get(reqURL)
 	if err != nil {
@@ -301,17 +364,33 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 	return &ReleasesResult{ImdbID: raw.ImdbID, Count: raw.Count, Releases: releases}, nil
 }
 
-// CheckPreDownload checks if the release URL is already known and healthy for one of validProviders.
-// Returns: available (can skip validation), last updated time, capable provider, error.
-// Use releaseURL (indexer release URL, e.g. item.Link) to query GET /api/v1/status.
-func (c *Client) CheckPreDownload(releaseURL string, validProviders []string) (available bool, lastUpdated time.Time, capableProvider string, err error) {
-	logger.Debug("AvailNZB CheckPreDownload", "url", releaseURL, "our_providers", len(validProviders))
+// OurBackbones returns the set of backbone names for the given provider hostnames (e.g. for matching Summary keys).
+// Uses GetBackbones() to resolve; if that fails, returns nil and callers should treat Summary as empty or skip backbone logic.
+func (c *Client) OurBackbones(providerHosts []string) (map[string]bool, error) {
+	m, err := c.GetBackbones()
+	if err != nil || m == nil {
+		return nil, err
+	}
+	out := make(map[string]bool)
+	for _, h := range providerHosts {
+		if b := m[strings.ToLower(strings.TrimSpace(h))]; b != "" {
+			out[b] = true
+		}
+	}
+	return out, nil
+}
+
+// CheckPreDownload checks if the release URL is already known and healthy for one of validProviderHosts.
+// Uses GET /backbones to map hostnames to backbones; Summary in status is keyed by backbone.
+// Returns: available (can skip validation), last updated time, capable provider hostname, error.
+func (c *Client) CheckPreDownload(releaseURL string, validProviderHosts []string) (available bool, lastUpdated time.Time, capableProvider string, err error) {
+	logger.Debug("AvailNZB CheckPreDownload", "url", releaseURL, "our_providers", len(validProviderHosts))
 	if c.BaseURL == "" || releaseURL == "" {
 		logger.Trace("AvailNZB CheckPreDownload skipped", "reason", "no base URL or empty release URL")
 		return false, time.Time{}, "", nil
 	}
 
-	status, err := c.GetStatus(releaseURL, "")
+	status, err := c.GetStatus(releaseURL)
 	if err != nil {
 		logger.Debug("AvailNZB CheckPreDownload GetStatus failed", "url", releaseURL, "err", err)
 		return false, time.Time{}, "", err
@@ -321,22 +400,56 @@ func (c *Client) CheckPreDownload(releaseURL string, validProviders []string) (a
 		return false, time.Time{}, "", nil
 	}
 
-	ourProviders := make(map[string]bool)
-	for _, p := range validProviders {
-		ourProviders[p] = true
+	hostToBackbone, err := c.GetBackbones()
+	if err != nil || len(hostToBackbone) == 0 {
+		logger.Trace("AvailNZB CheckPreDownload", "result", "no_backbone_mapping", "err", err)
+		if status.Available && len(status.Summary) > 0 {
+			for _, report := range status.Summary {
+				if report.LastUpdated.After(lastUpdated) {
+					lastUpdated = report.LastUpdated
+				}
+			}
+			return true, lastUpdated, "", nil
+		}
+		return false, time.Time{}, "", nil
+	}
+	ourBackbones := make(map[string]bool)
+	for _, h := range validProviderHosts {
+		if b := hostToBackbone[strings.ToLower(strings.TrimSpace(h))]; b != "" {
+			ourBackbones[b] = true
+		}
+	}
+	if len(ourBackbones) == 0 {
+		if status.Available && len(status.Summary) > 0 {
+			for _, report := range status.Summary {
+				if report.LastUpdated.After(lastUpdated) {
+					lastUpdated = report.LastUpdated
+				}
+			}
+			return true, lastUpdated, "", nil
+		}
+		return false, time.Time{}, "", nil
 	}
 
-	for providerHost, report := range status.Summary {
-		if ourProviders[providerHost] && report.Healthy {
+	// Summary keys are backbone names
+	for backbone, report := range status.Summary {
+		if ourBackbones[backbone] && report.Healthy {
 			if report.LastUpdated.After(lastUpdated) {
 				lastUpdated = report.LastUpdated
 			}
 			available = true
-			capableProvider = providerHost
+			for _, h := range validProviderHosts {
+				if hostToBackbone[strings.ToLower(strings.TrimSpace(h))] == backbone {
+					capableProvider = h
+					break
+				}
+			}
+			if capableProvider == "" {
+				capableProvider = backbone
+			}
 			break
 		}
 	}
-	// If no provider match but API says available, still trust it and use latest from summary
 	if status.Available && !available && len(status.Summary) > 0 {
 		for _, report := range status.Summary {
 			if report.LastUpdated.After(lastUpdated) {

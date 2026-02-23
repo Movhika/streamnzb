@@ -87,6 +87,9 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 	)
 	triageSvc := triage.NewService(&cfg.Filters, cfg.Sorting)
 	availClient := availnzb.NewClient(opts.AvailNZBURL, opts.AvailNZBAPIKey)
+	if err := availClient.RefreshBackbones(); err != nil {
+		logger.Debug("AvailNZB backbones refresh on start", "err", err)
+	}
 	dataDir := opts.DataDir
 	if dataDir == "" {
 		dataDir = filepath.Dir(cfg.LoadedPath)

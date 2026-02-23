@@ -456,7 +456,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 
 	var availResult *availnzb.ReleasesResult
 	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
-		availResult, _ = s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers, "")
+		availResult, _ = s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers, s.validator.GetProviderHosts())
 		if availResult != nil {
 			logger.Debug("AvailNZB releases", "total", len(availResult.Releases))
 		}
@@ -555,10 +555,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		}
 
 		if availResult != nil && len(availResult.Releases) > 0 {
-			ourProviders := make(map[string]bool)
-			for _, h := range s.validator.GetProviderHosts() {
-				ourProviders[strings.ToLower(h)] = true
-			}
+			ourBackbones, _ := s.availClient.OurBackbones(s.validator.GetProviderHosts())
 			cachedAvailable := make(map[string]bool)
 			cachedUnhealthyForUs := make(map[string]bool)
 			for _, rws := range availResult.Releases {
@@ -568,10 +565,10 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 				detailsURL := rws.Release.DetailsURL
 				if rws.Available {
 					cachedAvailable[detailsURL] = true
-				} else if len(ourProviders) > 0 && len(rws.Summary) > 0 {
+				} else if len(ourBackbones) > 0 && len(rws.Summary) > 0 {
 					ourReported, ourHealthy := 0, 0
-					for host, status := range rws.Summary {
-						if ourProviders[strings.ToLower(host)] {
+					for backbone, status := range rws.Summary {
+						if ourBackbones[backbone] {
 							ourReported++
 							if status.Healthy {
 								ourHealthy++
@@ -1396,6 +1393,9 @@ func (s *Server) Reload(cfg *config.Config, baseURL string, indexer indexer.Inde
 	s.availClient = avail
 	if avail != nil {
 		s.availReporter = availnzb.NewReporter(avail, validator)
+		if err := avail.RefreshBackbones(); err != nil {
+			logger.Debug("AvailNZB backbones refresh on reload", "err", err)
+		}
 	} else {
 		s.availReporter = nil
 	}
