@@ -349,8 +349,12 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	}
 
 	// 1. Build search request and content IDs
+	searchLimit := s.config.SearchResultLimit
+	if searchLimit <= 0 {
+		searchLimit = 1000
+	}
 	req := indexer.SearchRequest{
-		Limit: 1000,
+		Limit: searchLimit,
 	}
 
 	searchID := id
@@ -385,16 +389,16 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		req.Cat = "2000"
 	} else {
 		req.Cat = "5000"
-		if req.IMDbID != "" && req.TVDBID == "" {
-			if s.tvdbClient != nil {
-				if tvdbID, err := s.tvdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
-					req.TVDBID, req.IMDbID = tvdbID, ""
-				}
+	}
+	if req.IMDbID != "" && req.TVDBID == "" {
+		if s.tvdbClient != nil {
+			if tvdbID, err := s.tvdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
+				req.TVDBID = tvdbID
 			}
-			if req.TVDBID == "" && s.tmdbClient != nil {
-				if tvdbID, err := s.tmdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
-					req.TVDBID, req.IMDbID = tvdbID, ""
-				}
+		}
+		if req.TVDBID == "" && s.tmdbClient != nil {
+			if tvdbID, err := s.tmdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
+				req.TVDBID = tvdbID
 			}
 		}
 	}
@@ -405,6 +409,56 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		if tmdbIDNum, err := strconv.Atoi(req.TMDBID); err == nil {
 			if extIDs, err := s.tmdbClient.GetExternalIDs(tmdbIDNum, "movie"); err == nil && extIDs.IMDbID != "" {
 				contentIDs.ImdbID = extIDs.IMDbID
+			}
+		}
+	}
+	// Per-indexer effective config and per-indexer text query (merge indexer + device override + global)
+	if len(s.config.Indexers) > 0 {
+		req.EffectiveByIndexer = make(map[string]*config.IndexerSearchConfig)
+		for i := range s.config.Indexers {
+			ic := &s.config.Indexers[i]
+			var override *config.IndexerSearchConfig
+			if device != nil && device.Username != s.config.GetAdminUsername() {
+				if o, ok := device.IndexerOverrides[ic.Name]; ok {
+					override = &o
+				}
+				if override == nil {
+					if o, ok := device.IndexerOverrides[""]; ok {
+						override = &o
+					}
+				}
+			}
+			req.EffectiveByIndexer[ic.Name] = config.MergeIndexerSearch(ic, override, s.config)
+		}
+		req.PerIndexerQuery = make(map[string]string)
+		if s.tmdbClient != nil {
+			if contentType == "movie" {
+				for name, eff := range req.EffectiveByIndexer {
+					includeYear := eff.IncludeYearInSearch != nil && *eff.IncludeYearInSearch
+					lang := ""
+					if eff.SearchTitleLanguage != nil {
+						lang = *eff.SearchTitleLanguage
+					}
+					norm := eff.SearchTitleNormalize != nil && *eff.SearchTitleNormalize
+					if q, err := s.tmdbClient.GetMovieTitleForSearch(contentIDs.ImdbID, req.TMDBID, lang, includeYear, norm); err == nil {
+						req.PerIndexerQuery[name] = q
+					}
+				}
+			} else if req.Season != "" && req.Episode != "" {
+				showName, err := s.tmdbClient.GetTVShowName(tmdbForText, imdbForText)
+				if err == nil {
+					seasonNum, _ := strconv.Atoi(req.Season)
+					epNum, _ := strconv.Atoi(req.Episode)
+					var q string
+					if seasonNum > 0 || epNum > 0 {
+						q = fmt.Sprintf("%s S%02dE%02d", showName, seasonNum, epNum)
+					} else {
+						q = fmt.Sprintf("%s S%sE%s", showName, req.Season, req.Episode)
+					}
+					for name := range req.EffectiveByIndexer {
+						req.PerIndexerQuery[name] = q
+					}
+				}
 			}
 		}
 	}
@@ -523,7 +577,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	// 3. Indexers: search, triage, validate until we have enough streams
 	var indexerCandidatesCount, indexerAttempted int
 	if !hasEnoughStreams(streams) {
-		indexerReleases, err := search.RunIndexerSearches(s.indexer, s.tmdbClient, req, contentType, contentIDs, imdbForText, tmdbForText)
+		indexerReleases, err := search.RunIndexerSearches(s.indexer, s.tmdbClient, req, contentType, contentIDs, imdbForText, tmdbForText, s.config)
 		if err != nil {
 			return nil, err
 		}

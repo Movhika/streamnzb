@@ -308,10 +308,12 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 
 	limit := req.Limit
-	if limit <= 0 {
-		limit = 100 // Default limit
+	if o := req.OptionalOverrides; o != nil && o.SearchResultLimit > 0 {
+		limit = o.SearchResultLimit
 	}
-	// Cap at 1000 as most indexers support this max
+	if limit <= 0 {
+		limit = 100
+	}
 	if limit > 1000 {
 		limit = 1000
 	}
@@ -338,14 +340,16 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		params.Set("t", "search")
 	}
 
-	// Build query: combine request query with per-indexer extra search terms.
-	// For ID-only movie search (no text query, only tmdbid/imdbid), do not set q so API returns correct results.
 	query := req.Query
-	if c.cfg.ExtraSearchTerms != "" {
+	extraTerms := c.cfg.ExtraSearchTerms
+	if o := req.OptionalOverrides; o != nil && o.ExtraSearchTerms != nil {
+		extraTerms = *o.ExtraSearchTerms
+	}
+	if extraTerms != "" {
 		if query != "" {
-			query = query + " " + c.cfg.ExtraSearchTerms
+			query = query + " " + extraTerms
 		} else {
-			query = c.cfg.ExtraSearchTerms
+			query = extraTerms
 		}
 	}
 	idOnlyMovie := isMovieSearch && req.Query == "" && (req.TMDBID != "" || req.IMDbID != "")
@@ -364,19 +368,28 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		params.Set("tvdbid", req.TVDBID)
 	}
 
-	// Use per-indexer category overrides when configured
 	cat := req.Cat
 	if isMovieSearch && c.cfg.MovieCategories != "" {
 		cat = c.cfg.MovieCategories
 	} else if isTVSearch && c.cfg.TVCategories != "" {
 		cat = c.cfg.TVCategories
 	}
+	if o := req.OptionalOverrides; o != nil {
+		if isMovieSearch && o.MovieCategories != nil && *o.MovieCategories != "" {
+			cat = *o.MovieCategories
+		} else if isTVSearch && o.TVCategories != nil && *o.TVCategories != "" {
+			cat = *o.TVCategories
+		}
+	}
 	if cat != "" {
 		params.Set("cat", cat)
 	}
 
-	// Only send season/ep when indexer config allows (some indexers don't use them)
-	if (c.cfg.UseSeasonEpisodeParams == nil || *c.cfg.UseSeasonEpisodeParams) {
+	useSeasonEp := c.cfg.UseSeasonEpisodeParams
+	if o := req.OptionalOverrides; o != nil && o.UseSeasonEpisodeParams != nil {
+		useSeasonEp = o.UseSeasonEpisodeParams
+	}
+	if (useSeasonEp == nil || *useSeasonEp) {
 		if req.Season != "" {
 			params.Set("season", req.Season)
 		}

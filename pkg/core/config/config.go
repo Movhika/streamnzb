@@ -142,6 +142,18 @@ func DefaultSortConfig() SortConfig {
 	}
 }
 
+// IndexerSearchConfig holds indexer/search overrides (per-device per-indexer). Pointers = nil means use indexer's value. Used in Device.IndexerOverrides and API payloads.
+type IndexerSearchConfig struct {
+	SearchResultLimit      int     `json:"search_result_limit,omitempty"`       // 0 = use indexer/global
+	IncludeYearInSearch    *bool   `json:"include_year_in_search,omitempty"`
+	SearchTitleLanguage    *string `json:"search_title_language,omitempty"`
+	SearchTitleNormalize   *bool   `json:"search_title_normalize,omitempty"`
+	MovieCategories        *string `json:"movie_categories,omitempty"`
+	TVCategories           *string `json:"tv_categories,omitempty"`
+	ExtraSearchTerms       *string `json:"extra_search_terms,omitempty"`
+	UseSeasonEpisodeParams *bool   `json:"use_season_episode_params,omitempty"`
+}
+
 // IndexerConfig represents an internal Newznab indexer configuration
 type IndexerConfig struct {
 	Name         string `json:"name"`
@@ -155,11 +167,15 @@ type IndexerConfig struct {
 	// Easynews-specific fields
 	Username string `json:"username"` // Easynews username
 	Password string `json:"password"` // Easynews password
-	// Per-indexer search overrides (Newznab only)
-	MovieCategories  string `json:"movie_categories,omitempty"`   // Custom movie categories, e.g. "2000,2100"
-	TVCategories     string `json:"tv_categories,omitempty"`      // Custom TV categories, e.g. "5000,5100"
-	ExtraSearchTerms       string `json:"extra_search_terms,omitempty"`          // Appended to every search query, e.g. "(P73|LRO)"
-	UseSeasonEpisodeParams *bool  `json:"use_season_episode_params,omitempty"`  // If false, do not send season/ep to API. nil/true = send (default).
+	// Per-indexer search settings (all 8; empty/nil = use global default where applicable)
+	MovieCategories         string  `json:"movie_categories,omitempty"`
+	TVCategories            string  `json:"tv_categories,omitempty"`
+	ExtraSearchTerms        string  `json:"extra_search_terms,omitempty"`
+	UseSeasonEpisodeParams  *bool   `json:"use_season_episode_params,omitempty"`
+	SearchResultLimit       int     `json:"search_result_limit,omitempty"`   // 0 = use global default
+	IncludeYearInSearch     *bool   `json:"include_year_in_search,omitempty"`
+	SearchTitleLanguage     string  `json:"search_title_language,omitempty"`
+	SearchTitleNormalize    *bool   `json:"search_title_normalize,omitempty"`
 }
 
 // Config holds application configuration
@@ -203,6 +219,12 @@ type Config struct {
 	// TVDB Settings
 	TVDBAPIKey string `json:"-"`
 
+	// Search / Indexer (global defaults when per-indexer does not set)
+	SearchResultLimit    int    `json:"search_result_limit"`    // Max indexer results per search (default 1000)
+	IncludeYearInSearch  bool   `json:"include_year_in_search"` // Append release year to movie title query (default true)
+	SearchTitleLanguage  string `json:"search_title_language"`  // TMDB language for movie title (e.g. "de-DE"); empty = default
+	SearchTitleNormalize bool   `json:"search_title_normalize"`  // Normalize movie title for search (e.g. ü→ue) (default false)
+
 	// Filtering
 	Filters FilterConfig `json:"filters"`
 
@@ -211,6 +233,102 @@ type Config struct {
 
 	// Internal - where was this config loaded from?
 	LoadedPath string `json:"-"`
+}
+
+// GetIncludeYearInSearch returns the global default for including year in movie search (for search.RunIndexerSearches fallback).
+func (c *Config) GetIncludeYearInSearch() bool { return c.IncludeYearInSearch }
+
+// GetSearchTitleLanguage returns the global default TMDB language for movie title (for search.RunIndexerSearches fallback).
+func (c *Config) GetSearchTitleLanguage() string { return c.SearchTitleLanguage }
+
+// GetSearchTitleNormalize returns the global default for normalizing movie title (for search.RunIndexerSearches fallback).
+func (c *Config) GetSearchTitleNormalize() bool { return c.SearchTitleNormalize }
+
+// MergeIndexerSearch merges per-indexer config, per-device override, and global defaults (override wins over indexer wins over global).
+// Returns a fully populated IndexerSearchConfig for use when building the search request per indexer.
+func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global *Config) *IndexerSearchConfig {
+	out := &IndexerSearchConfig{}
+	if global == nil {
+		global = &Config{SearchResultLimit: 1000, IncludeYearInSearch: true}
+	}
+	// Limit: override > indexer > global
+	out.SearchResultLimit = global.SearchResultLimit
+	if ic != nil && ic.SearchResultLimit > 0 {
+		out.SearchResultLimit = ic.SearchResultLimit
+	}
+	if override != nil && override.SearchResultLimit > 0 {
+		out.SearchResultLimit = override.SearchResultLimit
+	}
+	// IncludeYearInSearch
+	val := global.IncludeYearInSearch
+	if ic != nil && ic.IncludeYearInSearch != nil {
+		val = *ic.IncludeYearInSearch
+	}
+	if override != nil && override.IncludeYearInSearch != nil {
+		val = *override.IncludeYearInSearch
+	}
+	out.IncludeYearInSearch = &val
+	// SearchTitleLanguage
+	s := global.SearchTitleLanguage
+	if ic != nil && ic.SearchTitleLanguage != "" {
+		s = ic.SearchTitleLanguage
+	}
+	if override != nil && override.SearchTitleLanguage != nil {
+		s = *override.SearchTitleLanguage
+	}
+	out.SearchTitleLanguage = &s
+	// SearchTitleNormalize
+	n := global.SearchTitleNormalize
+	if ic != nil && ic.SearchTitleNormalize != nil {
+		n = *ic.SearchTitleNormalize
+	}
+	if override != nil && override.SearchTitleNormalize != nil {
+		n = *override.SearchTitleNormalize
+	}
+	out.SearchTitleNormalize = &n
+	// MovieCategories
+	mc := ""
+	if ic != nil {
+		mc = ic.MovieCategories
+	}
+	if override != nil && override.MovieCategories != nil {
+		mc = *override.MovieCategories
+	}
+	if mc != "" {
+		out.MovieCategories = &mc
+	}
+	// TVCategories
+	tc := ""
+	if ic != nil {
+		tc = ic.TVCategories
+	}
+	if override != nil && override.TVCategories != nil {
+		tc = *override.TVCategories
+	}
+	if tc != "" {
+		out.TVCategories = &tc
+	}
+	// ExtraSearchTerms
+	et := ""
+	if ic != nil {
+		et = ic.ExtraSearchTerms
+	}
+	if override != nil && override.ExtraSearchTerms != nil {
+		et = *override.ExtraSearchTerms
+	}
+	if et != "" {
+		out.ExtraSearchTerms = &et
+	}
+	// UseSeasonEpisodeParams (nil/true = send)
+	useSE := true
+	if ic != nil && ic.UseSeasonEpisodeParams != nil {
+		useSE = *ic.UseSeasonEpisodeParams
+	}
+	if override != nil && override.UseSeasonEpisodeParams != nil {
+		useSE = *override.UseSeasonEpisodeParams
+	}
+	out.UseSeasonEpisodeParams = &useSE
+	return out
 }
 
 // GetAdminUsername returns the dashboard admin login username (default "admin").
@@ -250,6 +368,10 @@ func Load() (*Config, error) {
 		ValidationSampleSize:    5,
 		MaxStreams:              5,
 		MaxStreamsPerResolution: 0, // 0 = disabled
+		SearchResultLimit:       1000,
+		IncludeYearInSearch:     true,
+		SearchTitleLanguage:     "",
+		SearchTitleNormalize:    false,
 		ProxyPort:               119,
 		ProxyHost:               "0.0.0.0",
 		Sorting: SortConfig{

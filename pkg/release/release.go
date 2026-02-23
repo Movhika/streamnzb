@@ -72,3 +72,17 @@ func NormalizeTitleForDedup(s string) string {
 	}
 	return b.String()
 }
+
+// NormalizeTitleForFilename maps common accented/umlaut characters to ASCII
+// so that e.g. "König der Löwen" matches filenames like "Koenig der Loewen".
+// Covers German (ü, ö, ä, ß) and common Latin accents.
+var filenameReplacer = strings.NewReplacer(
+	"ü", "ue", "Ü", "UE", "ö", "oe", "Ö", "OE", "ä", "ae", "Ä", "AE", "ß", "ss",
+	"á", "a", "à", "a", "â", "a", "ã", "a", "é", "e", "è", "e", "ê", "e", "í", "i",
+	"ó", "o", "ò", "o", "ô", "o", "ú", "u", "ù", "u", "û", "u", "ñ", "n", "ç", "c",
+)
+
+// NormalizeTitleForFilename returns s with umlauts and common accents replaced by ASCII equivalents.
+func NormalizeTitleForFilename(s string) string {
+	return filenameReplacer.Replace(s)
+}

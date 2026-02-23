@@ -13,12 +13,11 @@ import (
 
 // Device represents a device account
 type Device struct {
-	Username string              `json:"username"`
-	Token    string              `json:"token"` // SHA256 token for API access
-	Filters  config.FilterConfig `json:"filters"`
-	Sorting  config.SortConfig   `json:"sorting"`
-	// PasswordHash and MustChangePassword are not stored for regular devices
-	// They are only used for admin (stored separately in AdminCredentials)
+	Username        string                           `json:"username"`
+	Token           string                           `json:"token"`
+	Filters         config.FilterConfig              `json:"filters"`
+	Sorting         config.SortConfig                `json:"sorting"`
+	IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides"` // per-indexer overrides; key = indexer name
 }
 
 // DeviceManager handles device storage and authentication.
@@ -376,6 +375,28 @@ func (dm *DeviceManager) UpdateDeviceSorting(username string, sorting config.Sor
 // UpdateUserSorting is an alias for UpdateDeviceSorting for backwards compatibility
 func (dm *DeviceManager) UpdateUserSorting(username string, sorting config.SortConfig) error {
 	return dm.UpdateDeviceSorting(username, sorting)
+}
+
+// UpdateDeviceIndexerOverrides sets a device's per-indexer search overrides (key = indexer name).
+func (dm *DeviceManager) UpdateDeviceIndexerOverrides(username string, overrides map[string]config.IndexerSearchConfig) error {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	device, exists := dm.devices[username]
+	if !exists {
+		return fmt.Errorf("device not found")
+	}
+
+	if overrides == nil {
+		device.IndexerOverrides = make(map[string]config.IndexerSearchConfig)
+	} else {
+		device.IndexerOverrides = overrides
+	}
+
+	if err := dm.saveLocked(); err != nil {
+		return fmt.Errorf("failed to save device indexer overrides: %w", err)
+	}
+	return nil
 }
 
 // GetDeviceConfig returns a device's filter and sorting config

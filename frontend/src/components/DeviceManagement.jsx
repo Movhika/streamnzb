@@ -6,112 +6,213 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { AlertCircle, Plus, Trash2, RefreshCw, Copy, Check, Loader2, Settings, ChevronDown, ChevronUp } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
 import { FiltersSection } from "@/components/FiltersSection"
 import { SortingSection } from "@/components/SortingSection"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { FormField } from "@/components/ui/form"
 
-// Device config form component - manages its own form state
-function DeviceConfigForm({ username, initialFilters, initialSorting, onConfigChange, formRef }) {
+// Build API override object from form values for one indexer (only include overridden fields)
+function buildOverridePayload(o) {
+  if (!o) return undefined
+  const out = {}
+  if (typeof o.search_result_limit === 'number' && o.search_result_limit > 0) out.search_result_limit = o.search_result_limit
+  if (o.include_year_in_search !== 'use_indexer' && o.include_year_in_search !== undefined) out.include_year_in_search = o.include_year_in_search === true || o.include_year_in_search === 'true'
+  if (o.search_title_language !== 'use_indexer' && o.search_title_language !== undefined && o.search_title_language !== '') out.search_title_language = o.search_title_language
+  if (o.search_title_normalize !== 'use_indexer' && o.search_title_normalize !== undefined) out.search_title_normalize = o.search_title_normalize === true || o.search_title_normalize === 'true'
+  if (o.movie_categories !== 'use_indexer' && o.movie_categories !== undefined && o.movie_categories !== '') out.movie_categories = o.movie_categories
+  if (o.tv_categories !== 'use_indexer' && o.tv_categories !== undefined && o.tv_categories !== '') out.tv_categories = o.tv_categories
+  if (o.extra_search_terms !== 'use_indexer' && o.extra_search_terms !== undefined && o.extra_search_terms !== '') out.extra_search_terms = o.extra_search_terms
+  if (o.use_season_episode_params !== 'use_indexer' && o.use_season_episode_params !== undefined) out.use_season_episode_params = o.use_season_episode_params === true || o.use_season_episode_params === 'true'
+  return Object.keys(out).length ? out : undefined
+}
+
+// Device config form: filters, sorting, and per-indexer overrides (indexer_overrides map)
+function DeviceConfigForm({ username, initialFilters, initialSorting, initialIndexerOverrides, indexerNames, onConfigChange, formRef }) {
+  const defaultOverrides = React.useMemo(() => {
+    const map = {}
+    ;(indexerNames || []).forEach((name) => {
+      const init = initialIndexerOverrides?.[name] || {}
+      map[name] = {
+        search_result_limit: init.search_result_limit ?? 0,
+        include_year_in_search: init.include_year_in_search === undefined ? 'use_indexer' : (init.include_year_in_search === true || init.include_year_in_search === 'true'),
+        search_title_language: init.search_title_language === undefined || init.search_title_language === '' ? 'use_indexer' : (init.search_title_language ?? ''),
+        search_title_normalize: init.search_title_normalize === undefined ? 'use_indexer' : (init.search_title_normalize === true || init.search_title_normalize === 'true'),
+        movie_categories: init.movie_categories === undefined || init.movie_categories === '' ? 'use_indexer' : (init.movie_categories ?? ''),
+        tv_categories: init.tv_categories === undefined || init.tv_categories === '' ? 'use_indexer' : (init.tv_categories ?? ''),
+        extra_search_terms: init.extra_search_terms === undefined || init.extra_search_terms === '' ? 'use_indexer' : (init.extra_search_terms ?? ''),
+        use_season_episode_params: init.use_season_episode_params === undefined ? 'use_indexer' : (init.use_season_episode_params === true || init.use_season_episode_params === 'true')
+      }
+    })
+    return map
+  }, [initialIndexerOverrides, indexerNames])
+
   const form = useForm({
     defaultValues: {
       filters: initialFilters || {},
-      sorting: initialSorting || {}
+      sorting: initialSorting || {},
+      indexer_overrides: defaultOverrides
     }
   })
 
-  const { watch, reset, getValues } = form
+  const { watch, reset, getValues, control } = form
   const onConfigChangeRef = React.useRef(onConfigChange)
   const isInitialMount = React.useRef(true)
 
-  // Expose form methods via ref so parent can get current values
   React.useImperativeHandle(formRef, formRef ? () => ({
     getValues: () => {
-      // Get values with proper nesting - react-hook-form stores them nested
-      const allValues = getValues()
-      
-      // Extract filters and sorting from the form values
-      // The form structure is { filters: {...}, sorting: {...} }
-      const filters = allValues.filters || {}
-      const sorting = allValues.sorting || {}
-      
-      // Also check for any root-level fields that might have been incorrectly stored
-      // (this shouldn't happen, but let's be defensive)
-      const result = {
-        filters: { ...filters },
-        sorting: { ...sorting }
-      }
-      
-      // If max_resolution is at root level, move it to filters
-      if (allValues.max_resolution !== undefined && !result.filters.max_resolution) {
-        result.filters.max_resolution = allValues.max_resolution
-      }
-      
-      return result
+      const all = getValues()
+      const filters = all.filters || {}
+      const sorting = all.sorting || {}
+      const overrides = all.indexer_overrides || {}
+      const indexer_overrides = {}
+      Object.keys(overrides).forEach((name) => {
+        const payload = buildOverridePayload(overrides[name])
+        if (payload) indexer_overrides[name] = payload
+      })
+      return { filters: { ...filters }, sorting: { ...sorting }, indexer_overrides }
     }
   }) : undefined, [getValues, username, formRef])
 
-  // Keep ref updated
-  useEffect(() => {
-    onConfigChangeRef.current = onConfigChange
-  }, [onConfigChange])
+  useEffect(() => { onConfigChangeRef.current = onConfigChange }, [onConfigChange])
 
-  // Update form when initial values change
   useEffect(() => {
-    if (initialFilters || initialSorting) {
-      const formData = {
+    if (initialFilters || initialSorting || initialIndexerOverrides || indexerNames?.length) {
+      reset({
         filters: initialFilters || {},
-        sorting: initialSorting || {}
-      }
-      reset(formData, { keepDefaultValues: false })
+        sorting: initialSorting || {},
+        indexer_overrides: defaultOverrides
+      }, { keepDefaultValues: false })
       isInitialMount.current = true
     }
-  }, [initialFilters, initialSorting, reset, username])
+  }, [initialFilters, initialSorting, initialIndexerOverrides, indexerNames, defaultOverrides, reset, username])
 
-  // Watch for changes and notify parent - debounce to prevent excessive updates
   useEffect(() => {
     let timeoutId
-    const subscription = watch((value) => {
-      // Skip initial mount
-      if (isInitialMount.current) {
-        isInitialMount.current = false
-        return
-      }
-      
-      if (value && (value.filters || value.sorting)) {
-        // Debounce updates to prevent flickering
+    const sub = watch((value) => {
+      if (isInitialMount.current) { isInitialMount.current = false; return }
+      if (value?.filters || value?.sorting) {
         clearTimeout(timeoutId)
-        timeoutId = setTimeout(() => {
-          onConfigChangeRef.current(username, value)
-        }, 100)
+        timeoutId = setTimeout(() => onConfigChangeRef.current(username, value), 100)
       }
     })
-    return () => {
-      clearTimeout(timeoutId)
-      subscription.unsubscribe()
-    }
+    return () => { clearTimeout(timeoutId); sub.unsubscribe() }
   }, [watch, username])
 
   return (
-    <Tabs defaultValue="filters" className="w-full">
-      <TabsList className="mb-6 w-full grid grid-cols-2">
-        <TabsTrigger value="filters" className="text-sm sm:text-base">Filters</TabsTrigger>
-        <TabsTrigger value="sorting" className="text-sm sm:text-base">Sorting</TabsTrigger>
-      </TabsList>
-      <TabsContent value="filters">
-        <FiltersSection 
-          control={form.control}
-          watch={watch}
-          fieldPrefix="filters"
-        />
-      </TabsContent>
-      <TabsContent value="sorting">
-        <SortingSection 
-          control={form.control}
-          watch={watch}
-          fieldPrefix="sorting"
-        />
-      </TabsContent>
-    </Tabs>
+    <div className="space-y-4">
+      <Tabs defaultValue="filters" className="w-full">
+        <TabsList className="mb-6 w-full grid grid-cols-3">
+          <TabsTrigger value="filters" className="text-sm sm:text-base">Filters</TabsTrigger>
+          <TabsTrigger value="sorting" className="text-sm sm:text-base">Sorting</TabsTrigger>
+          <TabsTrigger value="indexers" className="text-sm sm:text-base">Indexer & Search</TabsTrigger>
+        </TabsList>
+        <TabsContent value="filters">
+          <FiltersSection control={form.control} watch={watch} fieldPrefix="filters" />
+        </TabsContent>
+        <TabsContent value="sorting">
+          <SortingSection control={form.control} watch={watch} fieldPrefix="sorting" />
+        </TabsContent>
+        <TabsContent value="indexers" className="space-y-4">
+          <p className="text-xs text-muted-foreground">Override indexer search settings per indexer for this device. Empty = use indexer setting.</p>
+          {(!indexerNames || indexerNames.length === 0) ? (
+            <p className="text-sm text-muted-foreground">No indexers configured. Add indexers in Settings → Indexers.</p>
+          ) : (
+            indexerNames.map((indexerName) => (
+              <PerIndexerOverrideSection
+                key={indexerName}
+                indexerName={indexerName}
+                control={control}
+              />
+            ))
+          )}
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function PerIndexerOverrideSection({ indexerName, control }) {
+  const [open, setOpen] = useState(false)
+  const prefix = `indexer_overrides.${indexerName}`
+
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 w-full px-3 py-2.5 text-left text-sm font-medium hover:bg-muted/50 transition-colors"
+      >
+        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        {indexerName}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 pt-1 space-y-3 border-t border-border">
+          <div className="grid grid-cols-2 gap-2">
+            <FormField control={control} name={`${prefix}.movie_categories`} render={({ field }) => (
+              <div className="space-y-1">
+                <Label className="text-xs">Movie Categories</Label>
+                <Input type="text" placeholder="Use indexer setting" className="h-8 text-xs" {...field} value={field.value === 'use_indexer' ? '' : (field.value ?? '')} onChange={e => field.onChange(e.target.value === '' ? 'use_indexer' : e.target.value)} />
+              </div>
+            )} />
+            <FormField control={control} name={`${prefix}.tv_categories`} render={({ field }) => (
+              <div className="space-y-1">
+                <Label className="text-xs">TV Categories</Label>
+                <Input type="text" placeholder="Use indexer setting" className="h-8 text-xs" {...field} value={field.value === 'use_indexer' ? '' : (field.value ?? '')} onChange={e => field.onChange(e.target.value === '' ? 'use_indexer' : e.target.value)} />
+              </div>
+            )} />
+          </div>
+          <FormField control={control} name={`${prefix}.extra_search_terms`} render={({ field }) => (
+            <div className="space-y-1">
+              <Label className="text-xs">Extra Search Terms</Label>
+              <Input type="text" placeholder="Use indexer setting" className="h-8 text-xs" {...field} value={field.value === 'use_indexer' ? '' : (field.value ?? '')} onChange={e => field.onChange(e.target.value === '' ? 'use_indexer' : e.target.value)} />
+            </div>
+          )} />
+          <FormField control={control} name={`${prefix}.use_season_episode_params`} render={({ field }) => (
+            <div className="flex items-center gap-2">
+              <select className="flex h-8 w-full max-w-[180px] rounded-md border border-input bg-transparent px-2 text-xs" value={field.value === true ? 'true' : field.value === false ? 'false' : 'use_indexer'} onChange={e => { const v = e.target.value; field.onChange(v === 'use_indexer' ? 'use_indexer' : v === 'true') }}>
+                <option value="use_indexer">Use indexer setting</option>
+                <option value="true">Yes</option>
+                <option value="false">No</option>
+              </select>
+              <Label className="text-xs">Use season/episode in API</Label>
+            </div>
+          )} />
+          <FormField control={control} name={`${prefix}.search_result_limit`} render={({ field }) => (
+            <div className="space-y-1">
+              <Label className="text-xs">Search Result Limit</Label>
+              <Input type="number" min={0} max={5000} placeholder="0 = use indexer" className="h-8 text-xs" {...field} value={field.value === 0 ? '' : field.value} onChange={e => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} />
+            </div>
+          )} />
+          <FormField control={control} name={`${prefix}.include_year_in_search`} render={({ field }) => (
+            <div className="flex items-center gap-2">
+              <select className="flex h-8 w-full max-w-[180px] rounded-md border border-input bg-transparent px-2 text-xs" value={field.value === true ? 'true' : field.value === false ? 'false' : 'use_indexer'} onChange={e => { const v = e.target.value; field.onChange(v === 'use_indexer' ? 'use_indexer' : v === 'true') }}>
+                <option value="use_indexer">Use indexer setting</option>
+                <option value="true">Yes</option>
+                <option value="false">No</option>
+              </select>
+              <Label className="text-xs">Include year in movie search</Label>
+            </div>
+          )} />
+          <FormField control={control} name={`${prefix}.search_title_language`} render={({ field }) => (
+            <div className="space-y-1">
+              <Label className="text-xs">Search title language</Label>
+              <Input type="text" placeholder="Use indexer setting" className="h-8 text-xs" {...field} value={field.value === 'use_indexer' ? '' : (field.value ?? '')} onChange={e => field.onChange(e.target.value === '' ? 'use_indexer' : e.target.value)} />
+            </div>
+          )} />
+          <FormField control={control} name={`${prefix}.search_title_normalize`} render={({ field }) => (
+            <div className="flex items-center gap-2">
+              <select className="flex h-8 w-full max-w-[180px] rounded-md border border-input bg-transparent px-2 text-xs" value={field.value === true ? 'true' : field.value === false ? 'false' : 'use_indexer'} onChange={e => { const v = e.target.value; field.onChange(v === 'use_indexer' ? 'use_indexer' : v === 'true') }}>
+                <option value="use_indexer">Use indexer setting</option>
+                <option value="true">Yes</option>
+                <option value="false">No</option>
+              </select>
+              <Label className="text-xs">Normalize title for search</Label>
+            </div>
+          )} />
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -142,25 +243,23 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
       const configs = {}
       
       for (const [username, formRef] of Object.entries(formRefs.current)) {
-        if (formRef && formRef.current && formRef.current.getValues) {
+        if (formRef?.current?.getValues) {
           const formValues = formRef.current.getValues()
-          if (formValues && (formValues.filters || formValues.sorting)) {
+          if (formValues && (formValues.filters || formValues.sorting || formValues.indexer_overrides)) {
             configs[username] = formValues
           }
         } else if (deviceConfigs[username]) {
-          // Fallback to state if form ref not available
           configs[username] = deviceConfigs[username]
         }
       }
       return configs
     },
-    // Backwards compatibility alias
     getUserConfigs: () => {
       const configs = {}
       for (const [username, formRef] of Object.entries(formRefs.current)) {
-        if (formRef && formRef.current && formRef.current.getValues) {
+        if (formRef?.current?.getValues) {
           const formValues = formRef.current.getValues()
-          if (formValues && (formValues.filters || formValues.sorting)) {
+          if (formValues && (formValues.filters || formValues.sorting || formValues.indexer_overrides)) {
             configs[username] = formValues
           }
         } else if (deviceConfigs[username]) {
@@ -252,32 +351,28 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
     }
 
     if (!sendCommand || !ws || ws.readyState !== WebSocket.OPEN) {
-      // Use defaults if WebSocket not available
       const defaultConfig = {
         filters: globalFilters || globalConfig?.filters || {},
-        sorting: globalSorting || globalConfig?.sorting || {}
+        sorting: globalSorting || globalConfig?.sorting || {},
+        indexer_overrides: {}
       }
-        setDeviceConfigs(prev => ({ ...prev, [username]: defaultConfig }))
-        loadedDevicesRef.current.add(username)
-        // Create form ref if it doesn't exist
-        if (!formRefs.current[username]) {
-          formRefs.current[username] = React.createRef()
-        }
-        return
-      }
+      setDeviceConfigs(prev => ({ ...prev, [username]: defaultConfig }))
+      loadedDevicesRef.current.add(username)
+      if (!formRefs.current[username]) formRefs.current[username] = React.createRef()
+      return
+    }
 
-      window.deviceResponseCallback = (payload) => {
-        const configData = payload.error ? {
-          filters: globalFilters || globalConfig?.filters || {},
-          sorting: globalSorting || globalConfig?.sorting || {}
-        } : {
-          // Use device's saved config directly, don't merge with defaults
-          // The backend already returns the device's filters/sorting
-          filters: payload.filters || {},
-          sorting: payload.sorting || {}
-        }
-        
-        setDeviceConfigs(prev => ({ ...prev, [username]: configData }))
+    window.deviceResponseCallback = (payload) => {
+      const configData = payload.error ? {
+        filters: globalFilters || globalConfig?.filters || {},
+        sorting: globalSorting || globalConfig?.sorting || {},
+        indexer_overrides: {}
+      } : {
+        filters: payload.filters || {},
+        sorting: payload.sorting || {},
+        indexer_overrides: payload.indexer_overrides || {}
+      }
+      setDeviceConfigs(prev => ({ ...prev, [username]: configData }))
         loadedDevicesRef.current.add(username)
         // Create form ref if it doesn't exist
         if (!formRefs.current[username]) {
@@ -632,10 +727,12 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
                       }
                       return (
                         <div className="pt-4 border-t">
-                          <DeviceConfigForm 
+                          <DeviceConfigForm
                             username={device.username}
                             initialFilters={deviceConfigs[device.username]?.filters}
                             initialSorting={deviceConfigs[device.username]?.sorting}
+                            initialIndexerOverrides={deviceConfigs[device.username]?.indexer_overrides}
+                            indexerNames={globalConfig?.indexers?.map(i => i.name) ?? []}
                             onConfigChange={handleConfigChange}
                             formRef={formRefs.current[device.username]}
                           />

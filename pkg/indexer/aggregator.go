@@ -126,18 +126,28 @@ func (a *Aggregator) ResolveDownloadURL(ctx context.Context, directURL, title st
 	return "", fmt.Errorf("no matching release for title in search results")
 }
 
-// Search queries all indexers in parallel and merges results
+// Search queries all indexers in parallel and merges results. When req.EffectiveByIndexer is set, each indexer gets its own OptionalOverrides and Query from PerIndexerQuery.
 func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 	resultsChan := make(chan []Item, len(a.Indexers))
 	var wg sync.WaitGroup
 
-	// Launch parallel searches
 	for _, idx := range a.Indexers {
 		wg.Add(1)
-		go func(indexer Indexer) {
+		reqCopy := req
+		reqCopy.EffectiveByIndexer = nil
+		reqCopy.PerIndexerQuery = nil
+		if req.EffectiveByIndexer != nil {
+			reqCopy.OptionalOverrides = req.EffectiveByIndexer[idx.Name()]
+		}
+		if req.PerIndexerQuery != nil {
+			if q, ok := req.PerIndexerQuery[idx.Name()]; ok && q != "" {
+				reqCopy.Query = q
+			}
+		}
+		go func(indexer Indexer, r SearchRequest) {
 			defer wg.Done()
 
-			resp, err := indexer.Search(req)
+			resp, err := indexer.Search(r)
 			if err != nil {
 				// Log error but don't fail entire search?
 				// For now we just return empty result for this indexer
@@ -149,7 +159,7 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 			if resp != nil {
 				resultsChan <- resp.Channel.Items
 			}
-		}(idx)
+		}(idx, reqCopy)
 	}
 
 	// Wait for all searches to complete

@@ -14,24 +14,50 @@ import (
 // TMDBResolver resolves movie/TV titles for text search.
 type TMDBResolver interface {
 	GetMovieTitle(imdbID, tmdbID string) (string, error)
+	GetMovieTitleAndYear(imdbID, tmdbID string) (title, year string, err error)
+	GetMovieTitleForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (string, error)
 	GetTVShowName(tmdbID, imdbID string) (string, error)
 }
 
+// SearchConfig provides global defaults for text search when PerIndexerQuery is not set.
+type SearchConfig interface {
+	GetIncludeYearInSearch() bool
+	GetSearchTitleLanguage() string
+	GetSearchTitleNormalize() bool
+}
+
 // RunIndexerSearches runs ID-based and text-based searches in parallel, merges and dedupes.
-// Text search uses TMDB to resolve titles; when TMDB is unavailable, only ID search runs.
-func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string) ([]*release.Release, error) {
+// When req.PerIndexerQuery is set, text search uses per-indexer queries and effective config; otherwise uses global cfg for title resolution.
+func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string, cfg SearchConfig) ([]*release.Release, error) {
 	idReq := req
 	idReq.Query = ""
 
 	var textQuery string
-	if tmdbClient != nil {
+	usePerIndexerQuery := len(req.PerIndexerQuery) > 0
+	if !usePerIndexerQuery && tmdbClient != nil && cfg != nil {
+		includeYear := cfg.GetIncludeYearInSearch()
+		searchTitleLanguage := cfg.GetSearchTitleLanguage()
+		searchTitleNormalize := cfg.GetSearchTitleNormalize()
 		if contentType == "movie" {
-			if t, err := tmdbClient.GetMovieTitle(contentIDs.ImdbID, req.TMDBID); err == nil {
-				textQuery = t
+			if searchTitleLanguage != "" || searchTitleNormalize {
+				if q, err := tmdbClient.GetMovieTitleForSearch(contentIDs.ImdbID, req.TMDBID, searchTitleLanguage, includeYear, searchTitleNormalize); err == nil {
+					textQuery = q
+				}
+			} else if includeYear {
+				if t, y, err := tmdbClient.GetMovieTitleAndYear(contentIDs.ImdbID, req.TMDBID); err == nil {
+					if y != "" {
+						textQuery = t + " " + y
+					} else {
+						textQuery = t
+					}
+				}
+			} else {
+				if t, err := tmdbClient.GetMovieTitle(contentIDs.ImdbID, req.TMDBID); err == nil {
+					textQuery = t
+				}
 			}
 		} else if req.Season != "" && req.Episode != "" {
 			if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil {
-				// Indexers expect zero-padded S01E01 format (not S1E1)
 				seasonNum, _ := strconv.Atoi(req.Season)
 				epNum, _ := strconv.Atoi(req.Episode)
 				if seasonNum > 0 || epNum > 0 {
@@ -52,7 +78,34 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 		defer wg.Done()
 		idResp, idErr = idx.Search(idReq)
 	}()
-	if textQuery != "" {
+	if usePerIndexerQuery {
+		wg.Add(1)
+		textReq := indexer.SearchRequest{
+			Cat:                req.Cat,
+			Limit:              req.Limit,
+			Season:             req.Season,
+			Episode:            req.Episode,
+			EffectiveByIndexer: req.EffectiveByIndexer,
+			PerIndexerQuery:    req.PerIndexerQuery,
+		}
+		go func() {
+			defer wg.Done()
+			if resp, err := idx.Search(textReq); err == nil {
+				indexer.NormalizeSearchResponse(resp)
+				// Filter by content; per-indexer queries can differ (e.g. movie with/without year), so filter by each and dedupe
+				var filtered [][]*release.Release
+				for _, q := range req.PerIndexerQuery {
+					filtered = append(filtered, FilterTextResultsByContent(resp.Releases, contentType, q, req.Season, req.Episode))
+				}
+				if len(filtered) > 0 {
+					for _, list := range filtered {
+						textReleases = append(textReleases, list...)
+					}
+					textReleases = MergeAndDedupeSearchResults(textReleases)
+				}
+			}
+		}()
+	} else if textQuery != "" {
 		wg.Add(1)
 		textReq := indexer.SearchRequest{Query: textQuery, Cat: req.Cat, Limit: req.Limit, Season: req.Season, Episode: req.Episode}
 		go func() {

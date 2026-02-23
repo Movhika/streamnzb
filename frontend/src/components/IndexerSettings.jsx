@@ -183,6 +183,70 @@ function SearchSettings({ control, index, watch, indexerCaps }) {
               </FormItem>
             )}
           />
+
+          <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border">
+            <FormField
+              control={control}
+              name={`indexers.${index}.search_result_limit`}
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[10px]">Search Result Limit</FormLabel>
+                  <FormControl>
+                    <Input type="number" min={0} max={5000} placeholder="0 = use global" className="h-8 text-xs" {...field} value={field.value === 0 || field.value == null ? '' : field.value} onChange={e => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} />
+                  </FormControl>
+                  <FormDescription className="text-[10px]">Max results from this indexer. 0 = use global.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={control}
+              name={`indexers.${index}.include_year_in_search`}
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-center space-x-2 space-y-0 pt-6">
+                  <FormControl>
+                    <Checkbox
+                      checked={field.value === true}
+                      onCheckedChange={(v) => field.onChange(v === true ? true : undefined)}
+                    />
+                  </FormControl>
+                  <FormLabel className="text-[10px]">Include year in movie search</FormLabel>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+          <FormField
+            control={control}
+            name={`indexers.${index}.search_title_language`}
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-[10px]">Search title language</FormLabel>
+                <FormControl>
+                  <Input placeholder="Use global or e.g. de-DE" className="h-8 text-xs" {...field} value={field.value || ''} />
+                </FormControl>
+                <FormDescription className="text-[10px]">TMDB language for movie title. Empty = use global.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={control}
+            name={`indexers.${index}.search_title_normalize`}
+            render={({ field }) => (
+              <FormItem className="flex flex-row items-center space-x-2 space-y-0">
+                <FormControl>
+                  <Checkbox
+                    checked={field.value === true}
+                    onCheckedChange={(v) => field.onChange(v === true ? true : undefined)}
+                  />
+                </FormControl>
+                <FormLabel className="text-[10px]">Normalize title for search</FormLabel>
+                <FormDescription className="text-[10px]">Apply umlaut→ascii to movie search query. Unset = use global.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
       )}
     </div>
@@ -372,7 +436,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
             <Button
                 type="button"
                 variant="outline"
-                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '', movie_categories: '', tv_categories: '', extra_search_terms: '', use_season_episode_params: undefined })}
+                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '', movie_categories: '', tv_categories: '', extra_search_terms: '', use_season_episode_params: undefined, search_result_limit: 0, include_year_in_search: undefined, search_title_language: '', search_title_normalize: undefined })}
                 className={cn(
                   "flex flex-col items-center justify-center p-4 h-auto min-h-[180px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
                 )}

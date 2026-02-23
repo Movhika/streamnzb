@@ -46,6 +46,14 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       validation_sample_size: 5,
       max_streams: 5,
       max_streams_per_resolution: 0,
+      search_result_limit: 1000,
+      include_year_in_search: true,
+      search_title_language: '',
+      search_title_normalize: false,
+      movie_categories: '',
+      tv_categories: '',
+      extra_search_terms: '',
+      use_season_episode_params: undefined,
       providers: [],
       indexers: [],
       filters: {
@@ -163,6 +171,14 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         validation_sample_size: Number(initialConfig.validation_sample_size),
         max_concurrent_validations: Number(initialConfig.max_concurrent_validations),
         max_streams_per_resolution: Number(initialConfig.max_streams_per_resolution || 0),
+        search_result_limit: Number(initialConfig.search_result_limit || 1000),
+        include_year_in_search: initialConfig.include_year_in_search !== false,
+        search_title_language: initialConfig.search_title_language ?? '',
+        search_title_normalize: initialConfig.search_title_normalize === true,
+        movie_categories: initialConfig.movie_categories ?? '',
+        tv_categories: initialConfig.tv_categories ?? '',
+        extra_search_terms: initialConfig.extra_search_terms ?? '',
+        use_season_episode_params: initialConfig.use_season_episode_params,
         providers: initialConfig.providers?.map((p, index) => ({
           ...p,
           priority: p.priority != null ? p.priority : index + 1,
@@ -246,7 +262,8 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
             if (username === adminUsername || !deviceConfig) continue
             configsToSave[username] = {
               filters: deviceConfig.filters || {},
-              sorting: deviceConfig.sorting || {}
+              sorting: deviceConfig.sorting || {},
+              indexer_overrides: deviceConfig.indexer_overrides ?? {}
             }
           }
           if (Object.keys(configsToSave).length > 0) {

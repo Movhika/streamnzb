@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/release"
 )
 
@@ -40,14 +41,21 @@ type Usage struct {
 
 // SearchRequest represents a search query
 type SearchRequest struct {
-	Query   string // Search query
-	IMDbID  string // IMDb ID (tt1234567)
-	TMDBID  string // TMDB ID
-	TVDBID  string // TVDB ID (New)
-	Cat     string // Category (movies, tv, etc)
-	Limit   int    // Max results
-	Season  string // Season number for TV searches
-	Episode string // Episode number for TV searches
+	Query   string // Search query (may be set per-indexer by aggregator from PerIndexerQuery)
+	IMDbID  string
+	TMDBID  string
+	TVDBID  string
+	Cat     string
+	Limit   int
+	Season  string
+	Episode string
+
+	// Per-indexer effective config (handler sets; aggregator copies into OptionalOverrides per indexer)
+	EffectiveByIndexer map[string]*config.IndexerSearchConfig `json:"-"`
+	PerIndexerQuery    map[string]string                      `json:"-"` // indexer name -> text query for that indexer
+
+	// Set by aggregator for each indexer before calling Search (merged effective config for this indexer)
+	OptionalOverrides *config.IndexerSearchConfig `json:"-"`
 }
 
 // SearchResponse represents the Newznab XML response. After aggregation, items are normalized

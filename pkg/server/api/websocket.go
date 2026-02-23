@@ -424,8 +424,9 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 	}
 
 	var deviceConfigs map[string]struct {
-		Filters config.FilterConfig `json:"filters"`
-		Sorting config.SortConfig   `json:"sorting"`
+		Filters          config.FilterConfig                  `json:"filters"`
+		Sorting          config.SortConfig                     `json:"sorting"`
+		IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides"`
 	}
 	if err := json.Unmarshal(payload, &deviceConfigs); err != nil {
 		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid device config data"}`)})
@@ -446,6 +447,11 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 
 		if err := s.deviceManager.UpdateDeviceSorting(username, deviceConfig.Sorting); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to update sorting for %s: %v", username, err))
+			continue
+		}
+
+		if err := s.deviceManager.UpdateDeviceIndexerOverrides(username, deviceConfig.IndexerOverrides); err != nil {
+			errors = append(errors, fmt.Sprintf("Failed to update indexer overrides for %s: %v", username, err))
 			continue
 		}
 	}
@@ -476,10 +482,11 @@ func (s *Server) handleGetDevicesWS(client *Client) {
 	deviceList := make([]map[string]interface{}, 0, len(devices))
 	for _, device := range devices {
 		deviceList = append(deviceList, map[string]interface{}{
-			"username": device.Username,
-			"token":    device.Token,
-			"filters":  device.Filters,
-			"sorting":  device.Sorting,
+			"username":          device.Username,
+			"token":             device.Token,
+			"filters":           device.Filters,
+			"sorting":           device.Sorting,
+			"indexer_overrides": device.IndexerOverrides,
 		})
 	}
 
@@ -510,10 +517,11 @@ func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 	}
 
 	response := map[string]interface{}{
-		"username": device.Username,
-		"token":    device.Token,
-		"filters":  device.Filters,
-		"sorting":  device.Sorting,
+		"username":          device.Username,
+		"token":             device.Token,
+		"filters":           device.Filters,
+		"sorting":           device.Sorting,
+		"indexer_overrides": device.IndexerOverrides,
 	}
 
 	respPayload, _ := json.Marshal(response)
@@ -673,10 +681,11 @@ func (s *Server) broadcastUsersList() {
 	deviceList := make([]map[string]interface{}, 0, len(devices))
 	for _, device := range devices {
 		deviceList = append(deviceList, map[string]interface{}{
-			"username": device.Username,
-			"token":    device.Token,
-			"filters":  device.Filters,
-			"sorting":  device.Sorting,
+			"username":          device.Username,
+			"token":             device.Token,
+			"filters":           device.Filters,
+			"sorting":           device.Sorting,
+			"indexer_overrides": device.IndexerOverrides,
 		})
 	}
 

@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strconv"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/release"
+	"strings"
 	"time"
 )
 
@@ -44,6 +46,7 @@ type Result struct {
 	OriginalTitle string `json:"original_title"` // Movie
 	MediaType     string `json:"media_type"`
 	Overview      string `json:"overview"`
+	ReleaseDate   string `json:"release_date"`   // Movie (from Find)
 }
 
 // ExternalIDsResponse represents the response from /{type}/{id}/external_ids
@@ -146,25 +149,36 @@ type TVDetails struct {
 // GetMovieTitle returns the movie title for text-based search.
 // Supports IMDb ID (tt123) or TMDB ID.
 func (c *Client) GetMovieTitle(imdbID string, tmdbID string) (string, error) {
+	title, _, err := c.GetMovieTitleAndYear(imdbID, tmdbID)
+	return title, err
+}
+
+// GetMovieTitleAndYear returns the movie title and release year (e.g. "2026" from ReleaseDate).
+// Year is empty when not available (e.g. when resolving by IMDb ID only via Find).
+func (c *Client) GetMovieTitleAndYear(imdbID string, tmdbID string) (title string, year string, err error) {
 	if tmdbID != "" {
-		if id, err := strconv.Atoi(tmdbID); err == nil {
-			d, err := c.GetMovieDetails(id)
-			if err != nil {
-				return "", err
+		if id, parseErr := strconv.Atoi(tmdbID); parseErr == nil {
+			d, getErr := c.GetMovieDetails(id)
+			if getErr != nil {
+				return "", "", getErr
 			}
-			return d.Title, nil
+			year = ""
+			if len(d.ReleaseDate) >= 4 {
+				year = d.ReleaseDate[:4]
+			}
+			return d.Title, year, nil
 		}
 	}
 	if imdbID != "" {
-		find, err := c.Find(imdbID, "imdb_id")
-		if err != nil {
-			return "", err
+		find, findErr := c.Find(imdbID, "imdb_id")
+		if findErr != nil {
+			return "", "", findErr
 		}
 		if len(find.MovieResults) > 0 {
-			return find.MovieResults[0].Title, nil
+			return find.MovieResults[0].Title, "", nil
 		}
 	}
-	return "", fmt.Errorf("could not resolve movie title")
+	return "", "", fmt.Errorf("could not resolve movie title")
 }
 
 // GetTVShowName returns the TV show name for text-based search.
@@ -193,11 +207,21 @@ func (c *Client) GetTVShowName(tmdbID string, imdbID string) (string, error) {
 
 // GetMovieDetails fetches movie title for text-based search.
 func (c *Client) GetMovieDetails(tmdbID int) (*MovieDetails, error) {
+	return c.GetMovieDetailsWithLanguage(tmdbID, "")
+}
+
+// GetMovieDetailsWithLanguage fetches movie details in the given language (e.g. "de-DE" for German).
+// Pass "" for default language.
+func (c *Client) GetMovieDetailsWithLanguage(tmdbID int, language string) (*MovieDetails, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("TMDB API key not configured")
 	}
 	endpoint := fmt.Sprintf("https://api.themoviedb.org/3/movie/%d", tmdbID)
-	resp, err := c.doRequest(endpoint, url.Values{})
+	params := url.Values{}
+	if language != "" {
+		params.Set("language", language)
+	}
+	resp, err := c.doRequest(endpoint, params)
 	if err != nil {
 		return nil, fmt.Errorf("TMDB movie details: %w", err)
 	}
@@ -210,6 +234,51 @@ func (c *Client) GetMovieDetails(tmdbID int) (*MovieDetails, error) {
 		return nil, fmt.Errorf("TMDB movie decode: %w", err)
 	}
 	return &d, nil
+}
+
+// GetMovieTitleForSearch returns the movie title (and optional year) for indexer search,
+// optionally in the given language and normalized for filename matching (e.g. ü→ue).
+// language: e.g. "de-DE" for German; empty = default. includeYear: append release year. normalize: apply umlaut→ascii.
+func (c *Client) GetMovieTitleForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (string, error) {
+	var title, year string
+	if tmdbID != "" {
+		if id, err := strconv.Atoi(tmdbID); err == nil {
+			d, err := c.GetMovieDetailsWithLanguage(id, language)
+			if err != nil {
+				return "", err
+			}
+			title = d.Title
+			if includeYear && len(d.ReleaseDate) >= 4 {
+				year = d.ReleaseDate[:4]
+			}
+		}
+	}
+	if title == "" && imdbID != "" {
+		find, err := c.Find(imdbID, "imdb_id")
+		if err != nil {
+			return "", err
+		}
+		if len(find.MovieResults) > 0 {
+			title = find.MovieResults[0].Title
+			if includeYear && find.MovieResults[0].ReleaseDate != "" && len(find.MovieResults[0].ReleaseDate) >= 4 {
+				year = find.MovieResults[0].ReleaseDate[:4]
+			}
+		}
+	}
+	if title == "" {
+		return "", fmt.Errorf("could not resolve movie title")
+	}
+	if language != "" {
+		logger.Trace("TMDB movie title for search", "language", language, "title", title)
+	}
+	out := strings.TrimSpace(title)
+	if year != "" {
+		out = out + " " + year
+	}
+	if normalize {
+		out = release.NormalizeTitleForFilename(out)
+	}
+	return out, nil
 }
 
 // GetTVDetails fetches TV show name for text-based search.
