@@ -297,6 +297,22 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	json.NewEncoder(w).Encode(response)
 }
 
+// GetStreams runs the same search and validation as a Stremio stream request.
+// Used by the dashboard API so the frontend can request streams by type and id (e.g. IMDb or TMDB).
+func (s *Server) GetStreams(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
+	const streamRequestTimeout = 30 * time.Second
+	ctx, cancel := context.WithTimeout(ctx, streamRequestTimeout)
+	defer cancel()
+	streams, err := s.searchAndValidate(ctx, contentType, id, device)
+	if err != nil {
+		return nil, err
+	}
+	if streams == nil {
+		return []Stream{}, nil
+	}
+	return streams, nil
+}
+
 // addAPIKeyToDownloadURL appends the matching indexer's API key to the download URL (by host). Returns original if no match.
 // For Newznab t=get URLs, the API expects parameter "id" (see https://inhies.github.io/Newznab-API/functions/#get);
 // if the URL has "guid" but no "id", we set id=guid so indexers that require "id" work.
@@ -342,20 +358,49 @@ func (s *Server) triageCandidates(device *auth.Device, releases []*release.Relea
 	return s.triageService.Filter(releases)
 }
 
-func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
-	maxStreams := s.config.MaxStreams
-	if maxStreams <= 0 {
-		maxStreams = 6
-	}
+// streamSinkKey is the context key for an optional StreamSink callback.
+var streamSinkKey = struct{}{}
 
-	// 1. Build search request and content IDs
+// StreamSink is called for each stream as it is found during searchAndValidate.
+// Return false to stop receiving more streams (e.g. after reaching a cap).
+type StreamSink func(Stream) bool
+
+// WithStreamSink adds a sink to ctx. When GetStreams is called with this context,
+// each stream is passed to the sink as it is found (e.g. for WebSocket streaming).
+func WithStreamSink(ctx context.Context, sink StreamSink) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, streamSinkKey, sink)
+}
+
+func getStreamSinkFromContext(ctx context.Context) StreamSink {
+	if v := ctx.Value(streamSinkKey); v != nil {
+		if f, ok := v.(StreamSink); ok {
+			return f
+		}
+	}
+	return nil
+}
+
+// SearchParams holds the built request and IDs for a stream search (contentType + id).
+// Built by buildSearchParams for use by searchAndValidate and GetAvailNZBStreams.
+type SearchParams struct {
+	Req          indexer.SearchRequest
+	ContentIDs   *session.AvailReportMeta
+	ImdbForText  string
+	TmdbForText  string
+	AvailIndexers []string
+}
+
+// buildSearchParams builds the search request and content IDs for the given contentType and id.
+// Used by searchAndValidate and GetAvailNZBStreams.
+func (s *Server) buildSearchParams(contentType, id string, device *auth.Device) (*SearchParams, error) {
 	searchLimit := s.config.SearchResultLimit
 	if searchLimit <= 0 {
 		searchLimit = 1000
 	}
-	req := indexer.SearchRequest{
-		Limit: searchLimit,
-	}
+	req := indexer.SearchRequest{Limit: searchLimit}
 
 	searchID := id
 	if contentType == "series" && strings.Contains(id, ":") {
@@ -390,7 +435,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	} else {
 		req.Cat = "5000"
 	}
-	if req.IMDbID != "" && req.TVDBID == "" {
+	if contentType == "series" && req.IMDbID != "" && req.TVDBID == "" {
 		if s.tvdbClient != nil {
 			if tvdbID, err := s.tvdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
 				req.TVDBID = tvdbID
@@ -412,7 +457,6 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			}
 		}
 	}
-	// Per-indexer effective config and per-indexer text query (merge indexer + device override + global)
 	if len(s.config.Indexers) > 0 {
 		req.EffectiveByIndexer = make(map[string]*config.IndexerSearchConfig)
 		for i := range s.config.Indexers {
@@ -442,6 +486,9 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 					norm := eff.SearchTitleNormalize != nil && *eff.SearchTitleNormalize
 					if q, err := s.tmdbClient.GetMovieTitleForSearch(contentIDs.ImdbID, req.TMDBID, lang, includeYear, norm); err == nil {
 						req.PerIndexerQuery[name] = q
+						logger.Debug("Per-indexer movie query", "indexer", name, "language", lang, "query", q)
+					} else {
+						logger.Debug("Per-indexer movie query failed", "indexer", name, "language", lang, "err", err)
 					}
 				}
 			} else if req.Season != "" && req.Episode != "" {
@@ -462,14 +509,108 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			}
 		}
 	}
-	// AvailNZB indexer filter: use underlying hostnames so GetReleases returns matches
-	availIndexers := s.availNZBIndexerHosts
+	return &SearchParams{
+		Req:            req,
+		ContentIDs:     contentIDs,
+		ImdbForText:    imdbForText,
+		TmdbForText:    tmdbForText,
+		AvailIndexers:  s.availNZBIndexerHosts,
+	}, nil
+}
+
+// runAvailNZBPhase runs only the AvailNZB phase: fetch releases, triage, build streams.
+// Returns: streams, availReleases (for warmAvailNZBCache knownURLs), and the raw result (for indexer-phase filtering).
+// Used by searchAndValidate and GetAvailNZBStreams.
+func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, device *auth.Device) ([]Stream, []*release.Release, *availnzb.ReleasesResult) {
+	contentIDs := params.ContentIDs
+	availIndexers := params.AvailIndexers
+	if s.availClient == nil || s.availClient.BaseURL == "" || (contentIDs.ImdbID == "" && contentIDs.TvdbID == "") {
+		return nil, nil, nil
+	}
+	availResult, _ := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers, s.validator.GetProviderHosts())
+	if availResult == nil || len(availResult.Releases) == 0 {
+		return nil, nil, nil
+	}
+	var availReleases []*release.Release
+	for _, rws := range availResult.Releases {
+		if rws == nil || rws.Release == nil || !rws.Available || rws.Release.Link == "" {
+			continue
+		}
+		availReleases = append(availReleases, rws.Release)
+	}
+	if len(availReleases) == 0 {
+		return nil, nil, availResult
+	}
+	candidates := s.triageCandidates(device, availReleases)
+	logger.Debug("AvailNZB phase", "releases", len(availReleases), "after_triage", len(candidates))
+	var streams []Stream
+	seen := make(map[string]bool)
+	for _, cand := range candidates {
+		if cand.Release == nil {
+			continue
+		}
+		rel := cand.Release
+		norm := release.NormalizeTitle(rel.Title)
+		if seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		downloadURL := addAPIKeyToDownloadURL(rel.Link, s.config.Indexers)
+		sessionID := fmt.Sprintf("%x", md5.Sum([]byte(rel.DetailsURL)))
+		_, err := s.sessionManager.CreateDeferredSession(sessionID, downloadURL, rel, s.indexer, contentIDs)
+		if err != nil {
+			logger.Debug("AvailNZB deferred session failed", "title", rel.Title, "err", err)
+			continue
+		}
+		var streamURL string
+		if device != nil {
+			streamURL = fmt.Sprintf("%s/%s/play/%s", s.baseURL, device.Token, sessionID)
+		}
+		sizeGB := float64(rel.Size) / (1024 * 1024 * 1024)
+		displayTitle := rel.Title + "\n[AvailNZB]"
+		stream := buildStreamMetadata(streamURL, displayTitle, cand, sizeGB, rel.Size, rel)
+		streams = append(streams, stream)
+	}
+	sort.Slice(streams, func(i, j int) bool {
+		return streamScore(streams[i]) > streamScore(streams[j])
+	})
+	return streams, availReleases, availResult
+}
+
+// GetAvailNZBStreams returns only streams from AvailNZB (no indexer search or validation).
+// Used by the search UI to show cached-available results immediately.
+func (s *Server) GetAvailNZBStreams(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
+	params, err := s.buildSearchParams(contentType, id, device)
+	if err != nil {
+		return nil, err
+	}
+	streams, _, _ := s.runAvailNZBPhase(ctx, params, device)
+	if streams == nil {
+		return []Stream{}, nil
+	}
+	return streams, nil
+}
+
+func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
+	maxStreams := s.config.MaxStreams
+	if maxStreams <= 0 {
+		maxStreams = 6
+	}
+	params, err := s.buildSearchParams(contentType, id, device)
+	if err != nil {
+		return nil, err
+	}
+	req := &params.Req
+	contentIDs := params.ContentIDs
+	imdbForText := params.ImdbForText
+	tmdbForText := params.TmdbForText
+
 	logger.Debug("searchAndValidate", "imdb", req.IMDbID, "tvdb", req.TVDBID, "season", req.Season, "ep", req.Episode, "maxStreams", maxStreams)
 
 	var streams []Stream
 	seenReleaseTitles := make(map[string]bool)
-
-	// addStream adds a stream if not already present (by normalized release title).
+	var streamSinkDone bool
+	streamSink := getStreamSinkFromContext(ctx)
 	addStream := func(stream Stream) {
 		if stream.Release == nil || stream.Release.Title == "" {
 			return
@@ -480,9 +621,14 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		}
 		seenReleaseTitles[norm] = true
 		streams = append(streams, stream)
+		if streamSink != nil && !streamSinkDone {
+			if !streamSink(stream) {
+				streamSinkDone = true
+			}
+		}
 	}
 
-	// Helper function to check if we have enough streams
+	// Helper: check if we have enough streams
 	// - If per-resolution limiting is disabled (0): only check if we have maxStreams total
 	// - If per-resolution limiting is enabled (>0): check if we have enough variety across resolutions
 	// Note: streams should be sorted by quality before calling this function
@@ -508,76 +654,31 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		return true
 	}
 
-	var availResult *availnzb.ReleasesResult
-	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
-		availResult, _ = s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers, s.validator.GetProviderHosts())
-		if availResult != nil {
-			logger.Debug("AvailNZB releases", "total", len(availResult.Releases))
-		}
+	// 2. AvailNZB first: use shared phase, then merge into streams and optionally warm cache
+	availStreams, availReleases, availResult := s.runAvailNZBPhase(ctx, params, device)
+	for _, st := range availStreams {
+		addStream(st)
 	}
-
-	// 2. AvailNZB first: streamable only (direct, 7z), filter per configuration
-	if availResult != nil && len(availResult.Releases) > 0 {
-		var availReleases []*release.Release
-		for _, rws := range availResult.Releases {
-			if rws == nil || rws.Release == nil || !rws.Available || rws.Release.Link == "" {
-				continue
+	if len(availStreams) > 0 {
+		logger.Debug("AvailNZB phase done", "streams", len(streams))
+		sort.Slice(streams, func(i, j int) bool {
+			return streamScore(streams[i]) > streamScore(streams[j])
+		})
+		if hasEnoughStreams(streams) && len(availReleases) > 0 {
+			knownURLs := make(map[string]bool)
+			for _, rel := range availReleases {
+				if rel != nil && rel.DetailsURL != "" {
+					knownURLs[rel.DetailsURL] = true
+				}
 			}
-			availReleases = append(availReleases, rws.Release)
-		}
-		if len(availReleases) > 0 {
-			availCandidates := s.triageCandidates(device, availReleases)
-			logger.Debug("AvailNZB phase", "releases", len(availReleases), "after_triage", len(availCandidates))
-
-			for _, cand := range availCandidates {
-				if cand.Release == nil {
-					continue
-				}
-				rel := cand.Release
-				downloadURL := addAPIKeyToDownloadURL(rel.Link, s.config.Indexers)
-				sessionID := fmt.Sprintf("%x", md5.Sum([]byte(rel.DetailsURL)))
-				_, err := s.sessionManager.CreateDeferredSession(
-					sessionID,
-					downloadURL,
-					rel,
-					s.indexer,
-					contentIDs,
-				)
-				if err != nil {
-					logger.Debug("AvailNZB deferred session failed", "title", rel.Title, "err", err)
-					continue
-				}
-				var streamURL string
-				if device != nil {
-					streamURL = fmt.Sprintf("%s/%s/play/%s", s.baseURL, device.Token, sessionID)
-				}
-				sizeGB := float64(rel.Size) / (1024 * 1024 * 1024)
-				displayTitle := rel.Title + "\n[AvailNZB]"
-				stream := buildStreamMetadata(streamURL, displayTitle, cand, sizeGB, rel.Size, rel)
-				addStream(stream)
-			}
-			logger.Debug("AvailNZB phase done", "streams", len(streams))
-
-			sort.Slice(streams, func(i, j int) bool {
-				return streamScore(streams[i]) > streamScore(streams[j])
-			})
-
-			if hasEnoughStreams(streams) {
-				knownURLs := make(map[string]bool)
-				for _, rel := range availReleases {
-					if rel != nil && rel.DetailsURL != "" {
-						knownURLs[rel.DetailsURL] = true
-					}
-				}
-				go s.warmAvailNZBCache(context.Background(), req, contentIDs, knownURLs)
-			}
+			go s.warmAvailNZBCache(context.Background(), *req, contentIDs, knownURLs)
 		}
 	}
 
 	// 3. Indexers: search, triage, validate until we have enough streams
 	var indexerCandidatesCount, indexerAttempted int
 	if !hasEnoughStreams(streams) {
-		indexerReleases, err := search.RunIndexerSearches(s.indexer, s.tmdbClient, req, contentType, contentIDs, imdbForText, tmdbForText, s.config)
+		indexerReleases, err := search.RunIndexerSearches(s.indexer, s.tmdbClient, *req, contentType, contentIDs, imdbForText, tmdbForText, s.config)
 		if err != nil {
 			return nil, err
 		}

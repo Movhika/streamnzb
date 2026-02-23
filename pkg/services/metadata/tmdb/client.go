@@ -49,6 +49,27 @@ type Result struct {
 	ReleaseDate   string `json:"release_date"`   // Movie (from Find)
 }
 
+// SearchMultiResponse is the response from GET /search/multi
+type SearchMultiResponse struct {
+	Page         int                 `json:"page"`
+	Results      []SearchMultiResult `json:"results"`
+	TotalPages   int                 `json:"total_pages"`
+	TotalResults int                 `json:"total_results"`
+}
+
+// SearchMultiResult is one item from multi search (movie or TV)
+type SearchMultiResult struct {
+	ID             int    `json:"id"`
+	Title          string `json:"title"`           // Movie
+	Name           string `json:"name"`            // TV
+	MediaType      string `json:"media_type"`     // "movie" or "tv"
+	ReleaseDate    string `json:"release_date"`   // Movie
+	FirstAirDate   string `json:"first_air_date"` // TV
+	OriginalTitle  string `json:"original_title"`
+	OriginalName   string `json:"original_name"`
+	PosterPath     string `json:"poster_path"`     // e.g. "/abc.jpg" for image.tmdb.org/t/p/w92/abc.jpg"
+}
+
 // ExternalIDsResponse represents the response from /{type}/{id}/external_ids
 type ExternalIDsResponse struct {
 	ID          int    `json:"id"`
@@ -59,6 +80,28 @@ type ExternalIDsResponse struct {
 	FacebookID  string `json:"facebook_id"`
 	InstagramID string `json:"instagram_id"`
 	TwitterID   string `json:"twitter_id"`
+}
+
+// MovieTranslationsResponse is the response from GET /movie/{id}/translations
+// https://developer.themoviedb.org/reference/movie-translations
+type MovieTranslationsResponse struct {
+	ID           int                    `json:"id"`
+	Translations []MovieTranslationEntry `json:"translations"`
+}
+
+// MovieTranslationEntry is one translation (language) for a movie
+type MovieTranslationEntry struct {
+	ISO639_1    string               `json:"iso_639_1"`
+	ISO3166_1   string               `json:"iso_3166_1"`
+	Name        string               `json:"name"`
+	EnglishName string               `json:"english_name"`
+	Data        MovieTranslationData `json:"data"`
+}
+
+// MovieTranslationData holds the translated title and overview
+type MovieTranslationData struct {
+	Title    string `json:"title"`
+	Overview string `json:"overview"`
 }
 
 func (c *Client) doRequest(endpoint string, params url.Values) (*http.Response, error) {
@@ -101,6 +144,46 @@ func (c *Client) Find(externalID, source string) (*FindResponse, error) {
 		return nil, fmt.Errorf("failed to decode TMDB response: %w", err)
 	}
 
+	return &result, nil
+}
+
+// SearchMulti searches for movies and TV shows by query string.
+// Uses GET /search/multi. Limit results to the first page with page size up to 20.
+func (c *Client) SearchMulti(query string) (*SearchMultiResponse, error) {
+	if c.apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+	if query == "" {
+		return &SearchMultiResponse{Results: []SearchMultiResult{}}, nil
+	}
+	endpoint := "https://api.themoviedb.org/3/search/multi"
+	params := url.Values{}
+	params.Set("query", query)
+	params.Set("page", "1")
+	resp, err := c.doRequest(endpoint, params)
+	if err != nil {
+		return nil, fmt.Errorf("TMDB search request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB returned status: %d", resp.StatusCode)
+	}
+	var result SearchMultiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode TMDB search response: %w", err)
+	}
+	// Limit to 20 results
+	if len(result.Results) > 20 {
+		result.Results = result.Results[:20]
+	}
+	// Filter to only movie and tv
+	filtered := result.Results[:0]
+	for _, r := range result.Results {
+		if r.MediaType == "movie" || r.MediaType == "tv" {
+			filtered = append(filtered, r)
+		}
+	}
+	result.Results = filtered
 	return &result, nil
 }
 
@@ -236,40 +319,124 @@ func (c *Client) GetMovieDetailsWithLanguage(tmdbID int, language string) (*Movi
 	return &d, nil
 }
 
-// GetMovieTitleForSearch returns the movie title (and optional year) for indexer search,
-// optionally in the given language and normalized for filename matching (e.g. ü→ue).
-// language: e.g. "de-DE" for German; empty = default. includeYear: append release year. normalize: apply umlaut→ascii.
-func (c *Client) GetMovieTitleForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (string, error) {
-	var title, year string
-	if tmdbID != "" {
-		if id, err := strconv.Atoi(tmdbID); err == nil {
-			d, err := c.GetMovieDetailsWithLanguage(id, language)
-			if err != nil {
-				return "", err
+// GetMovieTranslations fetches all translations for a movie (GET /movie/{id}/translations).
+// https://developer.themoviedb.org/reference/movie-translations
+func (c *Client) GetMovieTranslations(movieID int) (*MovieTranslationsResponse, error) {
+	if c.apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+	endpoint := fmt.Sprintf("https://api.themoviedb.org/3/movie/%d/translations", movieID)
+	resp, err := c.doRequest(endpoint, url.Values{})
+	if err != nil {
+		return nil, fmt.Errorf("TMDB movie translations: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB returned status: %d", resp.StatusCode)
+	}
+	var out MovieTranslationsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("TMDB translations decode: %w", err)
+	}
+	logger.Debug("TMDB movie translations fetched", "movie_id", movieID, "count", len(out.Translations))
+	return &out, nil
+}
+
+// movieTitleFromTranslations returns the translated title for the given language.
+// language is e.g. "de-DE" (iso_639_1 + iso_3166_1); we match exact or language-only (e.g. "de").
+func movieTitleFromTranslations(translations *MovieTranslationsResponse, language string) string {
+	if translations == nil || language == "" {
+		return ""
+	}
+	langCode, countryCode := splitLanguageTag(language)
+	for i := range translations.Translations {
+		t := &translations.Translations[i]
+		if t.Data.Title == "" {
+			continue
+		}
+		// Prefer exact match (e.g. de-DE)
+		if countryCode != "" {
+			if strings.EqualFold(t.ISO639_1, langCode) && strings.EqualFold(t.ISO3166_1, countryCode) {
+				logger.Debug("TMDB translation match", "requested", language, "iso_639_1", t.ISO639_1, "iso_3166_1", t.ISO3166_1, "title", t.Data.Title)
+				return t.Data.Title
 			}
-			title = d.Title
-			if includeYear && len(d.ReleaseDate) >= 4 {
-				year = d.ReleaseDate[:4]
+		} else {
+			if strings.EqualFold(t.ISO639_1, langCode) {
+				logger.Debug("TMDB translation match (language only)", "requested", language, "iso_639_1", t.ISO639_1, "title", t.Data.Title)
+				return t.Data.Title
 			}
 		}
 	}
-	if title == "" && imdbID != "" {
+	// Fallback: match language only
+	for i := range translations.Translations {
+		t := &translations.Translations[i]
+		if t.Data.Title != "" && strings.EqualFold(t.ISO639_1, langCode) {
+			logger.Debug("TMDB translation match (fallback)", "requested", language, "iso_639_1", t.ISO639_1, "iso_3166_1", t.ISO3166_1, "title", t.Data.Title)
+			return t.Data.Title
+		}
+	}
+	logger.Debug("TMDB no translation for language", "requested", language, "lang_code", langCode, "country_code", countryCode, "available", len(translations.Translations))
+	return ""
+}
+
+func splitLanguageTag(tag string) (lang, country string) {
+	tag = strings.TrimSpace(tag)
+	if i := strings.Index(tag, "-"); i >= 0 {
+		return tag[:i], tag[i+1:]
+	}
+	return tag, ""
+}
+
+// GetMovieTitleForSearch returns the movie title (and optional year) for indexer search,
+// optionally in the given language and normalized for filename matching (e.g. ü→ue).
+// language: e.g. "de-DE" for German; empty = default. When set, we use the Translations API for the title.
+// includeYear: append release year. normalize: apply umlaut→ascii.
+func (c *Client) GetMovieTitleForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (string, error) {
+	var movieID int
+	var title, year string
+
+	// Resolve movie ID and default title/year
+	if tmdbID != "" {
+		if id, err := strconv.Atoi(tmdbID); err == nil {
+			movieID = id
+			d, err := c.GetMovieDetails(id)
+			if err == nil {
+				title = d.Title
+				if includeYear && len(d.ReleaseDate) >= 4 {
+					year = d.ReleaseDate[:4]
+				}
+				logger.Debug("TMDB movie title from details", "tmdb_id", movieID, "title", title, "language", language)
+			}
+		}
+	}
+	if movieID == 0 && imdbID != "" {
 		find, err := c.Find(imdbID, "imdb_id")
 		if err != nil {
 			return "", err
 		}
 		if len(find.MovieResults) > 0 {
+			movieID = find.MovieResults[0].ID
 			title = find.MovieResults[0].Title
 			if includeYear && find.MovieResults[0].ReleaseDate != "" && len(find.MovieResults[0].ReleaseDate) >= 4 {
 				year = find.MovieResults[0].ReleaseDate[:4]
 			}
+			logger.Debug("TMDB movie resolved from IMDb Find", "imdb_id", imdbID, "tmdb_id", movieID, "default_title", title)
 		}
 	}
+
+	// When a language is requested, use the Translations API for the title
+	if language != "" && movieID != 0 {
+		tr, err := c.GetMovieTranslations(movieID)
+		if err != nil {
+			logger.Debug("TMDB translations not used, falling back to default title", "movie_id", movieID, "language", language, "err", err)
+		} else if t := movieTitleFromTranslations(tr, language); t != "" {
+			title = t
+			logger.Debug("TMDB movie title for search (translated)", "language", language, "title", title)
+		}
+	}
+
 	if title == "" {
 		return "", fmt.Errorf("could not resolve movie title")
-	}
-	if language != "" {
-		logger.Trace("TMDB movie title for search", "language", language, "title", title)
 	}
 	out := strings.TrimSpace(title)
 	if year != "" {

@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Settings, Server, Globe, Filter, ArrowUpDown,
   MonitorSmartphone, LogOut, Tv, Clipboard, Check,
-  Sun, Moon, Monitor, Zap, FileText, Coffee
+  Sun, Moon, Monitor, Zap, FileText, Coffee, Search
 } from "lucide-react"
 import {
   Sidebar,
@@ -25,6 +25,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
 const navMain = [
   { id: "dashboard", title: "Dashboard", icon: LayoutDashboard },
+//  { id: "search", title: "Search", icon: Search },
   { id: "logs", title: "Logs", icon: FileText },
 ]
 

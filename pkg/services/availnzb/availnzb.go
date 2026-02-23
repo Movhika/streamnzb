@@ -183,13 +183,15 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 	return nil
 }
 
-// backboneEntryJSON is one item from GET /api/v1/backbones (provider hostname -> backbone name).
-type backboneEntryJSON struct {
-	ProviderURL string `json:"provider_url"`
-	Backbone    string `json:"backbone"`
+// backbonesResponse matches GET /api/v1/backbones from the AvailNZB API (check.snzb.stream/openapi.json).
+// BackbonesResponse: backbones = list of backbone names; provider_hostnames = map of backbone -> []provider hostname.
+type backbonesResponse struct {
+	Backbones          []string            `json:"backbones"`
+	ProviderHostnames  map[string][]string `json:"provider_hostnames"`
 }
 
 // RefreshBackbones fetches GET /api/v1/backbones and updates the cached hostname->backbone map.
+// API returns {"backbones": ["name", ...], "provider_hostnames": {"backbone": ["host1", ...], ...}}.
 // Call on startup and when provider config changes (e.g. on Reload).
 func (c *Client) RefreshBackbones() error {
 	if c.BaseURL == "" {
@@ -206,15 +208,22 @@ func (c *Client) RefreshBackbones() error {
 		logger.Error("AvailNZB RefreshBackbones unexpected status", "status", resp.StatusCode)
 		return fmt.Errorf("availnzb backbones: status %d", resp.StatusCode)
 	}
-	var list []backboneEntryJSON
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+	var wrapped backbonesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&wrapped); err != nil {
 		logger.Error("AvailNZB RefreshBackbones decode failed", "err", err)
 		return err
 	}
 	m := make(map[string]string)
-	for _, e := range list {
-		if e.ProviderURL != "" && e.Backbone != "" {
-			m[strings.ToLower(strings.TrimSpace(e.ProviderURL))] = e.Backbone
+	for backbone, hostnames := range wrapped.ProviderHostnames {
+		backbone = strings.TrimSpace(backbone)
+		if backbone == "" {
+			continue
+		}
+		for _, h := range hostnames {
+			h = strings.ToLower(strings.TrimSpace(h))
+			if h != "" {
+				m[h] = backbone
+			}
 		}
 	}
 	c.backbonesMu.Lock()

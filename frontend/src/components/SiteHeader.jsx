@@ -3,6 +3,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 
 const pageTitles = {
   dashboard: "Dashboard",
+  search: "Search",
   logs: "Logs",
   general: "General",
   indexers: "Indexers",

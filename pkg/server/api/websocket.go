@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"streamnzb/pkg/services/metadata/tmdb"
 	"streamnzb/pkg/services/metadata/tvdb"
 	"streamnzb/pkg/usenet/nntp"
+	"streamnzb/pkg/server/stremio"
 	"streamnzb/pkg/usenet/validation"
 
 	"github.com/gorilla/websocket"
@@ -174,6 +176,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				s.handleFetchCapsWS(client)
 			case "restart":
 				s.handleRestartWS(conn)
+			case "stream_search":
+				s.handleStreamSearchWS(client, msg.Payload)
 			}
 		}
 	}()
@@ -763,6 +767,51 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 
 	wg.Wait()
 	return errors
+}
+
+func (s *Server) handleStreamSearchWS(client *Client, payload json.RawMessage) {
+	var req struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil || req.Type == "" || req.ID == "" {
+		return
+	}
+	contentType := req.Type
+	if contentType != "movie" && contentType != "series" {
+		return
+	}
+	maxStreams := s.config.MaxStreams
+	if maxStreams <= 0 {
+		maxStreams = 6
+	}
+	cap := maxStreams * 2
+	if cap < 6 {
+		cap = 6
+	}
+	var sent int
+	sink := func(stream stremio.Stream) bool {
+		if sent >= cap {
+			return false
+		}
+		payload, err := json.Marshal(stream)
+		if err != nil {
+			return true
+		}
+		trySendWS(client, WSMessage{Type: "stream_result", Payload: payload})
+		sent++
+		return sent < cap
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ctx = stremio.WithStreamSink(ctx, sink)
+	go func() {
+		defer func() {
+			donePayload, _ := json.Marshal(map[string]int{"count": sent})
+			trySendWS(client, WSMessage{Type: "stream_search_done", Payload: donePayload})
+		}()
+		_, _ = s.strmServer.GetStreams(ctx, contentType, req.ID, client.device)
+	}()
 }
 
 func (s *Server) handleCloseSessionWS(payload json.RawMessage) {

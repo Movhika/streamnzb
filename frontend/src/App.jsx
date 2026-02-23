@@ -6,6 +6,7 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/AppSidebar"
 import { SiteHeader } from "@/components/SiteHeader"
 import { DashboardPage } from "@/components/DashboardPage"
+import { SearchPage } from "@/components/SearchPage"
 import { LogsPage } from "@/components/LogsPage"
 import { AlertCircle, Loader2 } from "lucide-react"
 
@@ -366,6 +367,14 @@ function App() {
               chartData={chartData}
               sendCommand={sendCommand}
               config={config}
+            />
+          )}
+          {activePage === 'search' && (
+            <SearchPage
+              authToken={currentUser && currentUser !== 'legacy' ? authToken : null}
+              config={config}
+              sendCommand={sendCommand}
+              ws={ws}
             />
           )}
           {activePage === 'logs' && (

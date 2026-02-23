@@ -333,7 +333,12 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	isTVSearch := strings.HasPrefix(req.Cat, "5")
 
 	if isMovieSearch && (caps == nil || caps.Searching.MovieSearch) {
-		params.Set("t", "search")
+		// ID-only movie search uses t=movie (imdbid/tmdbid); text search uses t=search
+		if req.Query == "" && (req.IMDbID != "" || req.TMDBID != "") {
+			params.Set("t", "movie")
+		} else {
+			params.Set("t", "search")
+		}
 	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
 		params.Set("t", "tvsearch")
 	} else {

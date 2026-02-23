@@ -31,6 +31,7 @@ type SearchConfig interface {
 func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string, cfg SearchConfig) ([]*release.Release, error) {
 	idReq := req
 	idReq.Query = ""
+	idReq.PerIndexerQuery = nil // ID-only search: do not pass text query to indexers
 
 	var textQuery string
 	usePerIndexerQuery := len(req.PerIndexerQuery) > 0

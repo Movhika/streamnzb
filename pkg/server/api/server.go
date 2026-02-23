@@ -278,6 +278,9 @@ func (s *Server) Handler() http.Handler {
 	// Protected routes (require auth)
 	authMiddleware := auth.AuthMiddleware(s.deviceManager, func() string { return s.config.GetAdminUsername() }, func() string { return s.config.AdminToken })
 	mux.Handle("/api/ws", authMiddleware(http.HandlerFunc(s.handleWebSocket)))
+	mux.Handle("/api/tmdb/search", authMiddleware(http.HandlerFunc(s.handleTMDBSearch)))
+	mux.Handle("/api/streams", authMiddleware(http.HandlerFunc(s.handleStreams)))
+	mux.Handle("/api/streams/avail", authMiddleware(http.HandlerFunc(s.handleStreamsAvail)))
 
 	return mux
 }
