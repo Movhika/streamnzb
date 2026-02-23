@@ -71,6 +71,35 @@ func movieTitleMatches(expectTitle, gotTitle string) bool {
 	return len(rest) == 4 // single 4-digit year
 }
 
+// seriesShowMatches returns true if the release's parsed show title matches the expected show strictly.
+// expectShow is normalized; we require the release title to equal expectShow or to start with expectShow
+// followed only by space, digits, or end — so "secret lives" matches "secret lives" but not
+// "the secret lives of animals" or "the secret lives of mormon wives".
+func seriesShowMatches(expectShow, gotShow string) bool {
+	got := release.NormalizeTitle(gotShow)
+	if got == "" {
+		return false
+	}
+	if expectShow == "" {
+		return true
+	}
+	if got == expectShow {
+		return true
+	}
+	if !strings.HasPrefix(got, expectShow) {
+		return false
+	}
+	rest := got[len(expectShow):]
+	rest = strings.TrimLeft(rest, " ")
+	// Allow only digits (e.g. year) or end after the show name
+	for _, r := range rest {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // FilterTextResultsByContent keeps only releases where ptt-parsed title matches the content.
 // For movies, matching is strict: title must be phrase/prefix match and year must match when present.
 func FilterTextResultsByContent(releases []*release.Release, contentType, textQuery, season, episode string) []*release.Release {
@@ -107,7 +136,7 @@ func FilterTextResultsByContent(releases []*release.Release, contentType, textQu
 			if gotShow == "" {
 				continue
 			}
-			if expectShow != "" && !strings.Contains(gotShow, expectShow) && !strings.Contains(expectShow, gotShow) {
+			if expectShow != "" && !seriesShowMatches(expectShow, parsed.Title) {
 				continue
 			}
 			if expectSeason > 0 && parsed.Season != expectSeason {
