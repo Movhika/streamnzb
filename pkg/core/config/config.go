@@ -158,7 +158,8 @@ type IndexerConfig struct {
 	// Per-indexer search overrides (Newznab only)
 	MovieCategories  string `json:"movie_categories,omitempty"`   // Custom movie categories, e.g. "2000,2100"
 	TVCategories     string `json:"tv_categories,omitempty"`      // Custom TV categories, e.g. "5000,5100"
-	ExtraSearchTerms string `json:"extra_search_terms,omitempty"` // Appended to every search query, e.g. "(P73|LRO)"
+	ExtraSearchTerms       string `json:"extra_search_terms,omitempty"`          // Appended to every search query, e.g. "(P73|LRO)"
+	UseSeasonEpisodeParams *bool  `json:"use_season_episode_params,omitempty"`  // If false, do not send season/ep to API. nil/true = send (default).
 }
 
 // Config holds application configuration

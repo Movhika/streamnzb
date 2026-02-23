@@ -2,6 +2,7 @@ package search
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 
 	"streamnzb/pkg/core/logger"
@@ -30,7 +31,14 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 			}
 		} else if req.Season != "" && req.Episode != "" {
 			if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil {
-				textQuery = fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
+				// Indexers expect zero-padded S01E01 format (not S1E1)
+				seasonNum, _ := strconv.Atoi(req.Season)
+				epNum, _ := strconv.Atoi(req.Episode)
+				if seasonNum > 0 || epNum > 0 {
+					textQuery = fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
+				} else {
+					textQuery = fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
+				}
 			}
 		}
 	}

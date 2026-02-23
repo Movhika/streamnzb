@@ -165,6 +165,24 @@ function SearchSettings({ control, index, watch, indexerCaps }) {
               </FormItem>
             )}
           />
+
+          <FormField
+            control={control}
+            name={`indexers.${index}.use_season_episode_params`}
+            render={({ field }) => (
+              <FormItem className="flex flex-row items-center space-x-2 space-y-0">
+                <FormControl>
+                  <Checkbox
+                    checked={field.value !== false}
+                    onCheckedChange={(v) => field.onChange(v === true ? undefined : false)}
+                  />
+                </FormControl>
+                <FormLabel className="text-[10px]">Use season/episode in API</FormLabel>
+                <FormDescription className="text-[10px]">Send season= and ep= to this indexer. Turn off if the indexer does not use them.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
       )}
     </div>
@@ -354,7 +372,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
             <Button
                 type="button"
                 variant="outline"
-                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '', movie_categories: '', tv_categories: '', extra_search_terms: '' })}
+                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '', movie_categories: '', tv_categories: '', extra_search_terms: '', use_season_episode_params: undefined })}
                 className={cn(
                   "flex flex-col items-center justify-center p-4 h-auto min-h-[180px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
                 )}

@@ -331,14 +331,15 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	isTVSearch := strings.HasPrefix(req.Cat, "5")
 
 	if isMovieSearch && (caps == nil || caps.Searching.MovieSearch) {
-		params.Set("t", "movie")
+		params.Set("t", "search")
 	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
 		params.Set("t", "tvsearch")
 	} else {
 		params.Set("t", "search")
 	}
 
-	// Build query: combine request query with per-indexer extra search terms
+	// Build query: combine request query with per-indexer extra search terms.
+	// For ID-only movie search (no text query, only tmdbid/imdbid), do not set q so API returns correct results.
 	query := req.Query
 	if c.cfg.ExtraSearchTerms != "" {
 		if query != "" {
@@ -347,7 +348,8 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			query = c.cfg.ExtraSearchTerms
 		}
 	}
-	if query != "" {
+	idOnlyMovie := isMovieSearch && req.Query == "" && (req.TMDBID != "" || req.IMDbID != "")
+	if query != "" && !idOnlyMovie {
 		params.Set("q", query)
 	}
 
@@ -373,11 +375,14 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		params.Set("cat", cat)
 	}
 
-	if req.Season != "" {
-		params.Set("season", req.Season)
-	}
-	if req.Episode != "" {
-		params.Set("ep", req.Episode)
+	// Only send season/ep when indexer config allows (some indexers don't use them)
+	if (c.cfg.UseSeasonEpisodeParams == nil || *c.cfg.UseSeasonEpisodeParams) {
+		if req.Season != "" {
+			params.Set("season", req.Season)
+		}
+		if req.Episode != "" {
+			params.Set("ep", req.Episode)
+		}
 	}
 
 	apiURL := fmt.Sprintf("%s%s?%s", c.baseURL, c.apiPath, params.Encode())
