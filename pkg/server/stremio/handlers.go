@@ -474,7 +474,7 @@ func (s *Server) buildSearchParams(contentType, id string, device *auth.Device) 
 			}
 			req.EffectiveByIndexer[ic.Name] = config.MergeIndexerSearch(ic, override, s.config)
 		}
-		req.PerIndexerQuery = make(map[string]string)
+		req.PerIndexerQuery = make(map[string][]string)
 		if s.tmdbClient != nil {
 			if contentType == "movie" {
 				for name, eff := range req.EffectiveByIndexer {
@@ -484,12 +484,19 @@ func (s *Server) buildSearchParams(contentType, id string, device *auth.Device) 
 						lang = *eff.SearchTitleLanguage
 					}
 					norm := eff.SearchTitleNormalize != nil && *eff.SearchTitleNormalize
-					if q, err := s.tmdbClient.GetMovieTitleForSearch(contentIDs.ImdbID, req.TMDBID, lang, includeYear, norm); err == nil {
-						req.PerIndexerQuery[name] = q
-						logger.Debug("Per-indexer movie query", "indexer", name, "language", lang, "query", q)
-					} else {
+					primary, orig, err := s.tmdbClient.GetMovieTitlesForSearch(contentIDs.ImdbID, req.TMDBID, lang, includeYear, norm)
+					if err != nil {
 						logger.Debug("Per-indexer movie query failed", "indexer", name, "language", lang, "err", err)
+						continue
 					}
+					queries := []string{primary}
+					if orig != "" {
+						queries = append(queries, orig)
+						logger.Debug("Per-indexer movie query", "indexer", name, "language", lang, "primary", primary, "original", orig)
+					} else {
+						logger.Debug("Per-indexer movie query", "indexer", name, "language", lang, "query", primary)
+					}
+					req.PerIndexerQuery[name] = queries
 				}
 			} else if req.Season != "" && req.Episode != "" {
 				showName, err := s.tmdbClient.GetTVShowName(tmdbForText, imdbForText)
@@ -503,7 +510,7 @@ func (s *Server) buildSearchParams(contentType, id string, device *auth.Device) 
 						q = fmt.Sprintf("%s S%sE%s", showName, req.Season, req.Episode)
 					}
 					for name := range req.EffectiveByIndexer {
-						req.PerIndexerQuery[name] = q
+						req.PerIndexerQuery[name] = []string{q}
 					}
 				}
 			}

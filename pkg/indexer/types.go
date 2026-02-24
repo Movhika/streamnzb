@@ -52,7 +52,7 @@ type SearchRequest struct {
 
 	// Per-indexer effective config (handler sets; aggregator copies into OptionalOverrides per indexer)
 	EffectiveByIndexer map[string]*config.IndexerSearchConfig `json:"-"`
-	PerIndexerQuery    map[string]string                      `json:"-"` // indexer name -> text query for that indexer
+	PerIndexerQuery    map[string][]string                    `json:"-"` // indexer name -> text queries (e.g. primary + original title for non-en movies)
 
 	// Set by aggregator for each indexer before calling Search (merged effective config for this indexer)
 	OptionalOverrides *config.IndexerSearchConfig `json:"-"`

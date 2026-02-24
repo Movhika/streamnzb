@@ -39,14 +39,15 @@ type FindResponse struct {
 
 // Result represents a search result item
 type Result struct {
-	ID            int    `json:"id"`
-	Name          string `json:"name"`           // TV
-	Title         string `json:"title"`          // Movie
-	OriginalName  string `json:"original_name"`  // TV
-	OriginalTitle string `json:"original_title"` // Movie
-	MediaType     string `json:"media_type"`
-	Overview      string `json:"overview"`
-	ReleaseDate   string `json:"release_date"`   // Movie (from Find)
+	ID               int    `json:"id"`
+	Name             string `json:"name"`               // TV
+	Title            string `json:"title"`              // Movie
+	OriginalName     string `json:"original_name"`      // TV
+	OriginalTitle    string `json:"original_title"`     // Movie
+	OriginalLanguage string `json:"original_language"` // Movie (ISO 639-1)
+	MediaType        string `json:"media_type"`
+	Overview         string `json:"overview"`
+	ReleaseDate      string `json:"release_date"`       // Movie (from Find)
 }
 
 // SearchMultiResponse is the response from GET /search/multi
@@ -217,10 +218,11 @@ func (c *Client) GetExternalIDs(tmdbID int, mediaType string) (*ExternalIDsRespo
 
 // MovieDetails is the response from GET /movie/{id}
 type MovieDetails struct {
-	ID            int    `json:"id"`
-	Title         string `json:"title"`
-	ReleaseDate   string `json:"release_date"`
-	OriginalTitle string `json:"original_title"`
+	ID               int    `json:"id"`
+	Title            string `json:"title"`
+	ReleaseDate      string `json:"release_date"`
+	OriginalTitle    string `json:"original_title"`
+	OriginalLanguage string `json:"original_language"` // ISO 639-1, e.g. "en", "ja"
 }
 
 // TVDetails is the response from GET /tv/{id}
@@ -446,6 +448,99 @@ func (c *Client) GetMovieTitleForSearch(imdbID, tmdbID, language string, include
 		out = release.NormalizeTitleForFilename(out)
 	}
 	return out, nil
+}
+
+// GetMovieTitlesForSearch returns primary and optional original-language title for indexer search.
+// When the movie's original_language is not "en", original is the formatted original title (with year/normalize)
+// so callers can run a second text query and merge results. Uses one fetch (details or find).
+func (c *Client) GetMovieTitlesForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (primary, original string, err error) {
+	var movieID int
+	var title, year string
+	var origTitle, origYear string
+	var origLang string
+
+	if tmdbID != "" {
+		if id, parseErr := strconv.Atoi(tmdbID); parseErr == nil {
+			d, getErr := c.GetMovieDetails(id)
+			if getErr != nil {
+				return "", "", getErr
+			}
+			movieID = d.ID
+			title = d.Title
+			if includeYear && len(d.ReleaseDate) >= 4 {
+				year = d.ReleaseDate[:4]
+			}
+			origTitle = strings.TrimSpace(d.OriginalTitle)
+			origLang = d.OriginalLanguage
+			if includeYear && len(d.ReleaseDate) >= 4 {
+				origYear = d.ReleaseDate[:4]
+			}
+			logger.Debug("TMDB movie title from details", "tmdb_id", movieID, "title", title, "language", language)
+		}
+	}
+	if movieID == 0 && imdbID != "" {
+		find, findErr := c.Find(imdbID, "imdb_id")
+		if findErr != nil {
+			return "", "", findErr
+		}
+		if len(find.MovieResults) == 0 {
+			return "", "", fmt.Errorf("could not resolve movie title")
+		}
+		r := find.MovieResults[0]
+		movieID = r.ID
+		title = r.Title
+		if includeYear && r.ReleaseDate != "" && len(r.ReleaseDate) >= 4 {
+			year = r.ReleaseDate[:4]
+		}
+		origTitle = strings.TrimSpace(r.OriginalTitle)
+		origLang = r.OriginalLanguage
+		if includeYear && r.ReleaseDate != "" && len(r.ReleaseDate) >= 4 {
+			origYear = r.ReleaseDate[:4]
+		}
+		logger.Debug("TMDB movie resolved from IMDb Find", "imdb_id", imdbID, "tmdb_id", movieID, "default_title", title)
+	}
+
+	if language != "" && movieID != 0 {
+		tr, trErr := c.GetMovieTranslations(movieID)
+		if trErr != nil {
+			logger.Debug("TMDB translations not used, falling back to default title", "movie_id", movieID, "language", language, "err", trErr)
+		} else if t := movieTitleFromTranslations(tr, language); t != "" {
+			title = t
+			logger.Debug("TMDB movie title for search (translated)", "language", language, "title", title)
+		}
+	}
+
+	if title == "" {
+		return "", "", fmt.Errorf("could not resolve movie title")
+	}
+	primary = strings.TrimSpace(title)
+	if year != "" {
+		primary = primary + " " + year
+	}
+	if normalize {
+		primary = release.NormalizeTitleForFilename(primary)
+	}
+	primary = strings.TrimSpace(primary)
+
+	if origTitle == "" || origLang == "" || strings.ToLower(origLang) == "en" {
+		return primary, "", nil
+	}
+	if release.NormalizeTitle(origTitle) == release.NormalizeTitle(title) {
+		return primary, "", nil
+	}
+	out := origTitle
+	if origYear != "" {
+		out = out + " " + origYear
+	}
+	if normalize {
+		out = release.NormalizeTitleForFilename(out)
+	}
+	out = strings.TrimSpace(out)
+	if out == primary {
+		return primary, "", nil
+	}
+	logger.Debug("TMDB movie original title for search", "original_language", origLang, "query", out)
+	return primary, out, nil
 }
 
 // GetTVDetails fetches TV show name for text-based search.

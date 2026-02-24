@@ -93,10 +93,16 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 			defer wg.Done()
 			if resp, err := idx.Search(textReq); err == nil {
 				indexer.NormalizeSearchResponse(resp)
-				// Filter by content; per-indexer queries can differ (e.g. movie with/without year), so filter by each and dedupe
+				// Collect unique query strings (per-indexer can have multiple, e.g. primary + original title)
+				seenQ := make(map[string]bool)
 				var filtered [][]*release.Release
-				for _, q := range req.PerIndexerQuery {
-					filtered = append(filtered, FilterTextResultsByContent(resp.Releases, contentType, q, req.Season, req.Episode))
+				for _, queries := range req.PerIndexerQuery {
+					for _, q := range queries {
+						if q != "" && !seenQ[q] {
+							seenQ[q] = true
+							filtered = append(filtered, FilterTextResultsByContent(resp.Releases, contentType, q, req.Season, req.Episode))
+						}
+					}
 				}
 				if len(filtered) > 0 {
 					for _, list := range filtered {

@@ -133,24 +133,55 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 
 	for _, idx := range a.Indexers {
 		wg.Add(1)
+		queries := req.PerIndexerQuery[idx.Name()]
+		if req.PerIndexerQuery != nil && len(queries) == 0 {
+			wg.Done()
+			resultsChan <- []Item{}
+			continue
+		}
+		if req.PerIndexerQuery != nil && len(queries) > 0 {
+			// Run each query for this indexer and merge items
+			go func(indexer Indexer) {
+				defer wg.Done()
+				var merged []Item
+				for _, q := range queries {
+					if q == "" {
+						continue
+					}
+					reqCopy := req
+					reqCopy.EffectiveByIndexer = nil
+					reqCopy.PerIndexerQuery = nil
+					if req.EffectiveByIndexer != nil {
+						reqCopy.OptionalOverrides = req.EffectiveByIndexer[indexer.Name()]
+					}
+					reqCopy.Query = q
+					resp, err := indexer.Search(reqCopy)
+					if err != nil {
+						logger.Warn("Indexer search failed", "indexer", indexer.Name(), "query", q, "err", err)
+						continue
+					}
+					if resp != nil && len(resp.Channel.Items) > 0 {
+						merged = append(merged, resp.Channel.Items...)
+					}
+				}
+				resultsChan <- merged
+			}(idx)
+			continue
+		}
 		reqCopy := req
 		reqCopy.EffectiveByIndexer = nil
 		reqCopy.PerIndexerQuery = nil
 		if req.EffectiveByIndexer != nil {
 			reqCopy.OptionalOverrides = req.EffectiveByIndexer[idx.Name()]
 		}
-		if req.PerIndexerQuery != nil {
-			if q, ok := req.PerIndexerQuery[idx.Name()]; ok && q != "" {
-				reqCopy.Query = q
-			}
+		if req.Query != "" {
+			reqCopy.Query = req.Query
 		}
 		go func(indexer Indexer, r SearchRequest) {
 			defer wg.Done()
 
 			resp, err := indexer.Search(r)
 			if err != nil {
-				// Log error but don't fail entire search?
-				// For now we just return empty result for this indexer
 				logger.Warn("Indexer search failed", "indexer", indexer.Name(), "err", err)
 				resultsChan <- []Item{}
 				return
@@ -158,6 +189,8 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 
 			if resp != nil {
 				resultsChan <- resp.Channel.Items
+			} else {
+				resultsChan <- []Item{}
 			}
 		}(idx, reqCopy)
 	}

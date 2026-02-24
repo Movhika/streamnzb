@@ -139,12 +139,13 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 		ProviderURL:     providerURL,
 		Status:          status,
 	}
-	if meta.ImdbID != "" {
-		body.ImdbID = meta.ImdbID
-	} else if meta.TvdbID != "" {
+	// For TV, prefer TvdbID + season/episode (AvailNZB expects these for series lookup).
+	if meta.TvdbID != "" && (meta.Season > 0 || meta.Episode > 0) {
 		body.TvdbID = meta.TvdbID
 		body.Season = meta.Season
 		body.Episode = meta.Episode
+	} else if meta.ImdbID != "" {
+		body.ImdbID = meta.ImdbID
 	}
 	if body.ImdbID == "" && body.TvdbID == "" {
 		logger.Debug("AvailNZB report skipped", "reason", "no imdb_id or tvdb_id in meta", "url", releaseURL)
@@ -304,11 +305,12 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 		return nil, nil
 	}
 
+	// For TV, prefer tvdb endpoint (same as reporting) when we have tvdb_id and season/episode.
 	var path string
-	if imdbID != "" {
-		path = apiPath + "/status/imdb/" + url.PathEscape(imdbID)
-	} else if tvdbID != "" {
+	if tvdbID != "" && (season > 0 || episode > 0) {
 		path = fmt.Sprintf("%s/status/tvdb/%s/%d/%d", apiPath, url.PathEscape(tvdbID), season, episode)
+	} else if imdbID != "" {
+		path = apiPath + "/status/imdb/" + url.PathEscape(imdbID)
 	} else {
 		return nil, fmt.Errorf("availnzb releases: need imdb_id or tvdb_id+season+episode")
 	}
