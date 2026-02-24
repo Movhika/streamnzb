@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
+import { Switch } from "@/components/ui/switch"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Loader2, Info, AlertTriangle } from "lucide-react"
@@ -46,6 +47,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       validation_sample_size: 5,
       max_streams: 5,
       max_streams_per_resolution: 0,
+      enable_stream_failover: true,
       search_result_limit: 1000,
       include_year_in_search: true,
       search_title_language: '',
@@ -171,6 +173,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         validation_sample_size: Number(initialConfig.validation_sample_size),
         max_concurrent_validations: Number(initialConfig.max_concurrent_validations),
         max_streams_per_resolution: Number(initialConfig.max_streams_per_resolution || 0),
+        enable_stream_failover: initialConfig.enable_stream_failover !== false,
         search_result_limit: Number(initialConfig.search_result_limit || 1000),
         include_year_in_search: initialConfig.include_year_in_search !== false,
         search_title_language: initialConfig.search_title_language ?? '',
@@ -452,10 +455,21 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
             <Card>
               <CardHeader>
                 <CardTitle>Advanced</CardTitle>
-                <CardDescription>Log level, cache, validation, and stream limits.</CardDescription>
+                <CardDescription>Log level, cache, validation, stream limits, and failover.</CardDescription>
               </CardHeader>
               <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField control={control} name="enable_stream_failover" render={({ field }) => (
+                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-sm font-medium">Auto-failover to next stream</FormLabel>
+                      <p className="text-xs text-muted-foreground">When a stream fails, try the next in the priority list instead of showing the error video.</p>
+                    </div>
+                    <FormControl>
+                      <Switch checked={field.value} onCheckedChange={field.onChange} />
+                    </FormControl>
+                  </FormItem>
+                )} />
                 <FormField control={control} name="log_level" render={({ field }) => (
                   <FormItem className="space-y-2">
                     <FormLabel className="text-sm font-medium">Log Level</FormLabel>

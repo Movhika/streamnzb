@@ -199,6 +199,7 @@ type Config struct {
 	ValidationSampleSize    int `json:"validation_sample_size"`
 	MaxStreams              int `json:"max_streams"`                // Max successful streams to return per search
 	MaxStreamsPerResolution int `json:"max_streams_per_resolution"` // Max streams per resolution (0 = disabled, use MaxStreams behavior)
+	EnableStreamFailover    bool `json:"enable_stream_failover"`    // When a stream fails, redirect to next in priority list (default true)
 
 	// NNTP Providers
 	Providers []Provider `json:"providers"`
@@ -243,6 +244,9 @@ func (c *Config) GetSearchTitleLanguage() string { return c.SearchTitleLanguage 
 
 // GetSearchTitleNormalize returns the global default for normalizing movie title (for search.RunIndexerSearches fallback).
 func (c *Config) GetSearchTitleNormalize() bool { return c.SearchTitleNormalize }
+
+// GetEnableStreamFailover returns whether to redirect to the next stream in priority list on failure (default true).
+func (c *Config) GetEnableStreamFailover() bool { return c.EnableStreamFailover }
 
 // MergeIndexerSearch merges per-indexer config, per-device override, and global defaults (override wins over indexer wins over global).
 // Returns a fully populated IndexerSearchConfig for use when building the search request per indexer.
@@ -368,6 +372,7 @@ func Load() (*Config, error) {
 		ValidationSampleSize:    5,
 		MaxStreams:              5,
 		MaxStreamsPerResolution: 0, // 0 = disabled
+		EnableStreamFailover:    true,
 		SearchResultLimit:       1000,
 		IncludeYearInSearch:     true,
 		SearchTitleLanguage:     "",

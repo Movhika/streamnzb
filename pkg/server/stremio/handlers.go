@@ -1210,7 +1210,10 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 
 	if _, err = sess.GetOrDownloadNZB(s.sessionManager); err != nil {
 		logger.Error("Failed to lazy load NZB", "id", sessionID, "err", err)
-		redirectToNextStreamOrError(w, s.baseURL, sess)
+		s.mu.RLock()
+		enableFailover := s.config.GetEnableStreamFailover()
+		s.mu.RUnlock()
+		redirectToNextStreamOrError(w, s.baseURL, sess, enableFailover)
 		return
 	}
 
@@ -1237,7 +1240,10 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			if sess.NZB != nil {
 				s.validator.InvalidateCache(sess.NZB.Hash())
 			}
-			redirectToNextStreamOrError(w, s.baseURL, sess)
+			s.mu.RLock()
+			enableFailover := s.config.GetEnableStreamFailover()
+			s.mu.RUnlock()
+			redirectToNextStreamOrError(w, s.baseURL, sess, enableFailover)
 			return
 		}
 	}
@@ -1255,7 +1261,10 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		if sess.NZB != nil {
 			s.validator.InvalidateCache(sess.NZB.Hash())
 		}
-		redirectToNextStreamOrError(w, s.baseURL, sess)
+		s.mu.RLock()
+		enableFailover := s.config.GetEnableStreamFailover()
+		s.mu.RUnlock()
+		redirectToNextStreamOrError(w, s.baseURL, sess, enableFailover)
 		return
 	}
 	defer stream.Close()
@@ -1567,14 +1576,16 @@ func (s *Server) setFallbackStreams(streams []Stream) {
 	}
 }
 
-// redirectToNextStreamOrError redirects to the next stream in the priority list if the session has fallback URLs; otherwise redirects to the error video.
-func redirectToNextStreamOrError(w http.ResponseWriter, baseURL string, sess *session.Session) {
-	if nextURL := sess.FirstFallbackStreamURL(); nextURL != "" {
-		logger.Info("Redirecting to next stream in priority list", "url", nextURL)
-		w.Header().Set("Connection", "close")
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		http.Redirect(w, &http.Request{Method: "GET"}, nextURL, http.StatusTemporaryRedirect)
-		return
+// redirectToNextStreamOrError redirects to the next stream in the priority list if enableFailover is true and the session has fallback URLs; otherwise redirects to the error video.
+func redirectToNextStreamOrError(w http.ResponseWriter, baseURL string, sess *session.Session, enableFailover bool) {
+	if enableFailover {
+		if nextURL := sess.FirstFallbackStreamURL(); nextURL != "" {
+			logger.Info("Redirecting to next stream in priority list", "url", nextURL)
+			w.Header().Set("Connection", "close")
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			http.Redirect(w, &http.Request{Method: "GET"}, nextURL, http.StatusTemporaryRedirect)
+			return
+		}
 	}
 	forceDisconnect(w, baseURL)
 }
