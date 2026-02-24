@@ -139,7 +139,7 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 		ProviderURL:     providerURL,
 		Status:          status,
 	}
-	// For TV, prefer TvdbID + season/episode (AvailNZB expects these for series lookup).
+	// For TV, send TvdbID + season/episode. ImdbID is sent without season/episode.
 	if meta.TvdbID != "" && (meta.Season > 0 || meta.Episode > 0) {
 		body.TvdbID = meta.TvdbID
 		body.Season = meta.Season

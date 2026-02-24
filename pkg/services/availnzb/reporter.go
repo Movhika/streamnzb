@@ -1,10 +1,10 @@
 package availnzb
 
 import (
-	"strings"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/session"
+	"strings"
 	"sync"
 )
 

@@ -44,6 +44,9 @@ type Session struct {
 	// Deferred download: URL to fetch NZB (may have apikey added by caller); indexer for DownloadNZB
 	downloadURL string
 	indexer     indexer.Indexer
+
+	// FallbackStreamURLs: play URLs of streams after this one in priority order (for auto-failover)
+	FallbackStreamURLs []string
 }
 
 // ReleaseURL returns the indexer details URL for AvailNZB reporting
@@ -71,6 +74,23 @@ func (s *Session) ReportReleaseName() string {
 		return s.Release.Title
 	}
 	return ""
+}
+
+// FirstFallbackStreamURL returns the first fallback play URL if any (next stream in priority list).
+func (s *Session) FirstFallbackStreamURL() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.FallbackStreamURLs) == 0 {
+		return ""
+	}
+	return s.FallbackStreamURLs[0]
+}
+
+// SetFallbackStreams sets the list of play URLs for streams after this one (priority order).
+func (s *Session) SetFallbackStreams(urls []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.FallbackStreamURLs = urls
 }
 
 // Manager manages active streaming sessions
@@ -320,6 +340,17 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	s.Files = loaderFiles
 	s.File = loaderFiles[0]
 	return s.NZB, nil
+}
+
+// SetFallbackStreams sets fallback play URLs for a session (next streams in priority order).
+func (m *Manager) SetFallbackStreams(sessionID string, urls []string) {
+	m.mu.RLock()
+	session, ok := m.sessions[sessionID]
+	m.mu.RUnlock()
+	if !ok || session == nil {
+		return
+	}
+	session.SetFallbackStreams(urls)
 }
 
 // GetSession retrieves an existing session

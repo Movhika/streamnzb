@@ -922,6 +922,9 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		logger.Info("Adding placeholder stream", "attempted", indexerAttempted, "candidates", indexerCandidatesCount)
 	}
 
+	// Set fallback stream URLs so on failure we can redirect to next in priority order
+	s.setFallbackStreams(streams)
+
 	logger.Info("Returning validated streams", "count", len(streams))
 	return streams, nil
 }
@@ -1207,7 +1210,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 
 	if _, err = sess.GetOrDownloadNZB(s.sessionManager); err != nil {
 		logger.Error("Failed to lazy load NZB", "id", sessionID, "err", err)
-		forceDisconnect(w, s.baseURL)
+		redirectToNextStreamOrError(w, s.baseURL, sess)
 		return
 	}
 
@@ -1229,12 +1232,12 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	// instead of starting a stream that will fail on the first read.
 	for _, f := range files {
 		if f.IsFailed() {
-			logger.Error("Session file has too many failures, redirecting to error", "session", sessionID, "file", f.Name())
+			logger.Error("Session file has too many failures, redirecting to next stream", "session", sessionID, "file", f.Name())
 			s.reportBadRelease(sess, loader.ErrTooManyZeroFills)
 			if sess.NZB != nil {
 				s.validator.InvalidateCache(sess.NZB.Hash())
 			}
-			forceDisconnect(w, s.baseURL)
+			redirectToNextStreamOrError(w, s.baseURL, sess)
 			return
 		}
 	}
@@ -1252,7 +1255,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		if sess.NZB != nil {
 			s.validator.InvalidateCache(sess.NZB.Hash())
 		}
-		forceDisconnect(w, s.baseURL)
+		redirectToNextStreamOrError(w, s.baseURL, sess)
 		return
 	}
 	defer stream.Close()
@@ -1527,6 +1530,53 @@ func limitStreamsPerResolution(streams []Stream, maxPerResolution int, maxTotal 
 
 	logger.Debug("Limited streams per resolution (final)", "total", len(result), "maxPerResolution", maxPerResolution, "maxTotal", maxTotal)
 	return result
+}
+
+// sessionIDFromStreamURL extracts the session ID from a play URL (e.g. .../play/sessionID or .../token/play/sessionID).
+func sessionIDFromStreamURL(streamURL string) string {
+	u, err := url.Parse(streamURL)
+	if err != nil {
+		return ""
+	}
+	segments := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(segments) == 0 {
+		return ""
+	}
+	return segments[len(segments)-1]
+}
+
+// setFallbackStreams assigns to each session the play URLs of streams that come after it in the list (priority order).
+func (s *Server) setFallbackStreams(streams []Stream) {
+	errorPrefix := strings.TrimSuffix(s.baseURL, "/") + "/error/"
+	for i := range streams {
+		if strings.HasPrefix(streams[i].URL, errorPrefix) {
+			continue
+		}
+		sessionID := sessionIDFromStreamURL(streams[i].URL)
+		if sessionID == "" {
+			continue
+		}
+		var nextURLs []string
+		for j := i + 1; j < len(streams); j++ {
+			if strings.HasPrefix(streams[j].URL, errorPrefix) {
+				continue
+			}
+			nextURLs = append(nextURLs, streams[j].URL)
+		}
+		s.sessionManager.SetFallbackStreams(sessionID, nextURLs)
+	}
+}
+
+// redirectToNextStreamOrError redirects to the next stream in the priority list if the session has fallback URLs; otherwise redirects to the error video.
+func redirectToNextStreamOrError(w http.ResponseWriter, baseURL string, sess *session.Session) {
+	if nextURL := sess.FirstFallbackStreamURL(); nextURL != "" {
+		logger.Info("Redirecting to next stream in priority list", "url", nextURL)
+		w.Header().Set("Connection", "close")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		http.Redirect(w, &http.Request{Method: "GET"}, nextURL, http.StatusTemporaryRedirect)
+		return
+	}
+	forceDisconnect(w, baseURL)
 }
 
 // forceDisconnect redirects to the embedded failure video when streaming is unavailable.
