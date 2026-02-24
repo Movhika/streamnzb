@@ -394,7 +394,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if o := req.OptionalOverrides; o != nil && o.UseSeasonEpisodeParams != nil {
 		useSeasonEp = o.UseSeasonEpisodeParams
 	}
-	if (useSeasonEp == nil || *useSeasonEp) {
+	if useSeasonEp == nil || *useSeasonEp {
 		if req.Season != "" {
 			params.Set("season", req.Season)
 		}

@@ -12,6 +12,14 @@ import { SortingSection } from "@/components/SortingSection"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { FormField } from "@/components/ui/form"
 
+// Normalize boolean-or-use-indexer form value (preserve 'use_indexer' so reset doesn't turn it into false)
+function normalizeBoolOrUseIndexer(val) {
+  if (val === undefined) return 'use_indexer'
+  if (val === true || val === 'true') return true
+  if (val === false || val === 'false') return false
+  return 'use_indexer'
+}
+
 // Build API override object from form values for one indexer (only include overridden fields)
 function buildOverridePayload(o) {
   if (!o) return undefined
@@ -35,13 +43,13 @@ function DeviceConfigForm({ username, initialFilters, initialSorting, initialInd
       const init = initialIndexerOverrides?.[name] || {}
       map[name] = {
         search_result_limit: init.search_result_limit ?? 0,
-        include_year_in_search: init.include_year_in_search === undefined ? 'use_indexer' : (init.include_year_in_search === true || init.include_year_in_search === 'true'),
+        include_year_in_search: normalizeBoolOrUseIndexer(init.include_year_in_search),
         search_title_language: init.search_title_language === undefined || init.search_title_language === '' ? 'use_indexer' : (init.search_title_language ?? ''),
-        search_title_normalize: init.search_title_normalize === undefined ? 'use_indexer' : (init.search_title_normalize === true || init.search_title_normalize === 'true'),
+        search_title_normalize: normalizeBoolOrUseIndexer(init.search_title_normalize),
         movie_categories: init.movie_categories === undefined || init.movie_categories === '' ? 'use_indexer' : (init.movie_categories ?? ''),
         tv_categories: init.tv_categories === undefined || init.tv_categories === '' ? 'use_indexer' : (init.tv_categories ?? ''),
         extra_search_terms: init.extra_search_terms === undefined || init.extra_search_terms === '' ? 'use_indexer' : (init.extra_search_terms ?? ''),
-        use_season_episode_params: init.use_season_episode_params === undefined ? 'use_indexer' : (init.use_season_episode_params === true || init.use_season_episode_params === 'true')
+        use_season_episode_params: normalizeBoolOrUseIndexer(init.use_season_episode_params)
       }
     })
     return map
@@ -77,15 +85,16 @@ function DeviceConfigForm({ username, initialFilters, initialSorting, initialInd
   useEffect(() => { onConfigChangeRef.current = onConfigChange }, [onConfigChange])
 
   useEffect(() => {
-    if (initialFilters || initialSorting || initialIndexerOverrides || indexerNames?.length) {
-      reset({
-        filters: initialFilters || {},
-        sorting: initialSorting || {},
-        indexer_overrides: defaultOverrides
-      }, { keepDefaultValues: false })
-      isInitialMount.current = true
-    }
-  }, [initialFilters, initialSorting, initialIndexerOverrides, indexerNames, defaultOverrides, reset, username])
+    if (!initialFilters && !initialSorting && !initialIndexerOverrides && (!indexerNames || !indexerNames.length)) return
+    // Only reset filters and sorting from props; keep current indexer_overrides so dropdowns don't revert
+    const current = getValues()
+    reset({
+      filters: initialFilters || {},
+      sorting: initialSorting || {},
+      indexer_overrides: current?.indexer_overrides ?? defaultOverrides
+    }, { keepDefaultValues: false })
+    isInitialMount.current = true
+  }, [initialFilters, initialSorting, initialIndexerOverrides, indexerNames, defaultOverrides, reset, username, getValues])
 
   useEffect(() => {
     let timeoutId

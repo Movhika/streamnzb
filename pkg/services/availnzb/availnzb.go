@@ -199,7 +199,14 @@ func (c *Client) RefreshBackbones() error {
 		return nil
 	}
 	reqURL := c.BaseURL + apiPath + "/backbones"
-	resp, err := c.HTTP.Get(reqURL)
+	req, err := http.NewRequest("GET", reqURL, nil)
+	if err != nil {
+		return err
+	}
+	if c.APIKey != "" {
+		req.Header.Set("X-API-Key", c.APIKey)
+	}
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		logger.Error("AvailNZB RefreshBackbones request failed", "err", err)
 		return err
@@ -263,7 +270,14 @@ func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {
 
 	logger.Debug("AvailNZB GetStatus", "url", releaseURL)
 
-	resp, err := c.HTTP.Get(reqURL)
+	req, err := http.NewRequest("GET", reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.APIKey != "" {
+		req.Header.Set("X-API-Key", c.APIKey)
+	}
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		logger.Error("AvailNZB GetStatus request failed", "err", err, "url", releaseURL)
 		return nil, err
@@ -328,7 +342,14 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 
 	logger.Debug("AvailNZB GetReleases", "imdb_id", imdbID, "tvdb_id", tvdbID, "season", season, "episode", episode, "indexers", len(indexers), "providers", len(providers))
 
-	resp, err := c.HTTP.Get(reqURL)
+	req, err := http.NewRequest("GET", reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.APIKey != "" {
+		req.Header.Set("X-API-Key", c.APIKey)
+	}
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		logger.Error("AvailNZB GetReleases request failed", "err", err, "imdb_id", imdbID, "tvdb_id", tvdbID)
 		return nil, err
