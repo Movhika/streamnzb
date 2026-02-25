@@ -454,6 +454,8 @@ func (s *Server) buildSearchParams(contentType, id string, device *auth.Device) 
 		if tmdbIDNum, err := strconv.Atoi(req.TMDBID); err == nil {
 			if extIDs, err := s.tmdbClient.GetExternalIDs(tmdbIDNum, "movie"); err == nil && extIDs.IMDbID != "" {
 				contentIDs.ImdbID = extIDs.IMDbID
+				req.IMDbID = contentIDs.ImdbID   // keep search request in sync so indexers and logging see IMDb
+				imdbForText = contentIDs.ImdbID // so SearchParams and downstream use resolved IMDb
 			}
 		}
 	}
