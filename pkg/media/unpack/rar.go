@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ type ArchiveBlueprint struct {
 	TotalSize    int64
 	Parts        []VirtualPartDef
 	IsCompressed bool
+	AnyEncrypted bool // true if any part is encrypted (streaming uses rardecode when password set)
 }
 
 type VirtualPartDef struct {
@@ -32,14 +34,23 @@ type VirtualPartDef struct {
 }
 
 // StreamFromBlueprint returns a reader over the virtual file. We do not use rardecode
-// for the read path: rardecode is only used for scanning (ListArchiveInfo) to get
+// for the read path when unencrypted: rardecode is only used for scanning (ListArchiveInfo) to get
 // DataOffset per volume. For STORE mode, the bytes at DataOffset in each volume are
 // the raw file content, so we read via the loader at VolOffset (DataOffset) and never
 // decode through rardecode.Reader (which is sequential and would force "download from
-// start" on seek).
-func StreamFromBlueprint(ctx context.Context, bp *ArchiveBlueprint) (io.ReadSeekCloser, string, int64, error) {
+// start" on seek). When the archive is encrypted, password must be provided and we
+// use rardecode.OpenReader + Next to stream decrypted content (sequential read; seek
+// is emulated by re-opening and skipping).
+func StreamFromBlueprint(ctx context.Context, bp *ArchiveBlueprint, password string) (io.ReadSeekCloser, string, int64, error) {
 	if bp.IsCompressed {
 		return nil, "", 0, fmt.Errorf("compressed RAR archive (file: %s) -- STORE mode required for streaming", bp.MainFileName)
+	}
+
+	if bp.AnyEncrypted {
+		if password == "" {
+			return nil, "", 0, fmt.Errorf("password-protected RAR (file: %s) -- password required from NZB head", bp.MainFileName)
+		}
+		return streamEncryptedRAR(ctx, bp, password)
 	}
 
 	parts := make([]virtualPart, len(bp.Parts))
@@ -49,8 +60,152 @@ func StreamFromBlueprint(ctx context.Context, bp *ArchiveBlueprint) (io.ReadSeek
 	return NewVirtualStream(ctx, parts, bp.TotalSize, 0), bp.MainFileName, bp.TotalSize, nil
 }
 
+// streamEncryptedRAR opens the RAR with rardecode.OpenReader and positions at the
+// main file, then returns a ReadSeekCloser that decrypts on read. Seek is supported
+// by re-opening the archive and skipping to the file then skipping offset bytes.
+func streamEncryptedRAR(ctx context.Context, bp *ArchiveBlueprint, password string) (io.ReadSeekCloser, string, int64, error) {
+	fileMap := make(map[string]UnpackableFile, len(bp.Parts))
+	for _, p := range bp.Parts {
+		name := ExtractFilename(p.VolFile.Name())
+		fileMap[name] = p.VolFile
+	}
+	firstName := ExtractFilename(bp.Parts[0].VolFile.Name())
+	fsys := NewNZBFSFromMap(fileMap)
+
+	opts := []rardecode.Option{rardecode.FileSystem(fsys), rardecode.Password(password)}
+	rc, err := rardecode.OpenReader(firstName, opts...)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("open encrypted RAR: %w", err)
+	}
+
+	// Advance to the main file
+	mainBase := filepath.Base(bp.MainFileName)
+	for {
+		h, err := rc.Next()
+		if err != nil {
+			rc.Close()
+			if err == io.EOF {
+				return nil, "", 0, fmt.Errorf("encrypted RAR: file %q not found", bp.MainFileName)
+			}
+			return nil, "", 0, fmt.Errorf("encrypted RAR next: %w", err)
+		}
+		if h.Name == bp.MainFileName || filepath.Base(h.Name) == mainBase {
+			stream := &encryptedRARStream{
+				rc:           rc,
+				limit:        bp.TotalSize,
+				firstVolName: firstName,
+				fileMap:      fileMap,
+				password:     password,
+				mainFileName: bp.MainFileName,
+				mainBase:     mainBase,
+			}
+			return stream, bp.MainFileName, bp.TotalSize, nil
+		}
+		// Skip this file's content by reading to EOF
+		_, _ = io.Copy(io.Discard, io.LimitReader(rc, h.UnPackedSize))
+	}
+}
+
+// encryptedRARStream is a ReadSeekCloser for a single file inside an encrypted RAR.
+// Seek is implemented by re-opening the archive and skipping to the target offset.
+type encryptedRARStream struct {
+	rc           *rardecode.ReadCloser
+	limit        int64
+	read         int64
+	firstVolName string
+	fileMap      map[string]UnpackableFile
+	password     string
+	mainFileName string
+	mainBase     string
+	mu           sync.Mutex
+}
+
+func (e *encryptedRARStream) Read(p []byte) (n int, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.read >= e.limit {
+		return 0, io.EOF
+	}
+	max := int64(len(p))
+	if max > e.limit-e.read {
+		max = e.limit - e.read
+	}
+	n, err = e.rc.Read(p[:max])
+	if n > 0 {
+		e.read += int64(n)
+	}
+	return n, err
+}
+
+func (e *encryptedRARStream) Seek(offset int64, whence int) (int64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var abs int64
+	switch whence {
+	case io.SeekStart:
+		abs = offset
+	case io.SeekCurrent:
+		abs = e.read + offset
+	case io.SeekEnd:
+		abs = e.limit + offset
+	default:
+		return e.read, fmt.Errorf("invalid whence %d", whence)
+	}
+	if abs < 0 {
+		return e.read, fmt.Errorf("negative position")
+	}
+	if abs == e.read {
+		return e.read, nil
+	}
+	// Re-open and skip to target position
+	if err := e.rc.Close(); err != nil {
+		logger.Debug("encrypted RAR stream close on seek", "err", err)
+	}
+	fsys := NewNZBFSFromMap(e.fileMap)
+	opts := []rardecode.Option{rardecode.FileSystem(fsys), rardecode.Password(e.password)}
+	rc, err := rardecode.OpenReader(e.firstVolName, opts...)
+	if err != nil {
+		return e.read, fmt.Errorf("reopen for seek: %w", err)
+	}
+	e.rc = rc
+	// Advance to main file
+	for {
+		h, err := rc.Next()
+		if err != nil {
+			rc.Close()
+			return e.read, fmt.Errorf("seek next: %w", err)
+		}
+		if h.Name == e.mainFileName || filepath.Base(h.Name) == e.mainBase {
+			break
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(rc, h.UnPackedSize))
+	}
+	// Skip to offset
+	if abs > 0 {
+		_, err = io.CopyN(io.Discard, rc, abs)
+		if err != nil && err != io.EOF {
+			rc.Close()
+			return e.read, err
+		}
+	}
+	e.read = abs
+	return e.read, nil
+}
+
+func (e *encryptedRARStream) Close() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.rc == nil {
+		return nil
+	}
+	err := e.rc.Close()
+	e.rc = nil
+	return err
+}
+
 // ScanArchive scans RAR volumes in parallel to build a blueprint.
-func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
+// password is the archive password from the NZB head, if any (required for encrypted RAR).
+func ScanArchive(files []UnpackableFile, password string) (*ArchiveBlueprint, error) {
 	rarFiles := filterRarFiles(files)
 	if len(rarFiles) == 0 {
 		return nil, errors.New("no RAR files found")
@@ -61,7 +216,7 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 	logger.Debug("Scanning RAR first volumes", "count", len(firstVols), "total", len(rarFiles))
 
 	start := time.Now()
-	parts := scanVolumesParallel(firstVols)
+	parts := scanVolumesParallel(firstVols, password)
 
 	// Fail fast: if any scanned volume already exceeded its failure threshold,
 	// the release is dead and there's no point building a blueprint.
@@ -86,7 +241,7 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 	}
 	if !hasMedia && len(parts) > 0 && len(rarFiles) > len(firstVols) {
 		logger.Debug("No media in first volumes, running full multi-volume scan for nested archive")
-		fullParts := scanFullArchive(rarFiles)
+		fullParts := scanFullArchive(rarFiles, password)
 		if len(fullParts) > 0 {
 			parts = fullParts
 		}
@@ -101,7 +256,7 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 		}
 	}
 
-	bp, err := buildBlueprint(parts, rarFiles)
+	bp, err := buildBlueprint(parts, rarFiles, password)
 	if err != nil {
 		return nil, err
 	}
@@ -174,11 +329,12 @@ type filePart struct {
 	volName      string
 	isMedia      bool
 	isCompressed bool
+	isEncrypted  bool
 }
 
 // --- scanning ---
 
-func scanVolumesParallel(files []UnpackableFile) []filePart {
+func scanVolumesParallel(files []UnpackableFile, password string) []filePart {
 	var mu sync.Mutex
 	var result []filePart
 	sem := make(chan struct{}, 20)
@@ -198,12 +354,11 @@ func scanVolumesParallel(files []UnpackableFile) []filePart {
 
 			cleanName := ExtractFilename(f.Name())
 			fsys := NewNZBFSFromMap(map[string]UnpackableFile{cleanName: f})
-
-			infos, err := rardecode.ListArchiveInfo(cleanName,
-				rardecode.FileSystem(fsys),
-				rardecode.ParallelRead(true),
-				rardecode.SkipVolumeCheck,
-			)
+			listOpts := []rardecode.Option{rardecode.FileSystem(fsys), rardecode.ParallelRead(true), rardecode.SkipVolumeCheck}
+			if password != "" {
+				listOpts = append(listOpts, rardecode.Password(password))
+			}
+			infos, err := rardecode.ListArchiveInfo(cleanName, listOpts...)
 			if err != nil {
 				logger.Debug("Scan failure", "name", cleanName, "err", err)
 			}
@@ -232,6 +387,7 @@ func scanVolumesParallel(files []UnpackableFile) []filePart {
 						volName:      f.Name(),
 						isMedia:      isMediaFile(info),
 						isCompressed: compressed,
+						isEncrypted:  info.AnyEncrypted,
 					})
 					mu.Unlock()
 				}
@@ -246,7 +402,7 @@ func scanVolumesParallel(files []UnpackableFile) []filePart {
 // rardecode traverses volumes in order and seeks over data blocks, so only
 // headers are downloaded. This gives complete FilePartInfo for every inner
 // file, including data that spans across multiple outer volumes.
-func scanFullArchive(rarFiles []UnpackableFile) []filePart {
+func scanFullArchive(rarFiles []UnpackableFile, password string) []filePart {
 	sort.Slice(rarFiles, func(i, j int) bool {
 		return volumeOrder(rarFiles[i].Name()) < volumeOrder(rarFiles[j].Name())
 	})
@@ -274,10 +430,11 @@ func scanFullArchive(rarFiles []UnpackableFile) []filePart {
 	fsys := NewNZBFSFromMap(fileMap)
 	logger.Debug("Full archive scan starting", "first", firstName, "volumes", len(rarFiles))
 
-	infos, err := rardecode.ListArchiveInfo(firstName,
-		rardecode.FileSystem(fsys),
-		rardecode.ParallelRead(true),
-	)
+	listOpts := []rardecode.Option{rardecode.FileSystem(fsys), rardecode.ParallelRead(true)}
+	if password != "" {
+		listOpts = append(listOpts, rardecode.Password(password))
+	}
+	infos, err := rardecode.ListArchiveInfo(firstName, listOpts...)
 	if err != nil {
 		logger.Debug("Full archive scan failed", "err", err)
 		return nil
@@ -312,6 +469,7 @@ func scanFullArchive(rarFiles []UnpackableFile) []filePart {
 				volName:      volFile.Name(),
 				isMedia:      isMediaFile(info),
 				isCompressed: compressed,
+				isEncrypted:  info.AnyEncrypted,
 			})
 		}
 	}
@@ -321,7 +479,7 @@ func scanFullArchive(rarFiles []UnpackableFile) []filePart {
 
 // --- blueprint construction ---
 
-func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile) (*ArchiveBlueprint, error) {
+func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile, password string) (*ArchiveBlueprint, error) {
 	bestName := selectMainFile(parts)
 
 	// When direct media is dwarfed by archive content, the media is likely
@@ -338,14 +496,14 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile) (*ArchiveBlu
 		if archiveTotal > mediaTotal*2 {
 			logger.Info("Archive content outweighs direct media, trying nested archive first",
 				"media", mediaTotal, "archive", archiveTotal, "sample", bestName)
-			if bp, err := tryNestedArchive(parts); err == nil {
+			if bp, err := tryNestedArchive(parts, password); err == nil {
 				return bp, nil
 			}
 		}
 	}
 
 	if bestName == "" {
-		return tryNestedArchive(parts)
+		return tryNestedArchive(parts, password)
 	}
 
 	logger.Info("Selected main media", "name", bestName)
@@ -358,14 +516,17 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile) (*ArchiveBlu
 
 	// If scanned parts don't cover the full file, fill from remaining volumes
 	if scannedSize < headerSize && len(allRarFiles) > len(mainParts) {
-		mainParts = aggregateRemainingVolumes(mainParts, allRarFiles, bestName, headerSize)
+		mainParts = aggregateRemainingVolumes(mainParts, allRarFiles, bestName, headerSize, password)
 	}
 
 	compressed := false
+	anyEncrypted := false
 	for _, p := range mainParts {
 		if p.isCompressed {
 			compressed = true
-			break
+		}
+		if p.isEncrypted {
+			anyEncrypted = true
 		}
 	}
 
@@ -373,6 +534,7 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile) (*ArchiveBlu
 		MainFileName: bestName,
 		TotalSize:    headerSize,
 		IsCompressed: compressed,
+		AnyEncrypted: anyEncrypted,
 	}
 
 	var vOffset int64
@@ -457,7 +619,7 @@ type segmentPrewarmer interface {
 	PrewarmSegment(index int)
 }
 
-func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFile, name string, headerSize int64) []filePart {
+func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFile, name string, headerSize int64, password string) []filePart {
 	sort.Slice(allRarFiles, func(i, j int) bool {
 		return volumeOrder(allRarFiles[i].Name()) < volumeOrder(allRarFiles[j].Name())
 	})
@@ -481,7 +643,7 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 	// estimate). Even ~80 bytes of error per volume causes cumulative
 	// misalignment of VirtualStart/VirtualEnd, so seeks to later volumes
 	// read from the wrong byte offset and produce corrupt data.
-	probe := probeContinuation(allRarFiles, startIdx, name)
+	probe := probeContinuation(allRarFiles, startIdx, name, password)
 	if probe.dataOffset > 0 {
 		logger.Debug("Probed continuation volume", "dataOffset", probe.dataOffset, "packedSize", probe.packedSize)
 	}
@@ -559,7 +721,7 @@ type continuationProbe struct {
 	packedSize int64
 }
 
-func probeContinuation(allRarFiles []UnpackableFile, startIdx int, targetName string) continuationProbe {
+func probeContinuation(allRarFiles []UnpackableFile, startIdx int, targetName string, password string) continuationProbe {
 	if startIdx+1 >= len(allRarFiles) {
 		return continuationProbe{}
 	}
@@ -573,11 +735,11 @@ func probeContinuation(allRarFiles []UnpackableFile, startIdx int, targetName st
 		firstName:  firstFile,
 		secondName: secondFile,
 	})
-
-	infos, err := rardecode.ListArchiveInfo(firstName,
-		rardecode.FileSystem(fsys),
-		rardecode.ParallelRead(true),
-	)
+	listOpts := []rardecode.Option{rardecode.FileSystem(fsys), rardecode.ParallelRead(true)}
+	if password != "" {
+		listOpts = append(listOpts, rardecode.Password(password))
+	}
+	infos, err := rardecode.ListArchiveInfo(firstName, listOpts...)
 	if err != nil {
 		logger.Debug("Continuation probe failed, falling back to zero offset", "err", err)
 		return continuationProbe{}
@@ -600,7 +762,7 @@ func probeContinuation(allRarFiles []UnpackableFile, startIdx int, targetName st
 
 // --- nested archive handling ---
 
-func tryNestedArchive(parts []filePart) (*ArchiveBlueprint, error) {
+func tryNestedArchive(parts []filePart, password string) (*ArchiveBlueprint, error) {
 	if len(parts) == 0 {
 		return nil, errors.New("empty archive")
 	}
@@ -687,7 +849,7 @@ func tryNestedArchive(parts []filePart) (*ArchiveBlueprint, error) {
 		logger.Debug("Nested VirtualFile", "name", nf.Name(), "size", nf.Size(), "extracted", ExtractFilename(nf.Name()))
 	}
 	logger.Info("Recursively scanning nested archive", "set", bestSet, "volumes", len(nestedFiles))
-	return ScanArchive(nestedFiles)
+	return ScanArchive(nestedFiles, password)
 }
 
 // --- helpers ---

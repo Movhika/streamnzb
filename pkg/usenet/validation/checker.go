@@ -328,7 +328,11 @@ func (c *Checker) validateProviderExtended(ctx context.Context, nzbData *nzb.NZB
 	}
 
 	if ct != "direct" && len(firstSegData) > 0 {
-		if err := verifyArchiveHeader(ct, firstSegData, lastSegData, info); err != nil {
+		password := ""
+		if nzbData != nil {
+			password = nzbData.Password()
+		}
+		if err := verifyArchiveHeader(ct, firstSegData, lastSegData, info, password); err != nil {
 			result.Available = false
 			result.Error = err
 			logger.Debug("Extended check archive header failed", "provider", providerName, "compression", ct, "err", err)
@@ -420,15 +424,20 @@ func (c *Checker) getSampleArticles(nzbData *nzb.NZB) []string {
 }
 
 // verifyArchiveHeader parses downloaded segment data to confirm the archive
-// is valid and uses STORE mode (required for streaming).
+// is valid and uses STORE mode (required for streaming). password is from the
+// NZB head (meta type="password"); pass when the archive is password-protected.
 //
 // For RAR: feeds the first segment to rardecode and checks the Stored flag.
 // For 7z: builds a sparse ReaderAt from first + last segment data and uses
-// sevenzip.NewReader to parse the encoded header (which lives at the archive tail).
-func verifyArchiveHeader(ct string, firstSeg, lastSeg []byte, info *nzb.FileInfo) error {
+// sevenzip to parse the encoded header (which lives at the archive tail).
+func verifyArchiveHeader(ct string, firstSeg, lastSeg []byte, info *nzb.FileInfo, password string) error {
 	switch ct {
 	case "rar":
-		r, err := rardecode.NewReader(bytes.NewReader(firstSeg))
+		opts := []rardecode.Option{}
+		if password != "" {
+			opts = append(opts, rardecode.Password(password))
+		}
+		r, err := rardecode.NewReader(bytes.NewReader(firstSeg), opts...)
 		if err != nil {
 			return fmt.Errorf("invalid RAR archive: %w", err)
 		}
@@ -440,7 +449,7 @@ func verifyArchiveHeader(ct string, firstSeg, lastSeg []byte, info *nzb.FileInfo
 			return fmt.Errorf("RAR archive uses compression (STORE mode required for streaming)")
 		}
 	case "7z":
-		if err := verify7zHeader(firstSeg, lastSeg, info); err != nil {
+		if err := verify7zHeader(firstSeg, lastSeg, info, password); err != nil {
 			return err
 		}
 	}
@@ -449,7 +458,7 @@ func verifyArchiveHeader(ct string, firstSeg, lastSeg []byte, info *nzb.FileInfo
 
 // verify7zHeader constructs a sparse ReaderAt covering the head and tail of
 // the 7z volume and lets the sevenzip library parse the encoded header.
-func verify7zHeader(headData, tailData []byte, info *nzb.FileInfo) error {
+func verify7zHeader(headData, tailData []byte, info *nzb.FileInfo, password string) error {
 	if info == nil {
 		return nil
 	}
@@ -461,7 +470,7 @@ func verify7zHeader(headData, tailData []byte, info *nzb.FileInfo) error {
 	// If the file is small enough that head covers everything, use it directly.
 	if int64(len(headData)) >= totalSize {
 		ra := bytes.NewReader(headData[:totalSize])
-		return parse7z(ra, totalSize)
+		return parse7z(ra, totalSize, password)
 	}
 
 	if len(tailData) == 0 {
@@ -478,11 +487,11 @@ func verify7zHeader(headData, tailData []byte, info *nzb.FileInfo) error {
 		tailOffset: tailOffset,
 		totalSize:  totalSize,
 	}
-	return parse7z(ra, totalSize)
+	return parse7z(ra, totalSize, password)
 }
 
-func parse7z(ra io.ReaderAt, size int64) error {
-	r, err := sevenzip.NewReader(ra, size)
+func parse7z(ra io.ReaderAt, size int64, password string) error {
+	r, err := sevenzip.NewReaderWithPassword(ra, size, password)
 	if err != nil {
 		return fmt.Errorf("invalid 7z archive: %w", err)
 	}

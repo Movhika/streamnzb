@@ -1253,7 +1253,11 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	// Each request gets its own stream, scoped to the HTTP request context.
 	// When the client disconnects, r.Context() is cancelled, which propagates
 	// down through VirtualStream -> SegmentReader -> DownloadSegment.
-	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), files, sess.Blueprint)
+	password := ""
+	if sess.NZB != nil {
+		password = sess.NZB.Password()
+	}
+	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), files, sess.Blueprint, password)
 	if bp != nil && sess.Blueprint == nil {
 		sess.SetBlueprint(bp)
 	}
@@ -1397,7 +1401,11 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		return
 	}
 
-	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), files, sess.Blueprint)
+	password := ""
+	if sess.NZB != nil {
+		password = sess.NZB.Password()
+	}
+	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), files, sess.Blueprint, password)
 	if bp != nil && sess.Blueprint == nil {
 		sess.SetBlueprint(bp)
 	}

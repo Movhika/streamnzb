@@ -32,17 +32,18 @@ type FailedBlueprint struct {
 // GetMediaStream finds a video file inside the provided NZB files and returns
 // a seekable stream. ctx controls the lifetime of the returned stream.
 // cachedBP is an optional cached blueprint to avoid re-scanning headers.
-func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interface{}) (ReadSeekCloser, string, int64, interface{}, error) {
+// password is the archive password from the NZB head (e.g. <meta type="password">), if any.
+func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interface{}, password string) (ReadSeekCloser, string, int64, interface{}, error) {
 	// Fast path: use cached blueprint
 	if cachedBP != nil {
 		switch bp := cachedBP.(type) {
 		case *ArchiveBlueprint:
 			logger.Debug("Using cached RAR blueprint", "file", bp.MainFileName)
-			s, name, size, err := StreamFromBlueprint(ctx, bp)
+			s, name, size, err := StreamFromBlueprint(ctx, bp, password)
 			return s, name, size, bp, err
 		case *SevenZipBlueprint:
 			logger.Debug("Using cached 7z blueprint", "file", bp.MainFileName)
-			s, n, sz, err := Open7zStreamFromBlueprint(ctx, bp)
+			s, n, sz, err := Open7zStreamFromBlueprint(ctx, bp, password)
 			return s, n, sz, bp, err
 		case *DirectBlueprint:
 			if bp.FileIndex < len(files) {
@@ -78,11 +79,11 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 		for i, f := range files {
 			unpackables[i] = f
 		}
-		bp, err := ScanArchive(unpackables)
+		bp, err := ScanArchive(unpackables, password)
 		if err != nil {
 			logger.Warn("ScanArchive failed, falling back to other methods", "err", err)
 		} else {
-			s, name, size, err := StreamFromBlueprint(ctx, bp)
+			s, name, size, err := StreamFromBlueprint(ctx, bp, password)
 			if err != nil {
 				return nil, "", 0, nil, err
 			}
@@ -95,11 +96,11 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 		name := ExtractFilename(f.Name())
 		if strings.HasSuffix(strings.ToLower(name), Ext7z) || strings.Contains(strings.ToLower(name), ".7z.001") {
 			logger.Info("Detected 7z archive", "name", name)
-			newBp, err := CreateSevenZipBlueprint(files, name)
+			newBp, err := CreateSevenZipBlueprint(files, name, password)
 			if err != nil {
 				return nil, "", 0, nil, err
 			}
-			s, n, sz, err := Open7zStreamFromBlueprint(ctx, newBp)
+			s, n, sz, err := Open7zStreamFromBlueprint(ctx, newBp, password)
 			return s, n, sz, newBp, err
 		}
 	}
@@ -143,10 +144,10 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 		}
 
 		logger.Info("Attempting heuristic RAR scan on unknown files")
-		bp, err := ScanArchive(unpackables)
+		bp, err := ScanArchive(unpackables, password)
 		if err == nil {
 			logger.Info("Heuristic scan found RAR archive")
-			s, name, size, err := StreamFromBlueprint(ctx, bp)
+			s, name, size, err := StreamFromBlueprint(ctx, bp, password)
 			if err == nil {
 				return s, name, size, bp, nil
 			}

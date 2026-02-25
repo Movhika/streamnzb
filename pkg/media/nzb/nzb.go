@@ -76,6 +76,17 @@ func ParseFile(path string) (*NZB, error) {
 	return Parse(f)
 }
 
+// Password returns the archive password from the NZB head, if present.
+// Newznab-style NZBs may include <meta type="password">value</meta> in the head.
+func (n *NZB) Password() string {
+	for _, m := range n.Head.Meta {
+		if strings.EqualFold(m.Type, "password") {
+			return strings.TrimSpace(m.Value)
+		}
+	}
+	return ""
+}
+
 // Hash generates a unique hash for this NZB (for caching)
 func (n *NZB) Hash() string {
 	if len(n.Files) == 0 {
