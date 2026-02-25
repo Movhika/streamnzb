@@ -725,21 +725,11 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 			merged = filtered
 		}
 	}
-	// Sort: Avail first, then by score
-	if len(raw.CachedAvailable) > 0 {
-		sort.SliceStable(merged, func(i, j int) bool {
-			ci := merged[i].Release != nil && raw.CachedAvailable[merged[i].Release.DetailsURL]
-			cj := merged[j].Release != nil && raw.CachedAvailable[merged[j].Release.DetailsURL]
-			if ci != cj {
-				return ci && !cj
-			}
-			return streamScoreFromCandidate(merged[i]) > streamScoreFromCandidate(merged[j])
-		})
-	} else {
-		sort.Slice(merged, func(i, j int) bool {
-			return streamScoreFromCandidate(merged[i]) > streamScoreFromCandidate(merged[j])
-		})
-	}
+	// Sort by stream's score only. AvailNZB does not override the stream's priority: we only badge/serve
+	// [availNZB] when the stream's #1 choice happens to be AvailNZB-good.
+	sort.Slice(merged, func(i, j int) bool {
+		return streamScoreFromCandidate(merged[i]) > streamScoreFromCandidate(merged[j])
+	})
 
 	firstIsAvailGood := false
 	if len(merged) > 0 && merged[0].Release != nil && merged[0].Release.DetailsURL != "" {
