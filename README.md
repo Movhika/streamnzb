@@ -3,54 +3,30 @@
 [![Buy Me A Coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg)](https://buymeacoffee.com/gaisberg)
 [![Discord](https://img.shields.io/badge/discord-join-7289DA.svg?logo=discord&logoColor=white)](https://snzb.stream/discord)
 
-StreamNZB is a unified **Stremio Addon** and **Usenet Proxy** that pools multiple providers into a single, high-availability endpoint.
+StreamNZB exists so me and my wife only see streams that can actually play. It checks availability before handing results to the client, so you don’t get a list of releases that then fail when you hit play. One app: Stremio addon, NNTP proxy, and indexer aggregation, all behind a single IP. No extra containers—just Usenet provider(s) and indexer(s).
 
-### ✨ Features
-*   **Stremio Integration**: Stream content directly from Usenet with availability caching.
-*   **AvailNZB**: Optional integration with the [AvailNZB](https://check.snzb.stream) community availability database for faster stream discovery and shared health reports.
-*   **Multiple Indexers**: Supports **NZBHydra2** and **Prowlarr** with parallel search aggregation.
-*   **Smart Pooling**: Aggregates connections from multiple Usenet providers.
-*   **Availability Checking**: Verifies article existence before attempting playback.
-*   **NNTP Proxy**: Exposes a standard NNTP server (default port 119) for use with SABnzbd or NZBGet.
-*   **Admin Authentication**: Secure admin login with password protection and session management.
-*   **Device Management**: Create multiple device accounts, each with their own Stremio manifest URL and customizable filters/sorting.
-*   **Per-Device Configuration**: Each device can have custom quality filters, codec preferences, and sorting rules.
-*   **Cross-Platform**: Runs on Docker, Windows, Linux, and macOS.
 
-### 🏗️ Architecture
+## What it does
 
-```mermaid
-graph TD
-    User["User / Stremio"] -->|HTTP| Addon
-    Downloader["SABnzbd / NZBGet"] -->|NNTP| Proxy
-    
-    subgraph "StreamNZB Core"
-        Addon["StreamNZB Addon"]
-        Proxy["StreamNZB Proxy"]
-    end
-    
-    Addon -->|Search| Aggregator["Indexer Aggregator"]
-    Aggregator --> Hydra["NZBHydra2"]
-    Aggregator --> Prowlarr["Prowlarr"]
-    Addon -->|Download| Provider1["Usenet Provider 1"]
-    Addon -->|Download| Provider2["Usenet Provider 2"]
-    Proxy -->|Download| Provider1
-    Proxy -->|Download| Provider2
-```
+- **Stremio & Nuvio addon** – Add the manifest URL in [Stremio](https://www.stremio.com) or [Nuvio](https://nuvioapp.space). Search from your indexers and stream from Usenet; results are validated so only playable streams are offered. If a bad egg slips through we failover to the next possible stream.
+- **NNTP proxy** – Standard NNTP (default port 119) for SABnzbd or NZBGet. Same provider pool as the addon.
+- **AvailNZB** – [AvailNZB](https://check.snzb.stream) integration: reuse other users’ availability checks and report your own so the shared DB stays useful.
+- **Devices** – Multiple “devices” (tokens), each with its own manifest URL and optional filters/sorting.
+- **Single binary** – Docker image or native Windows/Linux/macOS. No other containers required.
 
-### ✅ Prerequisites
-Before running StreamNZB, ensure you have:
-1.  **Usenet Provider(s)**: At least one active subscription (e.g., Newshosting, Eweka).
-2.  **Indexer Manager**: **NZBHydra2** OR **Prowlarr** (or both!) with your indexers configured.
-3.  **Stremio** (Optional): Required if you want to use the streaming capabilities. You can use StreamNZB solely as an NNTP proxy without Stremio.
 
-### 🚀 Running the Application
+## Release types we don’t support
 
-You can run StreamNZB using Docker or directly as a binary on your system.
+Streaming is done on-the-fly from archive segments. That only works when the inner file is stored uncompressed:
 
-#### 1. Docker (Recommended)
+- **Compressed RAR** – RAR must be STORE (no compression). Compressed RAR releases will not play.
+- **Compressed 7z** – Same idea: only uncompressed (copy/store) 7z content is streamable.
 
-**Using Docker Compose:**
+
+## Run it
+
+**Docker (recommended):**
+
 ```yaml
 services:
   streamnzb:
@@ -64,118 +40,29 @@ services:
       - /path/to/config:/app/data
 ```
 
-Alternatively you can set environment variables to configure the application on first startup, check .env.example for available variables.
+Or run the binary from the [releases](https://github.com/Gaisberg/streamnzb/releases) page (Windows, Linux, macOS). See `.env.example` for config via environment variables.
 
-#### 2. Windows / Linux / macOS (Binary)
+**First use:** Open `http://localhost:7000`. Default login is `admin` / `admin`; you’ll be asked to change the password. In **Settings** add at least one Usenet provider and one indexer. Create devices under **Settings → Devices** and use each device’s manifest URL in Stremio.
 
-1. **Download**: Get the latest release for your platform from the [Releases Page](https://github.com/Gaisberg/streamnzb/releases).
-2. **Run**: Start the binary.
 
-### ⚙️ Getting started
+## AvailNZB
 
-1. Once you've got StreamNZB running, you can access the web UI at `http://localhost:7000`.
+[AvailNZB](https://check.snzb.stream) is a community availability database. StreamNZB can skip re-checking releases that others have already verified and can report your playback success/failure so the data stays current. Official builds point at the project’s AvailNZB instance; to opt out, build the binary yourself.
 
-2. **First-time Setup**: On first launch, StreamNZB creates a default admin account:
-   - **Username**: `admin`
-   - **Password**: `admin`
-   - ⚠️ **Important**: You will be prompted to change this password on first login for security.
-   - This admin account is used to access the web dashboard and manage devices.
 
-3. **Accessing the Dashboard**: 
-   - Log in with your admin credentials
-   - The dashboard provides real-time statistics, provider status, and system logs
-   - Use the **Settings** icon to configure providers, indexers, filters, and devices
+## Troubleshooting
 
-4. **Device Management**:
-   - Navigate to **Settings → Devices** tab
-   - Create device accounts for different users or Stremio installations
-   - Each device gets a unique token and manifest URL
-   - Devices can have custom filters and sorting preferences
-   - Copy the manifest URL for each device to add it to Stremio
+If you’re stuck, hit me up on [Discord](https://snzb.stream/discord) or [GitHub issues](https://github.com/Gaisberg/streamnzb/issues) (they sync via [GitThread](https://gitthreadsync.snzb.stream/)). Include relevant log snippets from **Settings → Logs** and strip any sensitive data (API keys, hostnames, etc.) before posting.
 
-5. **Configuration**:
-   - You need at least one **Usenet Provider** and one **Indexer** to get started
-   - Configure providers in **Settings → Providers**
-   - Configure indexers in **Settings → Indexers** (supports NZBHydra2, Prowlarr, and internal indexers)
-   - Set global filters and sorting in **Settings → Filters** and **Settings → Sorting**
 
-### 📊 AvailNZB (Community availability database)
+## Support
 
-StreamNZB can use **[AvailNZB](https://check.snzb.stream)** to speed up stream discovery and contribute to a shared availability database:
+If StreamNZB is useful to you, you can support development here:
 
-- **What it does**: When enabled, StreamNZB checks AvailNZB for releases that others have already verified, so you can get playable streams without re-validating every release. It also reports success/failure for your providers so the database stays up to date.
-- **Where to find it**: [https://check.snzb.stream](https://check.snzb.stream)
+**[Buy Me A Coffee](https://buymeacoffee.com/gaisberg)**
 
-> [!TIP]
-> Use **Device Management** (Settings → Devices) to create separate accounts for different users or Stremio installations. Each device gets its own token and can have custom filters and sorting preferences.
 
-### 🔐 Authentication & Devices
+## Credits
 
-**Admin Account**
-- The admin account is created on first launch
-- Admin password can be changed in **Settings → General → Admin Password**
-- Admin session tokens persist across browser sessions (stored in localStorage)
-- Admin manifest URL is displayed in **Settings → General** (uses admin session token)
-
-**Device Accounts**
-- Create device accounts in **Settings → Devices**
-- Each device gets a unique token for accessing Stremio
-- Device tokens are permanent and don't expire
-- Each device can have custom filters and sorting preferences
-- Device manifest URLs follow the format: `{baseUrl}/{deviceToken}/manifest.json`
-- Regenerate device tokens if compromised
-- Delete devices when no longer needed
-
-**Security**
-- Admin accounts require password authentication
-- Device tokens provide secure access to Stremio without exposing admin credentials
-- Use device tokens instead of sharing admin credentials
-
-### ❓ Troubleshooting
-
-**"No streams were found" in Stremio**
-- Ensure your indexer URLs and API keys are correct in **Settings → Indexers**
-- Check if your Usenet providers are active and connected
-- Verify that `Validation Sample Size` is not too high (checking too many articles can timeout)
-- Check device-specific filters in **Settings → Devices** - they may be blocking results
-
-**Slow Downloads**
-- Ensure your system has sufficient bandwidth
-- Check provider connection limits in **Settings → Providers**
-
-## Troubleshooting Playback Issues
-**Why am I seeing a "Stream Unavailable" video instead of my movie?**
-A failure video plays when StreamNZB cannot play the selected content. Common causes:
-### Archive Issues
-- ❌ **Compressed archive** - Only uncompressed (STORE mode) archives work
-  - *Solution:* Try a different release or uploader
-- ❌ **Password-protected** - Encrypted archives aren't supported
-  - *Solution:* Avoid password-protected releases
-- ❌ **No video files** - Archive contains only samples/extras
-  - *Solution:* Verify NZB contents, select different result
-### Usenet Issues  
-- ❌ **Missing articles** - Content expired or incomplete
-  - *Solution:* Try newer release or add more providers
-- ❌ **Provider offline** - NNTP server unreachable
-  - *Solution:* Check provider status, verify credentials
-- ❌ **Connection limit** - Too many concurrent connections
-  - *Solution:* Reduce connection count in config
-### Network Issues
-- ❌ **Download errors** - Network interruption or corrupted data
-  - *Solution:* Retry playback or try different provider
-- ❌ **Timeout** - Very large archive taking too long to scan
-  - *Solution:* Try smaller release
-**Tip:** Check the logs (Settings → Logs) for specific error messages.
-
-### ☕ Support
-
-If you find this project useful and want to support its development, you can buy me a coffee:
-
-[**Buy Me A Coffee**](https://buymeacoffee.com/gaisberg)
-
-### 🛡️ Privacy & Community
-[AvailNZB](https://check.snzb.stream) is configured for official releases, to opt out build the binary yourself.
-
-### 📜 Credits
-
-This project incorporates logic and packages for archive decoding (RAR and 7z) from the [altmount](https://github.com/javi11/altmount) project by [javi11](https://github.com/javi11). Special thanks for the robust implementation of on-the-fly Usenet archive extraction.
+- [javi11](https://github.com/javi11) for Go-based RAR and 7z streaming ([altmount](https://github.com/javi11/altmount)).
+- [Cursor](https://cursor.com) for helping with the project.
