@@ -18,6 +18,7 @@ import (
 	"streamnzb/pkg/server/stremio"
 	"streamnzb/pkg/server/web"
 	"streamnzb/pkg/session"
+	"streamnzb/pkg/stream"
 	"streamnzb/pkg/usenet/nntp/proxy"
 
 	"github.com/joho/godotenv"
@@ -127,13 +128,22 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize device manager: %v", err))
 	}
 
+	stateMgr, err := persistence.GetManager(dataDir)
+	if err != nil {
+		initialization.WaitForInputAndExit(fmt.Errorf("failed to get state manager: %v", err))
+	}
+	streamManager, err := stream.GetManager(stateMgr)
+	if err != nil {
+		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize stream manager: %v", err))
+	}
+
 	stremioServer, err := stremio.NewServer(comp.Config, comp.Config.AddonBaseURL, comp.Config.AddonPort, comp.Indexer, comp.Validator,
-		sessionManager, comp.Triage, comp.AvailClient, comp.AvailNZBIndexerHosts, comp.TMDBClient, comp.TVDBClient, deviceManager, Version)
+		sessionManager, comp.Triage, comp.AvailClient, comp.AvailNZBIndexerHosts, comp.TMDBClient, comp.TVDBClient, deviceManager, streamManager, Version)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize Stremio server: %v", err))
 	}
 
-	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
+	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, streamManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
 	apiServer.SetIndexerCaps(comp.IndexerCaps)
 
 	// Set embedded web handler

@@ -264,7 +264,7 @@ export function SearchPage({ authToken, config, sendCommand, ws }) {
           <CardHeader>
             <CardTitle>{selected.title} {selected.year && `(${selected.year})`}</CardTitle>
             <CardDescription>
-              AvailNZB results appear first; validated streams stream in below (up to max_streams × 2). Open the addon in Stremio to play.
+              AvailNZB results appear first; stream results stream in below. Open the addon in Stremio to play.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

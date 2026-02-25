@@ -44,10 +44,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       proxy_auth_user: '',
       proxy_auth_pass: '',
       cache_ttl_seconds: 300,
-      validation_sample_size: 5,
-      max_streams: 5,
-      max_streams_per_resolution: 0,
-      enable_stream_failover: true,
       search_result_limit: 1000,
       include_year_in_search: true,
       search_title_language: '',
@@ -170,10 +166,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
         cache_ttl_seconds: Number(initialConfig.cache_ttl_seconds),
-        validation_sample_size: Number(initialConfig.validation_sample_size),
         max_concurrent_validations: Number(initialConfig.max_concurrent_validations),
-        max_streams_per_resolution: Number(initialConfig.max_streams_per_resolution || 0),
-        enable_stream_failover: initialConfig.enable_stream_failover !== false,
         search_result_limit: Number(initialConfig.search_result_limit || 1000),
         include_year_in_search: initialConfig.include_year_in_search !== false,
         search_title_language: initialConfig.search_title_language ?? '',
@@ -455,21 +448,10 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
             <Card>
               <CardHeader>
                 <CardTitle>Advanced</CardTitle>
-                <CardDescription>Log level, cache, validation, stream limits, and failover.</CardDescription>
+                <CardDescription>Log level, cache, and validation.</CardDescription>
               </CardHeader>
               <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <FormField control={control} name="enable_stream_failover" render={({ field }) => (
-                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                    <div className="space-y-0.5">
-                      <FormLabel className="text-sm font-medium">Auto-failover to next stream</FormLabel>
-                      <p className="text-xs text-muted-foreground">When a stream fails, try the next in the priority list instead of showing the error video.</p>
-                    </div>
-                    <FormControl>
-                      <Switch checked={field.value} onCheckedChange={field.onChange} />
-                    </FormControl>
-                  </FormItem>
-                )} />
                 <FormField control={control} name="log_level" render={({ field }) => (
                   <FormItem className="space-y-2">
                     <FormLabel className="text-sm font-medium">Log Level</FormLabel>
@@ -495,39 +477,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                     <FormDescription>Cache duration in seconds (default: 300)</FormDescription>
                     <FormMessage />
                     <EnvOverrideNote show={envOverrides.includes('cache_ttl_seconds')} />
-                  </FormItem>
-                )} />
-                <FormField control={control} name="validation_sample_size" render={({ field }) => (
-                  <FormItem className="space-y-2">
-                    <FormLabel className="text-sm font-medium flex items-center gap-2">
-                      Validation Sample Size
-                      <TooltipProvider><Tooltip><TooltipTrigger asChild><Info className="h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger><TooltipContent className="max-w-xs"><p>Number of segments to check per NZB. Higher = more accurate, slower.</p></TooltipContent></Tooltip></TooltipProvider>
-                    </FormLabel>
-                    <FormControl><Input type="number" min="1" max="20" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
-                    <FormDescription>Segments to check per NZB (default: 5)</FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={control} name="max_streams" render={({ field }) => (
-                  <FormItem className="space-y-2">
-                    <FormLabel className="text-sm font-medium flex items-center gap-2">
-                      Max Streams
-                      <TooltipProvider><Tooltip><TooltipTrigger asChild><Info className="h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger><TooltipContent className="max-w-xs"><p>Maximum streams to return per search.</p></TooltipContent></Tooltip></TooltipProvider>
-                    </FormLabel>
-                    <FormControl><Input type="number" min="1" max="20" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
-                    <FormDescription>Number of streams to return (default: 6)</FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={control} name="max_streams_per_resolution" render={({ field }) => (
-                  <FormItem className="space-y-2">
-                    <FormLabel className="text-sm font-medium flex items-center gap-2">
-                      Max Streams per Resolution
-                      <TooltipProvider><Tooltip><TooltipTrigger asChild><Info className="h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger><TooltipContent className="max-w-xs"><p>Limit streams per resolution. 0 = disabled.</p></TooltipContent></Tooltip></TooltipProvider>
-                    </FormLabel>
-                    <FormControl><Input type="number" min="0" max="10" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
-                    <FormDescription>Max streams per resolution (0 = disabled, default: 0)</FormDescription>
-                    <FormMessage />
                   </FormItem>
                 )} />
               </div>
@@ -579,24 +528,10 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           </div>
         )}
 
-        {activePage === 'filters' && (
-          <div className="space-y-4">
-            <FiltersSection control={control} watch={form.watch} />
-          </div>
-        )}
-
-        {activePage === 'sorting' && (
-          <div className="space-y-4">
-            <SortingSection control={control} watch={form.watch} />
-          </div>
-        )}
-
         {activePage === 'devices' && (
           <div className="space-y-4">
             <DeviceManagement
               ref={deviceManagementRef}
-              globalFilters={getValues('filters')}
-              globalSorting={getValues('sorting')}
               sendCommand={sendCommand}
               ws={window.ws}
             />

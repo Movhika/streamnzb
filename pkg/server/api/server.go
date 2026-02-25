@@ -16,6 +16,7 @@ import (
 	"streamnzb/pkg/search/triage"
 	"streamnzb/pkg/server/stremio"
 	"streamnzb/pkg/services/availnzb"
+	"streamnzb/pkg/stream"
 	"streamnzb/pkg/services/metadata/tmdb"
 	"streamnzb/pkg/services/metadata/tvdb"
 	"streamnzb/pkg/session"
@@ -36,6 +37,7 @@ type Server struct {
 	indexer        indexer.Indexer
 	indexerCaps    map[string]*indexer.Caps
 	deviceManager  *auth.DeviceManager
+	streamManager  *stream.Manager
 	app            *app.App
 
 	availNZBURL    string
@@ -58,12 +60,12 @@ type Client struct {
 }
 
 // NewServer creates a new API server
-func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
-	return NewServerWithApp(cfg, pools, sessMgr, strmServer, indexer, deviceManager, nil, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey)
+func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, streamManager *stream.Manager, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
+	return NewServerWithApp(cfg, pools, sessMgr, strmServer, indexer, deviceManager, streamManager, nil, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey)
 }
 
 // NewServerWithApp creates a new API server with App for granular reload
-func NewServerWithApp(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, a *app.App, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
+func NewServerWithApp(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, streamManager *stream.Manager, a *app.App, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
 	// Build streaming pools list from map (initial)
 	var list []*nntp.ClientPool
 	for _, p := range pools {
@@ -78,6 +80,7 @@ func NewServerWithApp(cfg *config.Config, pools map[string]*nntp.ClientPool, ses
 		strmServer:     strmServer,
 		indexer:        indexer,
 		deviceManager:  deviceManager,
+		streamManager:  streamManager,
 		app:            a,
 		availNZBURL:    availNZBURL,
 		availNZBAPIKey: availNZBAPIKey,
@@ -202,7 +205,7 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 
 	logger.SetLevel(comp.Config.LogLevel)
 	if s.strmServer != nil {
-		s.strmServer.Reload(comp.Config, comp.Config.AddonBaseURL, comp.Indexer, comp.Validator, comp.Triage, comp.AvailClient, comp.AvailNZBIndexerHosts, comp.TMDBClient, comp.TVDBClient, s.deviceManager)
+		s.strmServer.Reload(comp.Config, comp.Config.AddonBaseURL, comp.Indexer, comp.Validator, comp.Triage, comp.AvailClient, comp.AvailNZBIndexerHosts, comp.TMDBClient, comp.TVDBClient, s.deviceManager, s.streamManager)
 	}
 }
 
@@ -281,6 +284,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/tmdb/search", authMiddleware(http.HandlerFunc(s.handleTMDBSearch)))
 	mux.Handle("/api/streams", authMiddleware(http.HandlerFunc(s.handleStreams)))
 	mux.Handle("/api/streams/avail", authMiddleware(http.HandlerFunc(s.handleStreamsAvail)))
+	mux.Handle("/api/stream/config", authMiddleware(http.HandlerFunc(s.handleStreamConfig)))
+	mux.Handle("/api/stream/configs/", authMiddleware(http.HandlerFunc(s.handleStreamConfigByID)))
+	mux.Handle("/api/stream/configs", authMiddleware(http.HandlerFunc(s.handleStreamConfigs)))
 
 	return mux
 }

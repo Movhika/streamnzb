@@ -62,7 +62,12 @@ func (r *Reporter) report(sess *session.Session, available bool) {
 		}
 		meta := ReportMeta{ReleaseName: sess.ReportReleaseName(), Size: sess.ReportSize()}
 		if ids := sess.ContentIDs; ids != nil {
-			if ids.ImdbID != "" {
+			// Prefer TV (TvdbID + season/episode) when we have episode context, so reports aren't sent as movie-only when both are set.
+			if ids.TvdbID != "" && (ids.Season > 0 || ids.Episode > 0) {
+				meta.TvdbID = ids.TvdbID
+				meta.Season = ids.Season
+				meta.Episode = ids.Episode
+			} else if ids.ImdbID != "" {
 				meta.ImdbID = ids.ImdbID
 			} else if ids.TvdbID != "" {
 				meta.TvdbID = ids.TvdbID

@@ -8,8 +8,7 @@ const pageTitles = {
   general: "General",
   indexers: "Indexers",
   providers: "Providers",
-  filters: "Filters",
-  sorting: "Sorting",
+  streams: "Streams",
   devices: "Devices",
 }
 

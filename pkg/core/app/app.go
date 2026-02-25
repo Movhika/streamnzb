@@ -78,11 +78,12 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 	}
 
 	cacheTTL := time.Duration(cfg.CacheTTLSeconds) * time.Second
+	const validationSampleSize = 5
 	validator := validation.NewChecker(
 		base.ProviderPools,
 		base.ProviderOrder,
 		cacheTTL,
-		cfg.ValidationSampleSize,
+		validationSampleSize,
 		6,
 	)
 	triageSvc := triage.NewService(&cfg.Filters, cfg.Sorting)
@@ -120,7 +121,7 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 type ReloadScope int
 
 const (
-	ReloadConfigOnly ReloadScope = iota // Filters, Sorting, MaxStreams, LogLevel - no NNTP/indexer restart
+	ReloadConfigOnly ReloadScope = iota // Filters, Sorting, LogLevel - no NNTP/indexer restart
 	ReloadIndexers                      // Indexers changed
 	ReloadProviders                     // Providers changed - full pool rebuild
 	ReloadProxy                         // Proxy settings changed
@@ -139,8 +140,7 @@ func ConfigChanged(old, new_ *config.Config) ReloadScope {
 		old.ProxyPort != new_.ProxyPort ||
 		old.ProxyAuthUser != new_.ProxyAuthUser ||
 		old.ProxyAuthPass != new_.ProxyAuthPass
-	validationChanged := old.CacheTTLSeconds != new_.CacheTTLSeconds ||
-		old.ValidationSampleSize != new_.ValidationSampleSize
+	validationChanged := old.CacheTTLSeconds != new_.CacheTTLSeconds
 
 	if providersChanged || indexersChanged {
 		return ReloadFull

@@ -195,11 +195,7 @@ type Config struct {
 	AdminToken              string `json:"admin_token"` // Single token for dashboard + streaming; do not send to API clients
 
 	// Validation settings
-	CacheTTLSeconds         int `json:"cache_ttl_seconds"`
-	ValidationSampleSize    int `json:"validation_sample_size"`
-	MaxStreams              int `json:"max_streams"`                // Max successful streams to return per search
-	MaxStreamsPerResolution int `json:"max_streams_per_resolution"` // Max streams per resolution (0 = disabled, use MaxStreams behavior)
-	EnableStreamFailover    bool `json:"enable_stream_failover"`    // When a stream fails, redirect to next in priority list (default true)
+	CacheTTLSeconds int `json:"cache_ttl_seconds"`
 
 	// NNTP Providers
 	Providers []Provider `json:"providers"`
@@ -244,9 +240,6 @@ func (c *Config) GetSearchTitleLanguage() string { return c.SearchTitleLanguage 
 
 // GetSearchTitleNormalize returns the global default for normalizing movie title (for search.RunIndexerSearches fallback).
 func (c *Config) GetSearchTitleNormalize() bool { return c.SearchTitleNormalize }
-
-// GetEnableStreamFailover returns whether to redirect to the next stream in priority list on failure (default true).
-func (c *Config) GetEnableStreamFailover() bool { return c.EnableStreamFailover }
 
 // MergeIndexerSearch merges per-indexer config, per-device override, and global defaults (override wins over indexer wins over global).
 // Returns a fully populated IndexerSearchConfig for use when building the search request per indexer.
@@ -368,12 +361,8 @@ func Load() (*Config, error) {
 		AddonBaseURL:            "http://localhost:7000",
 		LogLevel:                "INFO",
 		AdminUsername:           "admin",
-		CacheTTLSeconds:         300,
-		ValidationSampleSize:    5,
-		MaxStreams:              5,
-		MaxStreamsPerResolution: 0, // 0 = disabled
-		EnableStreamFailover:    true,
-		SearchResultLimit:       1000,
+		CacheTTLSeconds:  300,
+		SearchResultLimit: 1000,
 		IncludeYearInSearch:     true,
 		SearchTitleLanguage:     "",
 		SearchTitleNormalize:    false,
@@ -573,9 +562,6 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	if keySet(keys, env.KeyCacheTTL) {
 		cfg.CacheTTLSeconds = o.CacheTTLSeconds
 	}
-	if keySet(keys, env.KeyValidationSize) {
-		cfg.ValidationSampleSize = o.ValidationSampleSize
-	}
 	if keySet(keys, env.KeyProxyPort) {
 		cfg.ProxyPort = o.ProxyPort
 	}
@@ -668,8 +654,6 @@ func CopyEnvOverridesFrom(src, dst *Config) {
 			dst.LogLevel = src.LogLevel
 		case env.KeyCacheTTL:
 			dst.CacheTTLSeconds = src.CacheTTLSeconds
-		case env.KeyValidationSize:
-			dst.ValidationSampleSize = src.ValidationSampleSize
 		case env.KeyProxyPort:
 			dst.ProxyPort = src.ProxyPort
 		case env.KeyProxyHost:

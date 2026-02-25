@@ -1,7 +1,7 @@
 import {
-  LayoutDashboard, Settings, Server, Globe, Filter, ArrowUpDown,
+  LayoutDashboard, Settings, Server, Globe, Radio,
   MonitorSmartphone, LogOut, Tv, Clipboard, Check,
-  Sun, Moon, Monitor, Zap, FileText, Coffee, Search
+  Sun, Moon, Monitor, Zap, FileText, Coffee
 } from "lucide-react"
 import {
   Sidebar,
@@ -33,8 +33,7 @@ const navSettings = [
   { id: "general", title: "General", icon: Settings },
   { id: "indexers", title: "Indexers", icon: Server },
   { id: "providers", title: "Providers", icon: Globe },
-  { id: "filters", title: "Filters", icon: Filter },
-  { id: "sorting", title: "Sorting", icon: ArrowUpDown },
+  { id: "streams", title: "Streams", icon: Radio },
   { id: "devices", title: "Devices", icon: MonitorSmartphone },
 ]
 

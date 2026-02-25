@@ -8,6 +8,7 @@ import { SiteHeader } from "@/components/SiteHeader"
 import { DashboardPage } from "@/components/DashboardPage"
 import { SearchPage } from "@/components/SearchPage"
 import { LogsPage } from "@/components/LogsPage"
+import { StreamsPage } from "@/components/StreamsPage"
 import { AlertCircle, Loader2 } from "lucide-react"
 
 const MAX_HISTORY = 60
@@ -341,7 +342,7 @@ function App() {
     </div>
   )
 
-  const settingsPages = ['general', 'indexers', 'providers', 'filters', 'sorting', 'devices']
+  const settingsPages = ['general', 'indexers', 'providers', 'streams', 'devices']
   const isSettingsPage = settingsPages.includes(activePage)
 
   return (
@@ -380,7 +381,12 @@ function App() {
           {activePage === 'logs' && (
             <LogsPage logs={logs} />
           )}
-          {isSettingsPage && (
+          {activePage === 'streams' && (
+            <div className="pt-4 md:pt-5 pb-3 px-4 lg:px-5">
+              <StreamsPage />
+            </div>
+          )}
+          {isSettingsPage && activePage !== 'streams' && (
             <div className="pt-4 md:pt-5 pb-3 px-4 lg:px-5">
               <Settings
                 initialConfig={config}

@@ -343,7 +343,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 				return
 			}
 			cacheTTL := time.Duration(newCfg.CacheTTLSeconds) * time.Second
-			validator := validation.NewChecker(base.ProviderPools, base.ProviderOrder, cacheTTL, newCfg.ValidationSampleSize, 6)
+			validator := validation.NewChecker(base.ProviderPools, base.ProviderOrder, cacheTTL, 5, 6)
 			triageService := triage.NewService(&base.Config.Filters, base.Config.Sorting)
 			s.mu.RLock()
 			availNZBURL := s.availNZBURL
@@ -781,17 +781,10 @@ func (s *Server) handleStreamSearchWS(client *Client, payload json.RawMessage) {
 	if contentType != "movie" && contentType != "series" {
 		return
 	}
-	maxStreams := s.config.MaxStreams
-	if maxStreams <= 0 {
-		maxStreams = 6
-	}
-	cap := maxStreams * 2
-	if cap < 6 {
-		cap = 6
-	}
+	const streamResultCap = 12
 	var sent int
 	sink := func(stream stremio.Stream) bool {
-		if sent >= cap {
+		if sent >= streamResultCap {
 			return false
 		}
 		payload, err := json.Marshal(stream)
@@ -800,7 +793,7 @@ func (s *Server) handleStreamSearchWS(client *Client, payload json.RawMessage) {
 		}
 		trySendWS(client, WSMessage{Type: "stream_result", Payload: payload})
 		sent++
-		return sent < cap
+		return sent < streamResultCap
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
