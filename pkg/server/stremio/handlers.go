@@ -1,6 +1,7 @@
 package stremio
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/md5"
@@ -1462,8 +1463,10 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
+	bufW := newBufferedResponseWriter(w, 256*1024) // 256KB buffer to smooth NNTP→client throughput
+	defer bufW.Flush()
 
-	http.ServeContent(w, r, name, time.Time{}, monitoredStream)
+	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
 	logger.Debug("Finished serving media", "session", sessionID)
 }
 
@@ -1599,7 +1602,9 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Accept-Ranges", "bytes")
 	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
-	http.ServeContent(w, r, name, time.Time{}, monitoredStream)
+	bufW := newBufferedResponseWriter(w, 256*1024)
+	defer bufW.Flush()
+	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
 
 	logger.Debug("Finished serving debug media")
 }
@@ -1691,6 +1696,31 @@ func (w *writeTimeoutResponseWriter) Write(p []byte) (n int, err error) {
 		return 0, setErr
 	}
 	return w.ResponseWriter.Write(p)
+}
+
+// bufferedResponseWriter wraps ResponseWriter with a bufio.Writer to smooth throughput
+// when serving video (fewer small writes to the client, better MP4 playback).
+type bufferedResponseWriter struct {
+	http.ResponseWriter
+	bw *bufio.Writer
+}
+
+func newBufferedResponseWriter(w http.ResponseWriter, size int) *bufferedResponseWriter {
+	return &bufferedResponseWriter{
+		ResponseWriter: w,
+		bw:             bufio.NewWriterSize(w, size),
+	}
+}
+
+func (b *bufferedResponseWriter) Write(p []byte) (n int, err error) {
+	return b.bw.Write(p)
+}
+
+func (b *bufferedResponseWriter) Flush() {
+	_ = b.bw.Flush()
+	if f, ok := b.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // StreamMonitor wraps an io.ReadSeekCloser to provide keep-alive updates

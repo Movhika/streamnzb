@@ -314,32 +314,41 @@ func (s *VirtualStream) ensureReader(part *virtualPart, partIdx int) error {
 	// For loader.File volumes, ensure segment map and wait for the target segment before
 	// opening the reader, so the first Read() returns quickly instead of blocking in
 	// DownloadSegment (which can cause client timeouts and range=0- retries).
-	if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 {
-		logger.Trace("VirtualStream.ensureReader: RAR volume detected", "volOff", volOff)
+	if volFile, ok := part.VolFile.(*loader.File); ok {
 		if err := volFile.EnsureSegmentMap(); err == nil {
-			if segIdx := volFile.FindSegmentIndex(volOff); segIdx >= 0 {
+			segIdx := -1
+			if volOff > 0 {
+				segIdx = volFile.FindSegmentIndex(volOff)
+			} else {
+				segIdx = 0 // Prefetch first segment when starting from start of file (faster MP4 start)
+			}
+			if segIdx >= 0 {
 				if _, cached := volFile.GetCachedSegment(segIdx); !cached {
 					logger.Trace("VirtualStream.ensureReader: starting prefetch and waiting", "segIdx", segIdx, "volOff", volOff)
 					done := volFile.StartDownloadSegment(s.ctx, segIdx)
 					logger.Trace("VirtualStream.ensureReader: prefetch registered", "segIdx", segIdx, "hasChannel", done != nil)
+					wait := 15 * time.Second
+					if segIdx == 0 {
+						wait = 10 * time.Second // Shorter wait for segment 0 so playback starts sooner
+					}
 					select {
 					case <-done:
 						logger.Trace("VirtualStream.ensureReader: target segment ready", "segIdx", segIdx)
 					case <-s.ctx.Done():
-					case <-time.After(15 * time.Second):
+					case <-time.After(wait):
 						logger.Trace("VirtualStream.ensureReader: prefetch wait timeout", "segIdx", segIdx)
 					}
 				} else {
 					logger.Trace("VirtualStream.ensureReader: segment already cached", "segIdx", segIdx)
 				}
-			} else {
+			} else if volOff > 0 {
 				logger.Trace("VirtualStream.ensureReader: segment index not found", "volOff", volOff)
 			}
 		} else {
 			logger.Trace("VirtualStream.ensureReader: EnsureSegmentMap failed", "err", err)
 		}
 	} else {
-		logger.Trace("VirtualStream.ensureReader: not RAR volume or volOff=0", "isLoaderFile", ok, "volOff", volOff)
+		logger.Trace("VirtualStream.ensureReader: not RAR volume", "volOff", volOff)
 	}
 
 	logger.Trace("VirtualStream.ensureReader: opening reader", "partIdx", partIdx, "volOff", volOff)
