@@ -19,10 +19,19 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
   const globalConfig = globalConfigProp ?? null
   const hasLoadedRef = React.useRef(false)
 
-  useImperativeHandle(ref, () => ({
-    getDeviceConfigs: () => ({}),
-    getUserConfigs: () => ({})
-  }))
+  useImperativeHandle(ref, () => {
+    const buildConfigs = () => {
+      const out = {}
+      devices.forEach((d) => {
+        out[d.username] = { indexer_overrides: d.indexer_overrides ?? {} }
+      })
+      return out
+    }
+    return {
+      getDeviceConfigs: buildConfigs,
+      getUserConfigs: buildConfigs
+    }
+  }, [devices])
 
   // Fetch devices list (uses API via sendCommand)
   const fetchDevices = useCallback((showLoader = true) => {
@@ -167,7 +176,7 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardDescription>
-              Create device tokens for Stremio access. Filters and sorting are configured under Streams.
+              Create device tokens for Stremio access. Per-indexer overrides can be set per device; streams are configured under Streams.
             </CardDescription>
           </div>
           <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>

@@ -81,8 +81,13 @@ func main() {
 		dataDir, _ = os.Getwd()
 	}
 
+	stateMgr, err := persistence.GetManager(dataDir)
+	if err != nil {
+		initialization.WaitForInputAndExit(fmt.Errorf("failed to get state manager: %v", err))
+	}
+
 	// Migrate admin from state.json to config.json (one-time)
-	if stateMgr, err := persistence.GetManager(dataDir); err == nil {
+	{
 		var stateAdmin struct {
 			PasswordHash       string `json:"password_hash"`
 			MustChangePassword bool   `json:"must_change_password"`
@@ -106,6 +111,68 @@ func main() {
 		}
 	}
 
+	// Migrate devices and streams from state.json to config.json (one-time)
+	{
+		if len(cfg.Devices) == 0 {
+			var stateDevices map[string]*auth.Device
+			if found, _ := stateMgr.Get("devices", &stateDevices); found && len(stateDevices) > 0 {
+				cfg.Devices = make(map[string]*config.DeviceEntry)
+				for k, d := range stateDevices {
+					if d == nil {
+						continue
+					}
+					ov := d.IndexerOverrides
+					if ov == nil {
+						ov = make(map[string]config.IndexerSearchConfig)
+					}
+					cfg.Devices[k] = &config.DeviceEntry{
+						Username:         d.Username,
+						Token:            d.Token,
+						IndexerOverrides: ov,
+					}
+				}
+				if err := cfg.Save(); err != nil {
+					logger.Warn("Failed to save config after devices migration", "err", err)
+				} else {
+					stateMgr.Delete("devices")
+					stateMgr.Delete("users")
+					_ = stateMgr.Flush()
+					logger.Info("Migrated devices from state.json to config.json")
+				}
+			}
+		}
+		if len(cfg.Streams) == 0 {
+			var stateStreams []*stream.Stream
+			if found, _ := stateMgr.Get("streams", &stateStreams); found && len(stateStreams) > 0 {
+				cfg.Streams = make([]*config.StreamEntry, 0, len(stateStreams))
+				for _, s := range stateStreams {
+					if s == nil || s.ID == "" {
+						continue
+					}
+					ov := s.IndexerOverrides
+					if ov == nil {
+						ov = make(map[string]config.IndexerSearchConfig)
+					}
+					cfg.Streams = append(cfg.Streams, &config.StreamEntry{
+						ID:               s.ID,
+						Name:             s.Name,
+						Filters:          s.Filters,
+						Sorting:          s.Sorting,
+						IndexerOverrides: ov,
+						ShowAllStream:    s.ShowAllStream,
+					})
+				}
+				if err := cfg.Save(); err != nil {
+					logger.Warn("Failed to save config after streams migration", "err", err)
+				} else {
+					stateMgr.Delete("streams")
+					_ = stateMgr.Flush()
+					logger.Info("Migrated streams from state.json to config.json")
+				}
+			}
+		}
+	}
+
 	// Centralized app container - builds all components
 	application := app.New()
 	comp, err := application.Build(cfg, app.BuildOpts{
@@ -123,16 +190,12 @@ func main() {
 	sessionManager := session.NewManager(comp.StreamingPools, 30*time.Minute)
 	logger.Info("Session manager initialized", "ttl", 30*time.Minute)
 
-	deviceManager, err := auth.GetDeviceManager(dataDir)
+	saveConfig := func() error { return cfg.Save() }
+	deviceManager, err := auth.NewDeviceManagerFromConfig(cfg, saveConfig)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize device manager: %v", err))
 	}
-
-	stateMgr, err := persistence.GetManager(dataDir)
-	if err != nil {
-		initialization.WaitForInputAndExit(fmt.Errorf("failed to get state manager: %v", err))
-	}
-	streamManager, err := stream.GetManager(stateMgr)
+	streamManager, err := stream.NewManagerFromConfig(cfg, saveConfig)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize stream manager: %v", err))
 	}

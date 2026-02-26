@@ -52,8 +52,6 @@ func (s *Server) handleDevicesList(w http.ResponseWriter, r *http.Request) {
 		list = append(list, map[string]interface{}{
 			"username":          d.Username,
 			"token":             d.Token,
-			"filters":           d.Filters,
-			"sorting":           d.Sorting,
 			"indexer_overrides": d.IndexerOverrides,
 		})
 	}
@@ -129,8 +127,6 @@ func (s *Server) handleDeviceByUsername(w http.ResponseWriter, r *http.Request) 
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"username":          d.Username,
 			"token":             d.Token,
-			"filters":           d.Filters,
-			"sorting":           d.Sorting,
 			"indexer_overrides": d.IndexerOverrides,
 		})
 	case http.MethodDelete:
@@ -180,8 +176,6 @@ func (s *Server) handlePutDeviceConfigs(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var deviceConfigs map[string]struct {
-		Filters          config.FilterConfig                  `json:"filters"`
-		Sorting          config.SortConfig                    `json:"sorting"`
 		IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&deviceConfigs); err != nil {
@@ -191,14 +185,6 @@ func (s *Server) handlePutDeviceConfigs(w http.ResponseWriter, r *http.Request) 
 	var errors []string
 	for username, dc := range deviceConfigs {
 		if username == s.config.GetAdminUsername() {
-			continue
-		}
-		if err := s.deviceManager.UpdateDeviceFilters(username, dc.Filters); err != nil {
-			errors = append(errors, fmt.Sprintf("Failed to update filters for %s: %v", username, err))
-			continue
-		}
-		if err := s.deviceManager.UpdateDeviceSorting(username, dc.Sorting); err != nil {
-			errors = append(errors, fmt.Sprintf("Failed to update sorting for %s: %v", username, err))
 			continue
 		}
 		if err := s.deviceManager.UpdateDeviceIndexerOverrides(username, dc.IndexerOverrides); err != nil {

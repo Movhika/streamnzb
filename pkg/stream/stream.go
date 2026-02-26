@@ -33,14 +33,16 @@ type Stream struct {
 	ShowAllStream bool `json:"show_all_stream"`
 }
 
-// Manager loads and saves streams from state. For v1 we have one global stream.
+// Manager loads and saves streams from config or state.
 type Manager struct {
 	mu      sync.RWMutex
-	streams map[string]*Stream // id -> stream
-	manager *persistence.StateManager
+	streams map[string]*Stream
+	manager *persistence.StateManager // nil when using config
+	cfg     *config.Config            // nil when using state
+	saveFn  func() error
 }
 
-// GetManager returns a stream manager using the same state as the rest of the app.
+// GetManager returns a stream manager using state.json.
 func GetManager(sm *persistence.StateManager) (*Manager, error) {
 	m := &Manager{
 		streams: make(map[string]*Stream),
@@ -52,9 +54,49 @@ func GetManager(sm *persistence.StateManager) (*Manager, error) {
 	return m, nil
 }
 
+// NewManagerFromConfig creates a stream manager backed by config (streams in config.json).
+func NewManagerFromConfig(cfg *config.Config, saveFn func() error) (*Manager, error) {
+	if cfg.Streams == nil {
+		cfg.Streams = []*config.StreamEntry{}
+	}
+	m := &Manager{
+		streams: make(map[string]*Stream),
+		cfg:     cfg,
+		saveFn:  saveFn,
+	}
+	if err := m.load(); err != nil {
+		return nil, fmt.Errorf("load streams from config: %w", err)
+	}
+	return m, nil
+}
+
 func (m *Manager) load() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.cfg != nil {
+		m.streams = make(map[string]*Stream)
+		for _, e := range m.cfg.Streams {
+			if e == nil || e.ID == "" {
+				continue
+			}
+			m.streams[e.ID] = streamFromEntry(e)
+		}
+		if len(m.streams) == 0 {
+			global := &Stream{
+				ID:      GlobalStreamID,
+				Name:    GlobalStreamName,
+				Filters: config.DefaultFilterConfig(),
+				Sorting: config.DefaultSortConfig(),
+			}
+			m.streams[GlobalStreamID] = global
+			if err := m.saveLocked(); err != nil {
+				return err
+			}
+			logger.Info("Bootstrapped global stream", "name", GlobalStreamName)
+		}
+		return nil
+	}
 
 	var list []*Stream
 	found, err := m.manager.Get("streams", &list)
@@ -70,7 +112,6 @@ func (m *Manager) load() error {
 		}
 	}
 	if len(m.streams) == 0 {
-		// Bootstrap global stream with default filters/sorting
 		global := &Stream{
 			ID:      GlobalStreamID,
 			Name:    GlobalStreamName,
@@ -86,7 +127,47 @@ func (m *Manager) load() error {
 	return nil
 }
 
+func streamFromEntry(e *config.StreamEntry) *Stream {
+	s := &Stream{
+		ID:             e.ID,
+		Name:           e.Name,
+		Filters:        e.Filters,
+		Sorting:        e.Sorting,
+		ShowAllStream:  e.ShowAllStream,
+		IndexerOverrides: e.IndexerOverrides,
+	}
+	if s.IndexerOverrides == nil {
+		s.IndexerOverrides = make(map[string]config.IndexerSearchConfig)
+	}
+	return s
+}
+
+func entryFromStream(s *Stream) *config.StreamEntry {
+	e := &config.StreamEntry{
+		ID:               s.ID,
+		Name:             s.Name,
+		Filters:          s.Filters,
+		Sorting:          s.Sorting,
+		IndexerOverrides: s.IndexerOverrides,
+		ShowAllStream:    s.ShowAllStream,
+	}
+	if e.IndexerOverrides == nil {
+		e.IndexerOverrides = make(map[string]config.IndexerSearchConfig)
+	}
+	return e
+}
+
 func (m *Manager) saveLocked() error {
+	if m.cfg != nil {
+		m.cfg.Streams = make([]*config.StreamEntry, 0, len(m.streams))
+		for _, s := range m.streams {
+			m.cfg.Streams = append(m.cfg.Streams, entryFromStream(s))
+		}
+		if m.saveFn != nil {
+			return m.saveFn()
+		}
+		return nil
+	}
 	list := make([]*Stream, 0, len(m.streams))
 	for _, s := range m.streams {
 		list = append(list, s)

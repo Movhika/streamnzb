@@ -213,8 +213,31 @@ type Config struct {
 	// TVDB Settings
 	TVDBAPIKey string `json:"-"`
 
+	// Devices (dashboard/Stremio tokens; persisted in config.json)
+	Devices map[string]*DeviceEntry `json:"devices,omitempty"`
+
+	// Streams (playback configs; persisted in config.json)
+	Streams []*StreamEntry `json:"streams,omitempty"`
+
 	// Internal - where was this config loaded from?
 	LoadedPath string `json:"-"`
+}
+
+// DeviceEntry is the persisted shape of a device (auth.Device) in config.json.
+type DeviceEntry struct {
+	Username         string                           `json:"username"`
+	Token            string                           `json:"token"`
+	IndexerOverrides map[string]IndexerSearchConfig   `json:"indexer_overrides,omitempty"`
+}
+
+// StreamEntry is the persisted shape of a stream in config.json (mirrors stream.Stream).
+type StreamEntry struct {
+	ID                string                           `json:"id"`
+	Name              string                           `json:"name"`
+	Filters           FilterConfig                     `json:"filters"`
+	Sorting           SortConfig                       `json:"sorting"`
+	IndexerOverrides  map[string]IndexerSearchConfig   `json:"indexer_overrides,omitempty"`
+	ShowAllStream     bool                             `json:"show_all_stream"`
 }
 
 // GetIncludeYearInSearch returns the default for including year in movie search (used when no per-indexer config).

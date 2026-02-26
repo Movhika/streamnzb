@@ -11,21 +11,21 @@ import (
 	"sync"
 )
 
-// Device represents a device account
+// Device represents a device account (token-based auth; optional per-indexer overrides).
 type Device struct {
-	Username        string                           `json:"username"`
-	Token           string                           `json:"token"`
-	Filters         config.FilterConfig              `json:"filters"`
-	Sorting         config.SortConfig                `json:"sorting"`
-	IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides"` // per-indexer overrides; key = indexer name
+	Username         string                                   `json:"username"`
+	Token            string                                   `json:"token"`
+	IndexerOverrides map[string]config.IndexerSearchConfig    `json:"indexer_overrides"` // per-indexer overrides; key = indexer name
 }
 
 // DeviceManager handles device storage and authentication.
-// Admin credentials and single admin token are stored in config, not state.
+// Storage is either config-backed (cfg != nil) or state.json-backed (manager != nil).
 type DeviceManager struct {
 	mu      sync.RWMutex
-	devices map[string]*Device // username -> Device (excludes admin)
-	manager *persistence.StateManager
+	devices map[string]*Device
+	manager *persistence.StateManager // nil when using config
+	cfg     *config.Config           // nil when using state
+	saveFn  func() error             // save config when using cfg
 }
 
 var globalDeviceManager *DeviceManager
@@ -58,32 +58,91 @@ func GetDeviceManager(dataDir string) (*DeviceManager, error) {
 	return dm, nil
 }
 
-// load loads devices from persistent storage
+// NewDeviceManagerFromConfig creates a device manager backed by config (devices in config.json).
+// saveFn is called when devices are updated (e.g. cfg.Save).
+func NewDeviceManagerFromConfig(cfg *config.Config, saveFn func() error) (*DeviceManager, error) {
+	deviceManagerMu.Lock()
+	defer deviceManagerMu.Unlock()
+
+	if globalDeviceManager != nil {
+		return globalDeviceManager, nil
+	}
+
+	if cfg.Devices == nil {
+		cfg.Devices = make(map[string]*config.DeviceEntry)
+	}
+
+	dm := &DeviceManager{
+		devices: make(map[string]*Device),
+		cfg:     cfg,
+		saveFn:  saveFn,
+	}
+	if err := dm.load(); err != nil {
+		return nil, fmt.Errorf("failed to load devices from config: %w", err)
+	}
+	globalDeviceManager = dm
+	return dm, nil
+}
+
+// load loads devices from config or state
 func (dm *DeviceManager) load() error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	// Try loading from "devices" first, fallback to "users" for migration
+	if dm.cfg != nil {
+		dm.devices = make(map[string]*Device)
+		if dm.cfg.Devices != nil {
+			for k, e := range dm.cfg.Devices {
+				if e == nil {
+					continue
+				}
+				ov := e.IndexerOverrides
+				if ov == nil {
+					ov = make(map[string]config.IndexerSearchConfig)
+				}
+				dm.devices[k] = &Device{
+					Username:         e.Username,
+					Token:            e.Token,
+					IndexerOverrides: ov,
+				}
+			}
+		}
+		if _, exists := dm.devices["admin"]; exists {
+			delete(dm.devices, "admin")
+			dm.saveLocked()
+			logger.Info("Removed legacy admin from devices (admin is in config)")
+		}
+		return nil
+	}
+
 	var devices map[string]*Device
 	found, err := dm.manager.Get("devices", &devices)
 	if err != nil {
 		return err
 	}
-
 	if !found {
-		// Try migration from "users" to "devices"
 		var users map[string]*Device
 		if found, err := dm.manager.Get("users", &users); found && err == nil {
 			devices = users
-			// Save as "devices" for future use
 			dm.manager.Set("devices", devices)
 			logger.Info("Migrated users to devices in state.json")
 		}
 	}
-
 	if devices != nil {
-		dm.devices = devices
-		// Remove legacy "admin" from devices map if present (admin is now in config)
+		dm.devices = make(map[string]*Device)
+		for k, d := range devices {
+			if d == nil {
+				continue
+			}
+			dm.devices[k] = &Device{
+				Username:         d.Username,
+				Token:            d.Token,
+				IndexerOverrides: d.IndexerOverrides,
+			}
+			if dm.devices[k].IndexerOverrides == nil {
+				dm.devices[k].IndexerOverrides = make(map[string]config.IndexerSearchConfig)
+			}
+		}
 		if _, exists := dm.devices["admin"]; exists {
 			delete(dm.devices, "admin")
 			dm.saveLocked()
@@ -92,12 +151,29 @@ func (dm *DeviceManager) load() error {
 	} else {
 		dm.devices = make(map[string]*Device)
 	}
-
 	return nil
 }
 
-// saveLocked saves devices to persistent storage (caller must hold write lock, excludes admin)
+// saveLocked saves devices to config or state (caller must hold write lock)
 func (dm *DeviceManager) saveLocked() error {
+	if dm.cfg != nil {
+		dm.cfg.Devices = make(map[string]*config.DeviceEntry)
+		for k, d := range dm.devices {
+			ov := d.IndexerOverrides
+			if ov == nil {
+				ov = make(map[string]config.IndexerSearchConfig)
+			}
+			dm.cfg.Devices[k] = &config.DeviceEntry{
+				Username:         d.Username,
+				Token:            d.Token,
+				IndexerOverrides: ov,
+			}
+		}
+		if dm.saveFn != nil {
+			return dm.saveFn()
+		}
+		return nil
+	}
 	return dm.manager.Set("devices", dm.devices)
 }
 
@@ -134,10 +210,9 @@ func (dm *DeviceManager) Authenticate(loginUsername, password, adminUsername, ad
 			return nil, fmt.Errorf("invalid credentials")
 		}
 		return &Device{
-			Username: adminUsername,
-			Token:    adminToken,
-			Filters:  config.FilterConfig{},
-			Sorting:  config.SortConfig{},
+			Username:         adminUsername,
+			Token:            adminToken,
+			IndexerOverrides: nil,
 		}, nil
 	}
 
@@ -153,10 +228,9 @@ func (dm *DeviceManager) AuthenticateToken(token string, adminUsername, adminTok
 
 	if adminToken != "" && token == adminToken {
 		return &Device{
-			Username: adminUsername,
-			Token:    adminToken,
-			Filters:  config.FilterConfig{},
-			Sorting:  config.SortConfig{},
+			Username:         adminUsername,
+			Token:            adminToken,
+			IndexerOverrides: nil,
 		}, nil
 	}
 
@@ -207,12 +281,10 @@ func (dm *DeviceManager) GetAllDevices() []Device {
 		if device.Username == "admin" {
 			continue
 		}
-		// Return copy (Device struct no longer has PasswordHash or MustChangePassword)
 		devices = append(devices, Device{
-			Username: device.Username,
-			Token:    device.Token,
-			Filters:  device.Filters,
-			Sorting:  device.Sorting,
+			Username:         device.Username,
+			Token:            device.Token,
+			IndexerOverrides: device.IndexerOverrides,
 		})
 	}
 
@@ -246,10 +318,9 @@ func (dm *DeviceManager) CreateDevice(username, password string, adminUsername s
 	}
 
 	device := &Device{
-		Username: username,
-		Token:    token,
-		Filters:  config.DefaultFilterConfig(),
-		Sorting:  config.DefaultSortConfig(),
+		Username:         username,
+		Token:            token,
+		IndexerOverrides: make(map[string]config.IndexerSearchConfig),
 	}
 
 	dm.devices[username] = device
@@ -329,54 +400,6 @@ func (dm *DeviceManager) DeleteUser(username string) error {
 	return dm.DeleteDevice(username)
 }
 
-// UpdateDeviceFilters updates a device's filter configuration
-func (dm *DeviceManager) UpdateDeviceFilters(username string, filters config.FilterConfig) error {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
-
-	device, exists := dm.devices[username]
-	if !exists {
-		return fmt.Errorf("device not found")
-	}
-
-	device.Filters = filters
-
-	if err := dm.saveLocked(); err != nil {
-		return fmt.Errorf("failed to save device filters: %w", err)
-	}
-
-	return nil
-}
-
-// UpdateUserFilters is an alias for UpdateDeviceFilters for backwards compatibility
-func (dm *DeviceManager) UpdateUserFilters(username string, filters config.FilterConfig) error {
-	return dm.UpdateDeviceFilters(username, filters)
-}
-
-// UpdateDeviceSorting updates a device's sorting configuration
-func (dm *DeviceManager) UpdateDeviceSorting(username string, sorting config.SortConfig) error {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
-
-	device, exists := dm.devices[username]
-	if !exists {
-		return fmt.Errorf("device not found")
-	}
-
-	device.Sorting = sorting
-
-	if err := dm.saveLocked(); err != nil {
-		return fmt.Errorf("failed to save device sorting: %w", err)
-	}
-
-	return nil
-}
-
-// UpdateUserSorting is an alias for UpdateDeviceSorting for backwards compatibility
-func (dm *DeviceManager) UpdateUserSorting(username string, sorting config.SortConfig) error {
-	return dm.UpdateDeviceSorting(username, sorting)
-}
-
 // UpdateDeviceIndexerOverrides sets a device's per-indexer search overrides (key = indexer name).
 func (dm *DeviceManager) UpdateDeviceIndexerOverrides(username string, overrides map[string]config.IndexerSearchConfig) error {
 	dm.mu.Lock()
@@ -399,20 +422,3 @@ func (dm *DeviceManager) UpdateDeviceIndexerOverrides(username string, overrides
 	return nil
 }
 
-// GetDeviceConfig returns a device's filter and sorting config
-func (dm *DeviceManager) GetDeviceConfig(username string) (config.FilterConfig, config.SortConfig, error) {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	device, exists := dm.devices[username]
-	if !exists {
-		return config.FilterConfig{}, config.SortConfig{}, fmt.Errorf("device not found")
-	}
-
-	return device.Filters, device.Sorting, nil
-}
-
-// GetUserConfig is an alias for GetDeviceConfig for backwards compatibility
-func (dm *DeviceManager) GetUserConfig(username string) (config.FilterConfig, config.SortConfig, error) {
-	return dm.GetDeviceConfig(username)
-}
