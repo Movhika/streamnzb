@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Settings, Server, Globe, Radio,
   MonitorSmartphone, LogOut, Tv, Clipboard, Check,
-  Sun, Moon, Monitor, Zap, FileText, Coffee
+  Sun, Moon, Monitor, Zap, FileText, Coffee, User, MoreVertical
 } from "lucide-react"
 import {
   Sidebar,
@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { cn } from "@/lib/utils"
 
 const navMain = [
   { id: "dashboard", title: "Dashboard", icon: LayoutDashboard },
@@ -151,7 +152,7 @@ export function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Buy me a coffee + Theme selector - pushed to bottom */}
+        {/* Theme selector - pushed to bottom */}
         <SidebarGroup className="mt-auto">
           <SidebarGroupContent>
             <SidebarMenu>
@@ -179,24 +180,51 @@ export function AppSidebar({
       </SidebarContent>
 
       <SidebarFooter>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            tooltip="Buy me a coffee"
-            onClick={() => window.open('https://buymeacoffee.com/gaisberg', '_blank')}
-          >
-            <Coffee className="size-4" />
-            <span>Buy me a coffee</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Buy me a coffee"
+              onClick={() => window.open('https://buymeacoffee.com/gaisberg', '_blank')}
+            >
+              <Coffee className="size-4" />
+              <span>Buy me a coffee</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         {currentUser && currentUser !== 'legacy' && (
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton tooltip="Logout" onClick={onLogout}>
-                <LogOut />
-                <span>Logout</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
+          <div className="mt-2 pt-2 border-t border-sidebar-border">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-lg p-2 text-left outline-none",
+                    "hover:bg-sidebar-accent focus:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+                  )}
+                  aria-label="Open account menu"
+                >
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <Zap className="size-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="truncate block text-sm font-medium">{currentUser}</span>
+                    <span className="truncate block text-xs text-muted-foreground">Account</span>
+                  </div>
+                  <MoreVertical className="size-4 shrink-0 text-muted-foreground" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="end" className="w-48">
+                <DropdownMenuItem onClick={() => onNavigate("profile")}>
+                  <User className="mr-2 h-4 w-4" />
+                  Profile
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onLogout}>
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Log out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
       </SidebarFooter>
     </Sidebar>

@@ -30,12 +30,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [initialFormValues, setInitialFormValues] = useState(null)
   const deviceManagementRef = useRef(null)
-  const pendingSaveAfterPasswordRef = useRef(null)
 
   const form = useForm({
     defaultValues: {
-      admin_username: 'admin',
-      admin_password: '',
       addon_port: 7000,
       addon_base_url: '',
       log_level: 'INFO',
@@ -158,11 +155,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         min_size_gb: 0, max_size_gb: 0, blocked_groups: []
       }
 
-      const { env_overrides: _envOverrides, ...configForForm } = initialConfig
+      const { env_overrides: _envOverrides, admin_username: _au, admin_password: _ap, ...configForForm } = initialConfig
       const formattedData = {
         ...configForForm,
-        admin_username: initialConfig.admin_username || 'admin',
-        admin_password: '',
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
         cache_ttl_seconds: Number(initialConfig.cache_ttl_seconds),
@@ -253,7 +248,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         const deviceConfigs = deviceManagementRef.current.getDeviceConfigs()
         if (Object.keys(deviceConfigs).length > 0) {
           const configsToSave = {}
-          const adminUsername = data.admin_username || 'admin'
+          const adminUsername = initialConfig?.admin_username || 'admin'
           for (const [username, deviceConfig] of Object.entries(deviceConfigs)) {
             if (username === adminUsername || !deviceConfig) continue
             configsToSave[username] = {
@@ -287,34 +282,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       };
 
       const trimmedData = trimData(data);
-      const newPassword = trimmedData.admin_password
-      delete trimmedData.admin_password
-
-      if (newPassword) {
-        pendingSaveAfterPasswordRef.current = trimmedData
-        const prevCb = window.deviceActionCallback
-        window.deviceActionCallback = (payload) => {
-          const isPasswordResponse = payload.success !== undefined || (payload.error && !payload.token && !payload.user)
-          if (isPasswordResponse) {
-            if (prevCb) prevCb(payload)
-            if (payload.error) {
-              setError('admin_password', { type: 'server', message: payload.error })
-            } else {
-              setValue('admin_password', '')
-              sendCommand('save_config', pendingSaveAfterPasswordRef.current)
-              setHasUnsavedChanges(false)
-              setInitialFormValues(JSON.stringify(pendingSaveAfterPasswordRef.current))
-            }
-            pendingSaveAfterPasswordRef.current = null
-            window.deviceActionCallback = prevCb || undefined
-            if (!prevCb) delete window.deviceActionCallback
-            return
-          }
-          if (prevCb) prevCb(payload)
-        }
-        sendCommand('update_password', { username: trimmedData.admin_username || 'admin', password: newPassword })
-        return
-      }
 
       sendCommand('save_config', trimmedData)
       setHasUnsavedChanges(false)
@@ -368,32 +335,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                     <FormControl><Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
                     <FormMessage />
                     <EnvOverrideNote show={envOverrides.includes('addon_port')} />
-                  </FormItem>
-                )} />
-              </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Dashboard credentials</CardTitle>
-                <CardDescription>Username and password to log in to this dashboard. Save to apply. Leave password blank to keep the current one.</CardDescription>
-              </CardHeader>
-              <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <FormField control={control} name="admin_username" render={({ field }) => (
-                  <FormItem className="space-y-2">
-                    <FormLabel className="text-sm font-medium">Username</FormLabel>
-                    <FormControl><Input placeholder="admin" {...field} /></FormControl>
-                    <FormMessage />
-                    <EnvOverrideNote show={envOverrides.includes('admin_username')} />
-                  </FormItem>
-                )} />
-                <FormField control={control} name="admin_password" render={({ field }) => (
-                  <FormItem className="space-y-2">
-                    <FormLabel className="text-sm font-medium">New password</FormLabel>
-                    <FormControl><PasswordInput placeholder="Leave blank to keep current" {...field} /></FormControl>
-                    <FormMessage />
                   </FormItem>
                 )} />
               </div>

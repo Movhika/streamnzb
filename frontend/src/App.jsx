@@ -9,6 +9,7 @@ import { DashboardPage } from "@/components/DashboardPage"
 import { SearchPage } from "@/components/SearchPage"
 import { LogsPage } from "@/components/LogsPage"
 import { StreamsPage } from "@/components/StreamsPage"
+import { ProfilePage } from "@/components/ProfilePage"
 import { AlertCircle, Loader2 } from "lucide-react"
 
 const MAX_HISTORY = 60
@@ -191,6 +192,10 @@ function App() {
                 errors: msg.payload.errors
             });
             setIsSaving(false);
+            if (window.profileUsernameCallback) {
+              window.profileUsernameCallback(msg.payload);
+              delete window.profileUsernameCallback;
+            }
             break;
           }
           case 'auth_info': {
@@ -380,6 +385,17 @@ function App() {
           )}
           {activePage === 'logs' && (
             <LogsPage logs={logs} />
+          )}
+          {activePage === 'profile' && (
+            <div className="pt-4 md:pt-5 pb-3 px-4 lg:px-5">
+              <ProfilePage
+                currentUser={currentUser}
+                config={config}
+                sendCommand={sendCommand}
+                ws={ws}
+                onUsernameChanged={setCurrentUser}
+              />
+            </div>
           )}
           {activePage === 'streams' && (
             <div className="pt-4 md:pt-5 pb-3 px-4 lg:px-5">

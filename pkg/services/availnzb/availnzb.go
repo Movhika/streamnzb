@@ -187,8 +187,8 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 // backbonesResponse matches GET /api/v1/backbones from the AvailNZB API (check.snzb.stream/openapi.json).
 // BackbonesResponse: backbones = list of backbone names; provider_hostnames = map of backbone -> []provider hostname.
 type backbonesResponse struct {
-	Backbones          []string            `json:"backbones"`
-	ProviderHostnames  map[string][]string `json:"provider_hostnames"`
+	Backbones         []string            `json:"backbones"`
+	ProviderHostnames map[string][]string `json:"provider_hostnames"`
 }
 
 // RefreshBackbones fetches GET /api/v1/backbones and updates the cached hostname->backbone map.

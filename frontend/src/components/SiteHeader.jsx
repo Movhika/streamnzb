@@ -5,6 +5,7 @@ const pageTitles = {
   dashboard: "Dashboard",
   search: "Search",
   logs: "Logs",
+  profile: "Profile",
   general: "General",
   indexers: "Indexers",
   providers: "Providers",
