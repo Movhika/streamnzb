@@ -28,13 +28,36 @@ type SearchConfig interface {
 
 // RunIndexerSearches runs ID-based and text-based searches in parallel, merges and dedupes.
 // When req.PerIndexerQuery is set, text search uses per-indexer queries and effective config; otherwise uses global cfg for title resolution.
+// ID search results are filtered by content (title/year or show SxxExx) so indexer noise (e.g. wrong titles) is dropped.
 func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string, cfg SearchConfig) ([]*release.Release, error) {
 	idReq := req
 	idReq.Query = ""
 	idReq.PerIndexerQuery = nil // ID-only search: do not pass text query to indexers
 
 	var textQuery string
+	var contentFilterQuery string // used to filter ID results by title/year so we don't show unrelated releases
 	usePerIndexerQuery := len(req.PerIndexerQuery) > 0
+	if tmdbClient != nil {
+		if contentType == "movie" && contentIDs != nil {
+			if t, y, err := tmdbClient.GetMovieTitleAndYear(contentIDs.ImdbID, req.TMDBID); err == nil && t != "" {
+				if y != "" {
+					contentFilterQuery = t + " " + y
+				} else {
+					contentFilterQuery = t
+				}
+			}
+		} else if contentType == "series" && req.Season != "" && req.Episode != "" {
+			if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil && name != "" {
+				seasonNum, _ := strconv.Atoi(req.Season)
+				epNum, _ := strconv.Atoi(req.Episode)
+				if seasonNum > 0 || epNum > 0 {
+					contentFilterQuery = fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
+				} else {
+					contentFilterQuery = fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
+				}
+			}
+		}
+	}
 	if !usePerIndexerQuery && tmdbClient != nil && cfg != nil {
 		includeYear := cfg.GetIncludeYearInSearch()
 		searchTitleLanguage := cfg.GetSearchTitleLanguage()
@@ -130,7 +153,11 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 	}
 	indexer.NormalizeSearchResponse(idResp)
 	idReleases := make([]*release.Release, 0, len(idResp.Releases)+len(textReleases))
-	for _, rel := range idResp.Releases {
+	idCandidates := idResp.Releases
+	if contentFilterQuery != "" {
+		idCandidates = FilterTextResultsByContent(idResp.Releases, contentType, contentFilterQuery, req.Season, req.Episode)
+	}
+	for _, rel := range idCandidates {
 		if rel != nil {
 			rel.QuerySource = "id"
 			idReleases = append(idReleases, rel)
