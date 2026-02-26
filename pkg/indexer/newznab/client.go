@@ -332,6 +332,8 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	isMovieSearch := strings.HasPrefix(req.Cat, "2")
 	isTVSearch := strings.HasPrefix(req.Cat, "5")
 
+	// For TV: use t=search for string queries (per Newznab base search); t=tvsearch for ID/structured (tvdbid, season/ep).
+	useTVSearchParams := false
 	if isMovieSearch && (caps == nil || caps.Searching.MovieSearch) {
 		// ID-only movie search uses t=movie (imdbid/tmdbid); text search uses t=search
 		if req.Query == "" && (req.IMDbID != "" || req.TMDBID != "") {
@@ -340,7 +342,12 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			params.Set("t", "search")
 		}
 	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
-		params.Set("t", "tvsearch")
+		if req.Query != "" && req.TVDBID == "" && req.IMDbID == "" {
+			params.Set("t", "search")
+		} else {
+			params.Set("t", "tvsearch")
+			useTVSearchParams = true
+		}
 	} else {
 		params.Set("t", "search")
 	}
@@ -394,7 +401,8 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if o := req.OptionalOverrides; o != nil && o.UseSeasonEpisodeParams != nil {
 		useSeasonEp = o.UseSeasonEpisodeParams
 	}
-	if useSeasonEp == nil || *useSeasonEp {
+	// season/ep are tvsearch params; omit for t=search (string query) to avoid strict matching on indexers
+	if useTVSearchParams && (useSeasonEp == nil || *useSeasonEp) {
 		if req.Season != "" {
 			params.Set("season", req.Season)
 		}
