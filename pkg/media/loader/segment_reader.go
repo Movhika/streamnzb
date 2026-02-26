@@ -205,20 +205,14 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 	r.ctx, r.cancel = context.WithCancel(r.parent)
 	// Clear prefetching map - old prefetch goroutines will exit via context cancellation
 	r.prefetching = make(map[int]bool)
+	r.mu.Unlock()
 
-	// Drain prefetch goroutines with a short timeout so they release NNTP connections
-	// before we return. Otherwise the next Read() blocks on pool.Get while cancelled
-	// prefetches still hold connections until their current Body()+decode finishes.
-	done := make(chan struct{})
-	go func() {
-		r.prefetchWg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(800 * time.Millisecond):
-	}
+	// Drain prefetch goroutines before returning. We must not return until Wait() has
+	// returned, otherwise the next Read() can call Add(1) and panic "WaitGroup is
+	// reused before previous Wait has returned".
+	r.prefetchWg.Wait()
 
+	r.mu.Lock()
 	r.offset = target
 	if target >= r.file.Size() {
 		r.segIdx = len(r.file.segments)
