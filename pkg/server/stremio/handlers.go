@@ -295,6 +295,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		if list == nil {
 			continue
 		}
+		if len(list.Candidates) == 0 {
+			continue
+		}
 		s.clearNextReleaseBound(device, str.ID, contentType, id)
 		nameLeft := str.Name
 		if nameLeft == "" {
@@ -363,6 +366,9 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 	for _, str := range streamsList {
 		list, err := s.buildOrderedPlayList(ctx, str.ID, contentType, id)
 		if err != nil || list == nil {
+			continue
+		}
+		if len(list.Candidates) == 0 {
 			continue
 		}
 		s.clearNextReleaseBound(device, str.ID, contentType, id)
