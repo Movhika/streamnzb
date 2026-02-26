@@ -303,20 +303,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		if nameLeft == "" {
 			nameLeft = str.ID
 		}
-		branding := "StreamNZB"
-		if list.FirstIsAvailGood {
-			branding = "StreamNZB [availNZB]"
-		}
-		var line2 string
-		if list.FirstIsAvailGood && len(list.Candidates) > 0 && list.Candidates[0].Release != nil && list.Candidates[0].Release.Title != "" {
-			line2 = list.Candidates[0].Release.Title
-		} else if len(list.Candidates) > 0 {
-			line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
-		}
-		description := branding
-		if line2 != "" {
-			description = branding + "\n" + line2
-		}
 		token := ""
 		if device != nil {
 			token = device.Token
@@ -325,17 +311,72 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		if token != "" {
 			baseURL += "/" + token
 		}
-		playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
-		streamURL := baseURL + "/play/" + playPath
-		streams = append(streams, Stream{Name: nameLeft, URL: streamURL, Description: description})
-		if len(list.Candidates) >= 2 {
-			nextPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
-			nextURL := baseURL + "/next/" + nextPath
-			nextName := nameLeft + " (next release)"
-			nextDesc := "StreamNZB\nTry next release in list"
-			streams = append(streams, Stream{Name: nextName, URL: nextURL, Description: nextDesc})
+		if str.ShowAllStream {
+			for i, cand := range list.Candidates {
+				relTitle := ""
+				if cand.Release != nil && cand.Release.Title != "" {
+					relTitle = cand.Release.Title
+				} else {
+					relTitle = fmt.Sprintf("Release %d", i+1)
+				}
+				isAvail := list.CachedAvailable != nil && cand.Release != nil && cand.Release.DetailsURL != "" && list.CachedAvailable[cand.Release.DetailsURL]
+				streamName := nameLeft
+				if isAvail {
+					streamName = "⚡ " + nameLeft
+				}
+				desc := "StreamNZB\n" + relTitle
+				playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":" + strconv.Itoa(i)
+				streamURL := baseURL + "/play/" + playPath
+				streams = append(streams, Stream{
+					Name:          streamName,
+					URL:           streamURL,
+					Description:   desc,
+					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, cand.Release),
+				})
+			}
+		} else {
+			branding := "StreamNZB"
+			if list.FirstIsAvailGood {
+				branding = "StreamNZB [availNZB]"
+			}
+			var line2 string
+			var firstRel *release.Release
+			if len(list.Candidates) > 0 && list.Candidates[0].Release != nil {
+				firstRel = list.Candidates[0].Release
+				if list.FirstIsAvailGood && firstRel.Title != "" {
+					line2 = firstRel.Title
+				} else {
+					line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
+				}
+			} else if len(list.Candidates) > 0 {
+				line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
+			}
+			description := branding
+			if line2 != "" {
+				description = branding + "\n" + line2
+			}
+			playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
+			streamURL := baseURL + "/play/" + playPath
+			streams = append(streams, Stream{
+				Name:          nameLeft,
+				URL:           streamURL,
+				Description:   description,
+				BehaviorHints: streamBehaviorHints(nameLeft, str.ID, firstRel),
+			})
+			if len(list.Candidates) >= 2 {
+				nextPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
+				nextURL := baseURL + "/next/" + nextPath
+				nextName := nameLeft + " (next release)"
+				nextDesc := "StreamNZB\nTry next release in list"
+				streams = append(streams, Stream{
+					Name:          nextName,
+					URL:           nextURL,
+					Description:   nextDesc,
+					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, nil),
+				})
+			}
 		}
-		logger.Debug("Stream rows", "streamId", str.ID, "name", nameLeft, "candidates", len(list.Candidates))
+		logger.Debug("Stream rows", "streamId", str.ID, "name", nameLeft, "candidates", len(list.Candidates), "showAllStream", str.ShowAllStream)
 	}
 	if streams == nil {
 		streams = []Stream{}
@@ -353,6 +394,21 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	json.NewEncoder(w).Encode(response)
+}
+
+func streamBehaviorHints(streamName, streamID string, rel *release.Release) *BehaviorHints {
+	h := &BehaviorHints{
+		NotWebReady: true,
+		BingeGroup:  "streamnzb-" + streamID,
+		FolderName:  streamName,
+	}
+	if rel != nil {
+		h.Filename = rel.Title
+		if rel.Size > 0 {
+			h.VideoSize = rel.Size
+		}
+	}
+	return h
 }
 
 // GetStreams returns the catalog stream list (one row per stream config, plus optional "Next release" per stream).
@@ -376,20 +432,6 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 		if nameLeft == "" {
 			nameLeft = str.ID
 		}
-		branding := "StreamNZB"
-		if list.FirstIsAvailGood {
-			branding = "StreamNZB [availNZB]"
-		}
-		var line2 string
-		if list.FirstIsAvailGood && len(list.Candidates) > 0 && list.Candidates[0].Release != nil && list.Candidates[0].Release.Title != "" {
-			line2 = list.Candidates[0].Release.Title
-		} else if len(list.Candidates) > 0 {
-			line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
-		}
-		description := branding
-		if line2 != "" {
-			description = branding + "\n" + line2
-		}
 		token := ""
 		if device != nil {
 			token = device.Token
@@ -398,15 +440,70 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 		if token != "" {
 			baseURL += "/" + token
 		}
-		playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
-		streamURL := baseURL + "/play/" + playPath
-		streams = append(streams, Stream{Name: nameLeft, URL: streamURL, Description: description})
-		if len(list.Candidates) >= 2 {
-			nextPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
-			nextURL := baseURL + "/next/" + nextPath
-			nextName := nameLeft + " (next release)"
-			nextDesc := "StreamNZB\nTry next release in list"
-			streams = append(streams, Stream{Name: nextName, URL: nextURL, Description: nextDesc})
+		if str.ShowAllStream {
+			for i, cand := range list.Candidates {
+				relTitle := ""
+				if cand.Release != nil && cand.Release.Title != "" {
+					relTitle = cand.Release.Title
+				} else {
+					relTitle = fmt.Sprintf("Release %d", i+1)
+				}
+				isAvail := list.CachedAvailable != nil && cand.Release != nil && cand.Release.DetailsURL != "" && list.CachedAvailable[cand.Release.DetailsURL]
+				streamName := nameLeft
+				if isAvail {
+					streamName = "⚡ " + nameLeft
+				}
+				desc := "StreamNZB\n" + relTitle
+				playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":" + strconv.Itoa(i)
+				streamURL := baseURL + "/play/" + playPath
+				streams = append(streams, Stream{
+					Name:          streamName,
+					URL:           streamURL,
+					Description:   desc,
+					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, cand.Release),
+				})
+			}
+		} else {
+			branding := "StreamNZB"
+			if list.FirstIsAvailGood {
+				branding = "StreamNZB [availNZB]"
+			}
+			var line2 string
+			var firstRel *release.Release
+			if len(list.Candidates) > 0 && list.Candidates[0].Release != nil {
+				firstRel = list.Candidates[0].Release
+				if list.FirstIsAvailGood && firstRel.Title != "" {
+					line2 = firstRel.Title
+				} else {
+					line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
+				}
+			} else if len(list.Candidates) > 0 {
+				line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
+			}
+			description := branding
+			if line2 != "" {
+				description = branding + "\n" + line2
+			}
+			playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
+			streamURL := baseURL + "/play/" + playPath
+			streams = append(streams, Stream{
+				Name:          nameLeft,
+				URL:           streamURL,
+				Description:   description,
+				BehaviorHints: streamBehaviorHints(nameLeft, str.ID, firstRel),
+			})
+			if len(list.Candidates) >= 2 {
+				nextPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
+				nextURL := baseURL + "/next/" + nextPath
+				nextName := nameLeft + " (next release)"
+				nextDesc := "StreamNZB\nTry next release in list"
+				streams = append(streams, Stream{
+					Name:          nextName,
+					URL:           nextURL,
+					Description:   nextDesc,
+					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, nil),
+				})
+			}
 		}
 	}
 	if sink := getStreamSinkFromContext(ctx); sink != nil {
@@ -528,16 +625,18 @@ type orderedPlayListResult struct {
 	Candidates       []triage.Candidate
 	FirstIsAvailGood bool
 	Params           *SearchParams
+	// CachedAvailable: detailsURL -> true if AvailNZB reports available. Nil if not set (e.g. from cache).
+	CachedAvailable map[string]bool
 }
 
 // rawSearchResult holds indexer + AvailNZB results for a title (contentType+id). No stream-specific triage.
 // Reused across all streams so we run TMDB/indexer/AvailNZB once per title.
 type rawSearchResult struct {
-	Params           *SearchParams
-	AvailReleases    []*release.Release
-	IndexerReleases  []*release.Release
-	CachedAvailable  map[string]bool // detailsURL -> true if from AvailNZB available
-	AvailResult      *availnzb.ReleasesResult
+	Params          *SearchParams
+	AvailReleases   []*release.Release
+	IndexerReleases []*release.Release
+	CachedAvailable map[string]bool // detailsURL -> true if from AvailNZB available
+	AvailResult     *availnzb.ReleasesResult
 }
 
 const playListCacheTTL = 10 * time.Minute
@@ -710,7 +809,10 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 
 	// Per-release, per-stream: fits and score
 	streams := s.streamConfigsForStreamRequest()
-	releaseScores := make(map[string]map[string]struct{ Fits bool; Score int }) // detailsURL -> streamId -> {Fits, Score}
+	releaseScores := make(map[string]map[string]struct {
+		Fits  bool
+		Score int
+	}) // detailsURL -> streamId -> {Fits, Score}
 	for _, str := range streams {
 		if str == nil {
 			continue
@@ -729,9 +831,15 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 				key = release.NormalizeTitle(c.Release.Title) + ":" + strconv.FormatInt(c.Release.Size, 10)
 			}
 			if releaseScores[key] == nil {
-				releaseScores[key] = make(map[string]struct{ Fits bool; Score int })
+				releaseScores[key] = make(map[string]struct {
+					Fits  bool
+					Score int
+				})
 			}
-			releaseScores[key][str.ID] = struct{ Fits bool; Score int }{Fits: true, Score: c.Score}
+			releaseScores[key][str.ID] = struct {
+				Fits  bool
+				Score int
+			}{Fits: true, Score: c.Score}
 		}
 		// Mark releases that were not in candidates as not fitting (filtered out)
 		for _, u := range unified {
@@ -740,10 +848,16 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 				key = release.NormalizeTitle(u.rel.Title) + ":" + strconv.FormatInt(u.rel.Size, 10)
 			}
 			if releaseScores[key] == nil {
-				releaseScores[key] = make(map[string]struct{ Fits bool; Score int })
+				releaseScores[key] = make(map[string]struct {
+					Fits  bool
+					Score int
+				})
 			}
 			if _, ok := releaseScores[key][str.ID]; !ok {
-				releaseScores[key][str.ID] = struct{ Fits bool; Score int }{Fits: false, Score: 0}
+				releaseScores[key][str.ID] = struct {
+					Fits  bool
+					Score int
+				}{Fits: false, Score: 0}
 			}
 		}
 	}
@@ -911,7 +1025,12 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 	if len(merged) > 0 && merged[0].Release != nil && merged[0].Release.DetailsURL != "" {
 		firstIsAvailGood = raw.CachedAvailable[merged[0].Release.DetailsURL]
 	}
-	return &orderedPlayListResult{Candidates: merged, FirstIsAvailGood: firstIsAvailGood, Params: raw.Params}, nil
+	return &orderedPlayListResult{
+		Candidates:       merged,
+		FirstIsAvailGood: firstIsAvailGood,
+		Params:           raw.Params,
+		CachedAvailable:  raw.CachedAvailable,
+	}, nil
 }
 
 // streamScoreFromCandidate returns the triage score for ordering (same as Candidate.Score).

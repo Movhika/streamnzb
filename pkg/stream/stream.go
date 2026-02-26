@@ -28,6 +28,9 @@ type Stream struct {
 	Sorting config.SortConfig   `json:"sorting"`
 	// IndexerOverrides optional per-indexer search overrides; key = indexer name. V1 can be nil.
 	IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides,omitempty"`
+	// ShowAllStream: when true, show every release (unknown or available) as a separate stream row
+	// and disable play-next-stream fallback for this stream.
+	ShowAllStream bool `json:"show_all_stream"`
 }
 
 // Manager loads and saves streams from state. For v1 we have one global stream.

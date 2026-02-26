@@ -3,7 +3,8 @@ import { useForm } from 'react-hook-form'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Form, FormField, FormItem, FormLabel, FormControl } from "@/components/ui/form"
+import { Form, FormField, FormItem, FormLabel, FormControl, FormDescription } from "@/components/ui/form"
+import { Checkbox } from "@/components/ui/checkbox"
 import { FiltersSection } from "@/components/FiltersSection"
 import { SortingSection } from "@/components/SortingSection"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
@@ -44,6 +45,7 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
   const form = useForm({
     defaultValues: {
       name: isCreate ? 'New stream' : 'StreamNZB - Global',
+      show_all_stream: false,
       filters: defaultFilters,
       sorting: defaultSorting
     }
@@ -55,6 +57,7 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
     if (isCreate) {
       reset({
         name: 'New stream',
+        show_all_stream: false,
         filters: defaultFilters,
         sorting: defaultSorting
       })
@@ -75,6 +78,7 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
         if (data) {
           reset({
             name: data.name ?? data.id ?? 'Stream',
+            show_all_stream: data.show_all_stream === true,
             filters: { ...defaultFilters, ...(data.filters || {}) },
             sorting: {
               ...defaultSorting,
@@ -106,6 +110,7 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: values.name,
+          show_all_stream: values.show_all_stream,
           filters: values.filters,
           sorting: values.sorting
         })
@@ -156,6 +161,26 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
                     <FormControl>
                       <Input placeholder="Stream name" {...field} />
                     </FormControl>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={control}
+                name="show_all_stream"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-start space-x-3 space-y-0">
+                    <FormControl>
+                      <Checkbox
+                        checked={field.value === true}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                    <div className="space-y-1 leading-none">
+                      <FormLabel className="font-normal">Show all stream</FormLabel>
+                      <FormDescription>
+                        Show every release (unknown or available) as a separate stream row so you can choose where to start. Failover to the next release still applies if playback fails.
+                      </FormDescription>
+                    </div>
                   </FormItem>
                 )}
               />

@@ -37,13 +37,17 @@ type Stream struct {
 	StreamType    string         `json:"streamType,omitempty"`
 }
 
-// BehaviorHints provides hints to Stremio about stream behavior
+// BehaviorHints provides hints to Stremio (and aggregators like AIOStreams) about stream behavior.
+// See Stremio SDK: https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/stream.md
+// AIOStreams custom formatter uses stream.filename, stream.folderName, stream.size; see wiki Custom-Formatter.
 type BehaviorHints struct {
 	NotWebReady      bool     `json:"notWebReady,omitempty"`
 	BingeGroup       string   `json:"bingeGroup,omitempty"`
 	CountryWhitelist []string `json:"countryWhitelist,omitempty"`
 	VideoSize        int64    `json:"videoSize,omitempty"`
 	Filename         string   `json:"filename,omitempty"`
+	// FolderName is used by AIOStreams (e.g. {stream.folderName}) when present; not in official SDK.
+	FolderName string `json:"folderName,omitempty"`
 }
 
 // SearchReleasesResponse is the response for the search releases API (indexer + AvailNZB, tagged by availability and per-stream).
