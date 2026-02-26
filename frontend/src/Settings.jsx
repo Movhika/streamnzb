@@ -68,7 +68,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         ...configForForm,
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
-        max_concurrent_validations: Number(initialConfig.max_concurrent_validations),
         movie_categories: initialConfig.movie_categories ?? '',
         tv_categories: initialConfig.tv_categories ?? '',
         extra_search_terms: initialConfig.extra_search_terms ?? '',

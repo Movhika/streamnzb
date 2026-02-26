@@ -15,13 +15,6 @@ export function LogsPage({ logs = [] }) {
     <div className={cn("flex flex-col gap-4 py-4 md:gap-6 md:py-6 px-4 lg:px-6")}>
       <Card className="flex flex-col overflow-hidden flex-1 min-h-0">
         <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-            <FileText className="h-5 w-5 text-muted-foreground" />
-            System Logs
-          </CardTitle>
-          <CardDescription className="text-muted-foreground">
-            Live application logs. New entries appear at the bottom.
-          </CardDescription>
         </CardHeader>
         <CardContent className="flex-1 p-0 overflow-hidden flex flex-col min-h-0">
           <ScrollArea className="flex-1 min-h-[360px] px-4 pb-4">
