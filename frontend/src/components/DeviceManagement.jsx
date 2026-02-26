@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { AlertCircle, Plus, Trash2, RefreshCw, Copy, Check, Loader2 } from "lucide-react"
 
-const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws }, ref) {
+const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws, globalConfig: globalConfigProp }, ref) {
   const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
@@ -16,7 +16,7 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws 
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [newUsername, setNewUsername] = useState('')
   const [copiedToken, setCopiedToken] = useState('')
-  const [globalConfig, setGlobalConfig] = useState(null)
+  const globalConfig = globalConfigProp ?? null
   const hasLoadedRef = React.useRef(false)
 
   useImperativeHandle(ref, () => ({
@@ -24,76 +24,33 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws 
     getUserConfigs: () => ({})
   }))
 
-  // Fetch devices list
+  // Fetch devices list (uses API via sendCommand)
   const fetchDevices = useCallback((showLoader = true) => {
-    if (!sendCommand || !ws || ws.readyState !== WebSocket.OPEN) {
-      setError('WebSocket not connected')
-      if (showLoader) {
-        setLoading(false)
-      }
+    if (!sendCommand) {
+      if (showLoader) setLoading(false)
       return
     }
-
-    if (showLoader) {
-      setLoading(true)
-    }
+    if (showLoader) setLoading(true)
     setError('')
-    
-    // Clean up any existing callback
-    if (window.deviceManagementCallback) {
-      delete window.deviceManagementCallback
-    }
-    
+    if (window.deviceManagementCallback) delete window.deviceManagementCallback
     window.deviceManagementCallback = (payload) => {
-      if (payload.error) {
+      if (payload && payload.error) {
         setError(payload.error)
-        if (showLoader) {
-          setLoading(false)
-        }
-        delete window.deviceManagementCallback
-        return
+        if (showLoader) setLoading(false)
+      } else {
+        setDevices(Array.isArray(payload) ? payload : [])
+        if (showLoader) setLoading(false)
+        hasLoadedRef.current = true
       }
-      setDevices(payload)
-      if (showLoader) {
-        setLoading(false)
-      }
-      hasLoadedRef.current = true
       delete window.deviceManagementCallback
     }
-
     sendCommand('get_users', {})
-  }, [sendCommand, ws])
+  }, [sendCommand])
 
-  // Fetch global config
-  const fetchGlobalConfig = useCallback(() => {
-    if (sendCommand && ws && ws.readyState === WebSocket.OPEN) {
-      // Clean up any existing callback
-      if (window.globalConfigCallback) {
-        delete window.globalConfigCallback
-      }
-      window.globalConfigCallback = (config) => {
-        setGlobalConfig(config)
-        delete window.globalConfigCallback
-      }
-      sendCommand('get_config', {})
-    }
-  }, [sendCommand, ws])
-
-  // Initial load - only run once when component mounts
+  // Initial load when sendCommand is available
   useEffect(() => {
-    if (!hasLoadedRef.current && ws && ws.readyState === WebSocket.OPEN) {
-      fetchDevices(true)
-      fetchGlobalConfig()
-    }
-  }, []) // Empty deps - only run on mount
-
-  // Also fetch when WebSocket becomes available
-  useEffect(() => {
-    if (!hasLoadedRef.current && ws && ws.readyState === WebSocket.OPEN && sendCommand) {
-      fetchDevices(true)
-      fetchGlobalConfig()
-    }
-  }, [ws?.readyState, sendCommand]) // Only depend on WebSocket state
+    if (!hasLoadedRef.current && sendCommand) fetchDevices(true)
+  }, [sendCommand])
 
   // Handle add device
   const handleAddDevice = async (e) => {
@@ -102,32 +59,24 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws 
     setError('')
     setSuccess('')
     setAddDeviceLoading(true)
-
-    if (!sendCommand || !ws || ws.readyState !== WebSocket.OPEN) {
-      setError('WebSocket not connected')
+    if (!sendCommand) {
+      setError('Not connected')
       setAddDeviceLoading(false)
       return
     }
-
-    // Clean up any existing callback
-    if (window.deviceActionCallback) {
-      delete window.deviceActionCallback
-    }
-
+    if (window.deviceActionCallback) delete window.deviceActionCallback
     window.deviceActionCallback = (payload) => {
       setAddDeviceLoading(false)
-      if (payload.error) {
+      if (payload && payload.error) {
         setError(payload.error)
       } else {
         setSuccess(`Device "${newUsername}" created successfully`)
         setNewUsername('')
         setShowAddDialog(false)
-        // Refresh list without showing loader (silent refresh)
         fetchDevices(false)
       }
       delete window.deviceActionCallback
     }
-
     sendCommand('create_user', { username: newUsername })
   }
 
@@ -137,16 +86,11 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws 
       setError('Cannot delete admin device')
       return
     }
-
-    if (!confirm(`Are you sure you want to delete device "${username}"?`)) {
+    if (!confirm(`Are you sure you want to delete device "${username}"?`)) return
+    if (!sendCommand) {
+      setError('Not connected')
       return
     }
-
-    if (!sendCommand || !ws || ws.readyState !== WebSocket.OPEN) {
-      setError('WebSocket not connected')
-      return
-    }
-
     setError('')
     setSuccess('')
     setActionLoading(`delete-${username}`)
@@ -173,11 +117,10 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws 
 
   // Handle regenerate token
   const handleRegenerateToken = (username) => {
-    if (!sendCommand || !ws || ws.readyState !== WebSocket.OPEN) {
-      setError('WebSocket not connected')
+    if (!sendCommand) {
+      setError('Not connected')
       return
     }
-
     setError('')
     setSuccess('')
     setActionLoading(`regenerate-${username}`)

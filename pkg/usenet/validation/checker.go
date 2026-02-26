@@ -29,8 +29,7 @@ type Checker struct {
 
 // NewChecker creates a new article availability checker.
 // providerOrder is the list of provider names in priority order (used for cache warming).
-// cacheTTL is ignored (validation cache removed to avoid stale results).
-func NewChecker(providers map[string]*nntp.ClientPool, providerOrder []string, cacheTTL time.Duration, sampleSize, maxConcurrent int) *Checker {
+func NewChecker(providers map[string]*nntp.ClientPool, providerOrder []string, sampleSize, maxConcurrent int) *Checker {
 	return &Checker{
 		providers:     providers,
 		providerOrder: providerOrder,

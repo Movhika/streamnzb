@@ -85,8 +85,8 @@ export function ProfilePage({
       setPasswordError('Password must be at least 6 characters long')
       return
     }
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setPasswordError('WebSocket not connected. Please wait...')
+    if (!sendCommand) {
+      setPasswordError('Not connected. Please wait...')
       return
     }
 

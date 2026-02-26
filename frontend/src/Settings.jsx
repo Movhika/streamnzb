@@ -40,86 +40,12 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       proxy_host: '',
       proxy_auth_user: '',
       proxy_auth_pass: '',
-      cache_ttl_seconds: 300,
-      search_result_limit: 1000,
-      include_year_in_search: true,
-      search_title_language: '',
-      search_title_normalize: false,
       movie_categories: '',
       tv_categories: '',
       extra_search_terms: '',
       use_season_episode_params: undefined,
       providers: [],
-      indexers: [],
-      filters: {
-        allowed_qualities: [],
-        blocked_qualities: [],
-        min_resolution: '',
-        max_resolution: '',
-        allowed_codecs: [],
-        blocked_codecs: [],
-        required_audio: [],
-        allowed_audio: [],
-        min_channels: '',
-        require_hdr: false,
-        allowed_hdr: [],
-        blocked_hdr: [],
-        block_sdr: false,
-        required_languages: [],
-        allowed_languages: [],
-        block_dubbed: false,
-        block_cam: false,
-        require_proper: false,
-        allow_repack: true,
-        block_hardcoded: false,
-        min_bit_depth: '',
-        min_size_gb: 0,
-        max_size_gb: 0,
-        blocked_groups: []
-      },
-      sorting: {
-        resolution_weights: {
-          '4k': 4000000,
-          '1080p': 3000000,
-          '720p': 2000000,
-          'sd': 1000000
-        },
-        codec_weights: {
-          'HEVC': 1000,
-          'x265': 1000,
-          'x264': 500,
-          'AVC': 500
-        },
-        audio_weights: {
-          'Atmos': 1500,
-          'TrueHD': 1200,
-          'DTS-HD': 1000,
-          'DTS-X': 1000,
-          'DTS': 500,
-          'DD+': 400,
-          'DD': 300,
-          'AC3': 200,
-          '5.1': 500,
-          '7.1': 1000
-        },
-        quality_weights: {
-          'BluRay': 2000,
-          'WEB-DL': 1500,
-          'WEBRip': 1200,
-          'HDTV': 1000,
-          'Blu-ray': 2000
-        },
-        visual_tag_weights: {
-          'DV': 1500,
-          'HDR10+': 1200,
-          'HDR': 1000,
-          '3D': 800
-        },
-        grab_weight: 0.5,
-        age_weight: 1.0,
-        preferred_groups: [],
-        preferred_languages: []
-      }
+      indexers: []
     }
   })
 
@@ -137,35 +63,12 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
 
   useEffect(() => {
     if (initialConfig) {
-      const defaultSorting = {
-        resolution_weights: { '4k': 4000000, '1080p': 3000000, '720p': 2000000, 'sd': 1000000 },
-        codec_weights: { 'HEVC': 1000, 'x265': 1000, 'x264': 500, 'AVC': 500 },
-        audio_weights: { 'Atmos': 1500, 'TrueHD': 1200, 'DTS-HD': 1000, 'DTS-X': 1000, 'DTS': 500, 'DD+': 400, 'DD': 300, 'AC3': 200, '5.1': 500, '7.1': 1000 },
-        quality_weights: { 'BluRay': 2000, 'WEB-DL': 1500, 'WEBRip': 1200, 'HDTV': 1000, 'Blu-ray': 2000 },
-        visual_tag_weights: { 'DV': 1500, 'HDR10+': 1200, 'HDR': 1000, '3D': 800 },
-        grab_weight: 0.5, age_weight: 1.0, preferred_groups: [], preferred_languages: []
-      }
-
-      const defaultFilters = {
-        allowed_qualities: [], blocked_qualities: [], min_resolution: '', max_resolution: '',
-        allowed_codecs: [], blocked_codecs: [], required_audio: [], allowed_audio: [],
-        min_channels: '', require_hdr: false, allowed_hdr: [], blocked_hdr: [], block_sdr: false,
-        required_languages: [], allowed_languages: [], block_dubbed: false, block_cam: false,
-        require_proper: false, allow_repack: true, block_hardcoded: false, min_bit_depth: '',
-        min_size_gb: 0, max_size_gb: 0, blocked_groups: []
-      }
-
       const { env_overrides: _envOverrides, admin_username: _au, admin_password: _ap, ...configForForm } = initialConfig
       const formattedData = {
         ...configForForm,
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
-        cache_ttl_seconds: Number(initialConfig.cache_ttl_seconds),
         max_concurrent_validations: Number(initialConfig.max_concurrent_validations),
-        search_result_limit: Number(initialConfig.search_result_limit || 1000),
-        include_year_in_search: initialConfig.include_year_in_search !== false,
-        search_title_language: initialConfig.search_title_language ?? '',
-        search_title_normalize: initialConfig.search_title_normalize === true,
         movie_categories: initialConfig.movie_categories ?? '',
         tv_categories: initialConfig.tv_categories ?? '',
         extra_search_terms: initialConfig.extra_search_terms ?? '',
@@ -185,35 +88,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           downloads_day: Number(idx.downloads_day || 0),
           username: idx.username || '',
           password: idx.password || ''
-        })) || [],
-        sorting: {
-          ...defaultSorting,
-          ...(initialConfig.sorting || {}),
-          resolution_weights: { ...defaultSorting.resolution_weights, ...(initialConfig.sorting?.resolution_weights || {}) },
-          codec_weights: { ...defaultSorting.codec_weights, ...(initialConfig.sorting?.codec_weights || {}) },
-          audio_weights: { ...defaultSorting.audio_weights, ...(initialConfig.sorting?.audio_weights || {}) },
-          quality_weights: { ...defaultSorting.quality_weights, ...(initialConfig.sorting?.quality_weights || {}) },
-          visual_tag_weights: { ...defaultSorting.visual_tag_weights, ...(initialConfig.sorting?.visual_tag_weights || {}) },
-          grab_weight: initialConfig.sorting?.grab_weight ?? defaultSorting.grab_weight,
-          age_weight: initialConfig.sorting?.age_weight ?? defaultSorting.age_weight,
-          preferred_groups: initialConfig.sorting?.preferred_groups || defaultSorting.preferred_groups,
-          preferred_languages: initialConfig.sorting?.preferred_languages || defaultSorting.preferred_languages
-        },
-        filters: {
-          ...defaultFilters,
-          ...(initialConfig.filters || {}),
-          allowed_qualities: initialConfig.filters?.allowed_qualities || defaultFilters.allowed_qualities,
-          blocked_qualities: initialConfig.filters?.blocked_qualities || defaultFilters.blocked_qualities,
-          allowed_codecs: initialConfig.filters?.allowed_codecs || defaultFilters.allowed_codecs,
-          blocked_codecs: initialConfig.filters?.blocked_codecs || defaultFilters.blocked_codecs,
-          required_audio: initialConfig.filters?.required_audio || defaultFilters.required_audio,
-          allowed_audio: initialConfig.filters?.allowed_audio || defaultFilters.allowed_audio,
-          required_languages: initialConfig.filters?.required_languages || defaultFilters.required_languages,
-          allowed_languages: initialConfig.filters?.allowed_languages || defaultFilters.allowed_languages,
-          allowed_hdr: initialConfig.filters?.allowed_hdr || defaultFilters.allowed_hdr,
-          blocked_hdr: initialConfig.filters?.blocked_hdr || defaultFilters.blocked_hdr,
-          blocked_groups: initialConfig.filters?.blocked_groups || defaultFilters.blocked_groups
-        }
+        })) || []
       }
       reset(formattedData)
       setInitialFormValues(JSON.stringify(formattedData))
@@ -408,18 +283,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                     <EnvOverrideNote show={envOverrides.includes('log_level')} />
                   </FormItem>
                 )} />
-                <FormField control={control} name="cache_ttl_seconds" render={({ field }) => (
-                  <FormItem className="space-y-2">
-                    <FormLabel className="text-sm font-medium flex items-center gap-2">
-                      Cache TTL (seconds)
-                      <TooltipProvider><Tooltip><TooltipTrigger asChild><Info className="h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger><TooltipContent className="max-w-xs"><p>How long to cache validation results.</p></TooltipContent></Tooltip></TooltipProvider>
-                    </FormLabel>
-                    <FormControl><Input type="number" min="60" max="3600" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
-                    <FormDescription>Cache duration in seconds (default: 300)</FormDescription>
-                    <FormMessage />
-                    <EnvOverrideNote show={envOverrides.includes('cache_ttl_seconds')} />
-                  </FormItem>
-                )} />
               </div>
               </CardContent>
             </Card>
@@ -475,6 +338,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
               ref={deviceManagementRef}
               sendCommand={sendCommand}
               ws={window.ws}
+              globalConfig={initialConfig}
             />
           </div>
         )}

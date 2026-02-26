@@ -12,6 +12,8 @@ import { StreamsPage } from "@/components/StreamsPage"
 import { ProfilePage } from "@/components/ProfilePage"
 import { AlertCircle, Loader2 } from "lucide-react"
 
+import { getApiUrl, apiFetch } from './api'
+
 const MAX_HISTORY = 60
 const MAX_LOGS = 200
 
@@ -154,101 +156,63 @@ function App() {
 
       socket.onmessage = (event) => {
         if (hasLoggedOutRef.current) return
-        
-        const msg = JSON.parse(event.data);
-        
+        const msg = JSON.parse(event.data)
         switch (msg.type) {
           case 'stats': {
-            const data = msg.payload;
-            setStats(data);
-            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            setHistory(prev => [...prev, { time: timestamp, speed: data.total_speed_mbps }].slice(-MAX_HISTORY));
-            setConnHistory(prev => [...prev, { time: timestamp, conns: data.active_connections }].slice(-MAX_HISTORY));
-            break;
+            const data = msg.payload
+            setStats(data)
+            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            setHistory(prev => [...prev, { time: timestamp, speed: data.total_speed_mbps }].slice(-MAX_HISTORY))
+            setConnHistory(prev => [...prev, { time: timestamp, conns: data.active_connections }].slice(-MAX_HISTORY))
+            break
           }
-          case 'config': {
-            setConfig(msg.payload);
-            if (window.globalConfigCallback) {
-              window.globalConfigCallback(msg.payload);
-            }
-            break;
-          }
-          case 'log_entry': {
-             setLogs(prev => [...prev, msg.payload].slice(-MAX_LOGS));
-             break;
-          }
-          case 'log_history': {
-             setLogs(msg.payload.slice(-MAX_LOGS));
-             break;
-          }
-          case 'indexer_caps': {
-            setIndexerCaps(msg.payload || {});
-            break;
-          }
-          case 'save_status': {
-            setSaveStatus({
-                type: msg.payload.status === 'success' ? 'success' : 'error',
-                msg: msg.payload.message,
-                errors: msg.payload.errors
-            });
-            setIsSaving(false);
-            if (window.profileUsernameCallback) {
-              window.profileUsernameCallback(msg.payload);
-              delete window.profileUsernameCallback;
-            }
-            break;
-          }
+          case 'log_entry':
+            setLogs(prev => [...prev, msg.payload].slice(-MAX_LOGS))
+            break
+          case 'log_history':
+            setLogs(msg.payload.slice(-MAX_LOGS))
+            break
           case 'auth_info': {
             if (msg.payload?.version) setVersion(msg.payload.version)
             if (hasLoggedOutRef.current) {
-              socket.close();
-              return;
+              socket.close()
+              return
             }
             if (msg.payload.authenticated) {
               if (authCheckTimeoutRef.current) {
                 clearTimeout(authCheckTimeoutRef.current)
                 authCheckTimeoutRef.current = null
               }
-              setAuthenticated(true);
-              setCurrentUser(msg.payload.username);
-              setMustChangePassword(msg.payload.must_change_password || false);
+              setAuthenticated(true)
+              setCurrentUser(msg.payload.username)
+              setMustChangePassword(msg.payload.must_change_password || false)
+              // Fetch config and indexer caps via API (no longer sent over WS)
+              fetch(getApiUrl('/api/config'), { credentials: 'include' })
+                .then(res => res.ok ? res.json() : null)
+                .then(data => { if (data) setConfig(data) })
+                .catch(() => {})
+              fetch(getApiUrl('/api/indexer/caps'), { credentials: 'include' })
+                .then(res => res.ok ? res.json() : null)
+                .then(data => { if (data) setIndexerCaps(data) })
+                .catch(() => {})
             } else {
               if (authCheckTimeoutRef.current) {
                 clearTimeout(authCheckTimeoutRef.current)
                 authCheckTimeoutRef.current = null
               }
               hasLoggedOutRef.current = false
-              setAuthenticated(false);
-              setCurrentUser(null);
+              setAuthenticated(false)
+              setCurrentUser(null)
               setAuthToken('')
-              localStorage.removeItem('auth_token');
-              socket.close();
+              localStorage.removeItem('auth_token')
+              socket.close()
             }
-            break;
+            break
           }
-          case 'users_response': {
-            if (window.deviceManagementCallback) {
-              window.deviceManagementCallback(msg.payload);
-            }
-            break;
-          }
-          case 'user_response': {
-            if (window.deviceResponseCallback) {
-              window.deviceResponseCallback(msg.payload);
-            }
-            break;
-          }
-          case 'user_action_response': {
-            if (window.deviceActionCallback) {
-              window.deviceActionCallback(msg.payload);
-            }
-            if (window.passwordChangeCallback) {
-              window.passwordChangeCallback(msg.payload);
-            }
-            break;
-          }
+          default:
+            break
         }
-      };
+      }
 
       socket.onclose = () => {
         setWsStatus('disconnected');
@@ -265,11 +229,6 @@ function App() {
 
       socket.onerror = () => {
         setError("Network Error: Could not connect to API");
-        if (authToken && authenticated && !currentUser) {
-          setAuthenticated(false);
-          setAuthToken('')
-          localStorage.removeItem('auth_token');
-        }
         socket.close();
       };
     };
@@ -282,17 +241,100 @@ function App() {
   }, [authenticated, authToken]);
 
   const sendCommand = (type, payload) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-          if (type === 'save_config' || type === 'save_user_configs') {
-              setSaveStatus({ type: 'normal', msg: 'Validating and saving...', errors: null });
-              setIsSaving(true);
-          } else if (type === 'restart') {
-              setIsRestarting(true);
-              isRestartingRef.current = true;
+    // API-backed commands (no WebSocket required)
+    if (type === 'save_config') {
+      setSaveStatus({ type: 'normal', msg: 'Validating and saving...', errors: null })
+      setIsSaving(true)
+      apiFetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}) })
+        .then((data) => {
+          setSaveStatus({ type: 'success', msg: data.message || 'Saved.', errors: data.errors || null })
+          if (window.profileUsernameCallback) {
+            window.profileUsernameCallback(data)
+            delete window.profileUsernameCallback
           }
-          ws.send(JSON.stringify({ type, payload }));
-      }
-  };
+          return fetch(getApiUrl('/api/config'), { credentials: 'include' })
+        })
+        .then((r) => r.ok ? r.json() : null)
+        .then((cfg) => { if (cfg) setConfig(cfg) })
+        .catch((err) => {
+          const msg = err.message || 'Save failed'
+          setSaveStatus({ type: 'error', msg, errors: null })
+          if (window.profileUsernameCallback) {
+            window.profileUsernameCallback({ status: 'error', message: msg })
+            delete window.profileUsernameCallback
+          }
+        })
+        .finally(() => setIsSaving(false))
+      return
+    }
+    if (type === 'save_user_configs') {
+      setSaveStatus({ type: 'normal', msg: 'Validating and saving...', errors: null })
+      setIsSaving(true)
+      apiFetch('/api/devices/configs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}) })
+        .then((data) => {
+          setSaveStatus({ type: data.status === 'success' ? 'success' : 'error', msg: data.message || '', errors: data.errors || null })
+        })
+        .catch((err) => setSaveStatus({ type: 'error', msg: err.message || 'Save failed', errors: null }))
+        .finally(() => setIsSaving(false))
+      return
+    }
+    if (type === 'restart') {
+      setIsRestarting(true)
+      isRestartingRef.current = true
+      apiFetch('/api/restart', { method: 'POST' }).catch(() => {
+        setIsRestarting(false)
+        isRestartingRef.current = false
+      })
+      return
+    }
+    if (type === 'get_users') {
+      apiFetch('/api/devices')
+        .then((list) => { if (window.deviceManagementCallback) window.deviceManagementCallback(list) })
+        .catch((err) => { if (window.deviceManagementCallback) window.deviceManagementCallback({ error: err.message }); delete window.deviceManagementCallback })
+      return
+    }
+    if (type === 'create_user') {
+      const username = payload?.username || ''
+      apiFetch('/api/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) })
+        .then((data) => { if (window.deviceActionCallback) window.deviceActionCallback(data && data.user ? {} : { error: (data && data.error) || 'Create failed' }); delete window.deviceActionCallback })
+        .catch((err) => { if (window.deviceActionCallback) window.deviceActionCallback({ error: err.message }); delete window.deviceActionCallback })
+      return
+    }
+    if (type === 'delete_user') {
+      const username = payload?.username || ''
+      apiFetch(`/api/devices/${encodeURIComponent(username)}`, { method: 'DELETE' })
+        .then(() => { if (window.deviceActionCallback) window.deviceActionCallback({}); delete window.deviceActionCallback })
+        .catch((err) => { if (window.deviceActionCallback) window.deviceActionCallback({ error: err.message }); delete window.deviceActionCallback })
+      return
+    }
+    if (type === 'regenerate_token') {
+      const username = payload?.username || ''
+      apiFetch(`/api/devices/${encodeURIComponent(username)}/regenerate-token`, { method: 'POST' })
+        .then((data) => { if (window.deviceActionCallback) window.deviceActionCallback({ token: data.token }); delete window.deviceActionCallback })
+        .catch((err) => { if (window.deviceActionCallback) window.deviceActionCallback({ error: err.message }); delete window.deviceActionCallback })
+      return
+    }
+    if (type === 'close_session') {
+      apiFetch('/api/sessions/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: payload?.id || '' }) }).catch(() => {})
+      return
+    }
+    if (type === 'update_password') {
+      apiFetch('/api/auth/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: payload?.username, password: payload?.password }) })
+        .then(() => { if (window.passwordChangeCallback) window.passwordChangeCallback({}); delete window.passwordChangeCallback })
+        .catch((err) => { if (window.passwordChangeCallback) window.passwordChangeCallback({ error: err.message }); delete window.passwordChangeCallback })
+      return
+    }
+    if (type === 'refresh_caps') {
+      apiFetch('/api/indexer/caps/refresh', { method: 'POST' })
+        .then((data) => setIndexerCaps(data || {}))
+        .catch(() => {})
+      return
+    }
+    // Legacy WS-only commands (ignored; WS is for stats/logs only)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type, payload }))
+    }
+  }
 
   const getHTTPSLink = () => {
       if (!config) return '#';

@@ -14,8 +14,7 @@ const (
 	ADDONPort             = "ADDON_PORT"
 	ADDONBaseURL          = "ADDON_BASE_URL"
 	LOGLevel              = "LOG_LEVEL"
-	CacheTTLSeconds = "CACHE_TTL_SECONDS"
-	AvailNZBURL     = "AVAILNZB_URL"
+	AvailNZBURL           = "AVAILNZB_URL"
 	AvailNZBAPIKey        = "AVAILNZB_API_KEY"
 	TMDBAPIKey            = "TMDB_API_KEY"
 	TVDBAPIKey            = "TVDB_API_KEY"
@@ -36,8 +35,7 @@ const (
 	KeyAddonPort      = "addon_port"
 	KeyAddonBaseURL   = "addon_base_url"
 	KeyLogLevel       = "log_level"
-	KeyCacheTTL  = "cache_ttl_seconds"
-	KeyProxyPort = "proxy_port"
+	KeyProxyPort      = "proxy_port"
 	KeyProxyHost      = "proxy_host"
 	KeyProxyAuthUser  = "proxy_auth_user"
 	KeyProxyAuthPass  = "proxy_auth_pass"
@@ -119,8 +117,7 @@ type ConfigOverrides struct {
 	AddonPort            int
 	AddonBaseURL         string
 	LogLevel             string
-	CacheTTLSeconds int
-	AvailNZBURL     string
+	AvailNZBURL          string
 	AvailNZBAPIKey       string
 	TMDBAPIKey           string
 	TVDBAPIKey           string
@@ -153,12 +150,6 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 	if v := os.Getenv(LOGLevel); v != "" {
 		o.LogLevel = v
 		keys = append(keys, KeyLogLevel)
-	}
-	if v := os.Getenv(CacheTTLSeconds); v != "" {
-		if ttl, err := strconv.Atoi(v); err == nil {
-			o.CacheTTLSeconds = ttl
-			keys = append(keys, KeyCacheTTL)
-		}
 	}
 	// Note: AvailNZBURL, AvailNZBAPIKey, TMDBAPIKey, TVDBAPIKey are not read from env vars.
 	// They are build-time constants set via ldflags and should never be modifiable at runtime.

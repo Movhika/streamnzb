@@ -194,9 +194,6 @@ type Config struct {
 	AdminMustChangePassword bool   `json:"admin_must_change_password"`
 	AdminToken              string `json:"admin_token"` // Single token for dashboard + streaming; do not send to API clients
 
-	// Validation settings
-	CacheTTLSeconds int `json:"cache_ttl_seconds"`
-
 	// NNTP Providers
 	Providers []Provider `json:"providers"`
 
@@ -216,48 +213,32 @@ type Config struct {
 	// TVDB Settings
 	TVDBAPIKey string `json:"-"`
 
-	// Search / Indexer (global defaults when per-indexer does not set)
-	SearchResultLimit    int    `json:"search_result_limit"`    // Max indexer results per search (default 1000)
-	IncludeYearInSearch  bool   `json:"include_year_in_search"` // Append release year to movie title query (default true)
-	SearchTitleLanguage  string `json:"search_title_language"`  // TMDB language for movie title (e.g. "de-DE"); empty = default
-	SearchTitleNormalize bool   `json:"search_title_normalize"`  // Normalize movie title for search (e.g. ü→ue) (default false)
-
-	// Filtering
-	Filters FilterConfig `json:"filters"`
-
-	// Sorting
-	Sorting SortConfig `json:"sorting"`
-
 	// Internal - where was this config loaded from?
 	LoadedPath string `json:"-"`
 }
 
-// GetIncludeYearInSearch returns the global default for including year in movie search (for search.RunIndexerSearches fallback).
-func (c *Config) GetIncludeYearInSearch() bool { return c.IncludeYearInSearch }
+// GetIncludeYearInSearch returns the default for including year in movie search (used when no per-indexer config).
+func (c *Config) GetIncludeYearInSearch() bool { return true }
 
-// GetSearchTitleLanguage returns the global default TMDB language for movie title (for search.RunIndexerSearches fallback).
-func (c *Config) GetSearchTitleLanguage() string { return c.SearchTitleLanguage }
+// GetSearchTitleLanguage returns the default TMDB language for movie title.
+func (c *Config) GetSearchTitleLanguage() string { return "" }
 
-// GetSearchTitleNormalize returns the global default for normalizing movie title (for search.RunIndexerSearches fallback).
-func (c *Config) GetSearchTitleNormalize() bool { return c.SearchTitleNormalize }
+// GetSearchTitleNormalize returns the default for normalizing movie title.
+func (c *Config) GetSearchTitleNormalize() bool { return false }
 
-// MergeIndexerSearch merges per-indexer config, per-device override, and global defaults (override wins over indexer wins over global).
+// MergeIndexerSearch merges per-indexer config and per-device override; uses built-in defaults for limit/year/language/normalize.
 // Returns a fully populated IndexerSearchConfig for use when building the search request per indexer.
 func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global *Config) *IndexerSearchConfig {
 	out := &IndexerSearchConfig{}
-	if global == nil {
-		global = &Config{SearchResultLimit: 1000, IncludeYearInSearch: true}
-	}
-	// Limit: override > indexer > global
-	out.SearchResultLimit = global.SearchResultLimit
+	const defaultLimit = 1000
+	out.SearchResultLimit = defaultLimit
 	if ic != nil && ic.SearchResultLimit > 0 {
 		out.SearchResultLimit = ic.SearchResultLimit
 	}
 	if override != nil && override.SearchResultLimit > 0 {
 		out.SearchResultLimit = override.SearchResultLimit
 	}
-	// IncludeYearInSearch
-	val := global.IncludeYearInSearch
+	val := true
 	if ic != nil && ic.IncludeYearInSearch != nil {
 		val = *ic.IncludeYearInSearch
 	}
@@ -265,8 +246,7 @@ func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global
 		val = *override.IncludeYearInSearch
 	}
 	out.IncludeYearInSearch = &val
-	// SearchTitleLanguage
-	s := global.SearchTitleLanguage
+	s := ""
 	if ic != nil && ic.SearchTitleLanguage != "" {
 		s = ic.SearchTitleLanguage
 	}
@@ -274,8 +254,7 @@ func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global
 		s = *override.SearchTitleLanguage
 	}
 	out.SearchTitleLanguage = &s
-	// SearchTitleNormalize
-	n := global.SearchTitleNormalize
+	n := false
 	if ic != nil && ic.SearchTitleNormalize != nil {
 		n = *ic.SearchTitleNormalize
 	}
@@ -359,57 +338,11 @@ func Load() (*Config, error) {
 		// Set defaults
 		AddonPort:               7000,
 		AddonBaseURL:            "http://localhost:7000",
-		LogLevel:                "INFO",
-		AdminUsername:           "admin",
-		CacheTTLSeconds:  300,
-		SearchResultLimit: 1000,
-		IncludeYearInSearch:     true,
-		SearchTitleLanguage:     "",
-		SearchTitleNormalize:    false,
-		ProxyPort:               119,
-		ProxyHost:               "0.0.0.0",
-		Sorting: SortConfig{
-			ResolutionWeights: map[string]int{
-				"4k":    4000000,
-				"1080p": 3000000,
-				"720p":  2000000,
-				"sd":    1000000,
-			},
-			CodecWeights: map[string]int{
-				"HEVC": 1000,
-				"x265": 1000,
-				"x264": 500,
-				"AVC":  500,
-			},
-			AudioWeights: map[string]int{
-				"Atmos":  1500,
-				"TrueHD": 1200,
-				"DTS-HD": 1000,
-				"DTS-X":  1000,
-				"DTS":    500,
-				"DD+":    400,
-				"DD":     300,
-				"AC3":    200,
-				"5.1":    500,
-				"7.1":    1000,
-			},
-			QualityWeights: map[string]int{
-				"BluRay":  2000,
-				"WEB-DL":  1500,
-				"WEBRip":  1200,
-				"HDTV":    1000,
-				"Blu-ray": 2000,
-			},
-			VisualTagWeights: map[string]int{
-				"DV":     1500,
-				"HDR10+": 1200,
-				"HDR":    1000,
-				"3D":     800,
-			},
-			GrabWeight: 0.5,
-			AgeWeight:  1.0,
-		},
-		LoadedPath: configPath,
+		LogLevel:      "INFO",
+		AdminUsername: "admin",
+		ProxyPort:     119,
+		ProxyHost:     "0.0.0.0",
+		LoadedPath:    configPath,
 	}
 
 	// Try to load existing config
@@ -559,9 +492,6 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	if keySet(keys, env.KeyLogLevel) {
 		cfg.LogLevel = o.LogLevel
 	}
-	if keySet(keys, env.KeyCacheTTL) {
-		cfg.CacheTTLSeconds = o.CacheTTLSeconds
-	}
 	if keySet(keys, env.KeyProxyPort) {
 		cfg.ProxyPort = o.ProxyPort
 	}
@@ -652,8 +582,6 @@ func CopyEnvOverridesFrom(src, dst *Config) {
 			dst.AddonBaseURL = src.AddonBaseURL
 		case env.KeyLogLevel:
 			dst.LogLevel = src.LogLevel
-		case env.KeyCacheTTL:
-			dst.CacheTTLSeconds = src.CacheTTLSeconds
 		case env.KeyProxyPort:
 			dst.ProxyPort = src.ProxyPort
 		case env.KeyProxyHost:

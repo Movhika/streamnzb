@@ -114,13 +114,16 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 		if device.Username == s.config.GetAdminUsername() {
 			mustChangePassword = s.config.AdminMustChangePassword
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		out := map[string]interface{}{
 			"authenticated":        true,
 			"username":             device.Username,
 			"must_change_password": mustChangePassword,
-		})
+		}
+		if s.strmServer != nil {
+			out["version"] = s.strmServer.Version()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
 	} else {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
@@ -130,7 +133,42 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// REST endpoints removed - all device management and config operations now use WebSocket
+// handleChangePassword updates admin password (POST /api/auth/change-password). Admin only.
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	device, _ := auth.DeviceFromContext(r)
+	if device == nil || device.Username != s.config.GetAdminUsername() {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
+		return
+	}
+	newHash := auth.HashPassword(req.Password)
+	s.mu.Lock()
+	s.config.AdminPasswordHash = newHash
+	s.config.AdminMustChangePassword = false
+	s.mu.Unlock()
+	if err := s.config.Save(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Password updated successfully",
+	})
+}
 
 // hasCustomFilters checks if user has custom filter configuration
 // Returns true only if user has explicitly set non-default values

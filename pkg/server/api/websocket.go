@@ -89,25 +89,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(1 * time.Second) // Throttled to reduce load from collectStats
 	defer ticker.Stop()
 
-	// Notify current stats and config immediately
+	// Notify stats, log history, and auth info on connect (config and indexer_caps are now via REST API).
 	go func() {
-		logger.Trace("WS initial send: collectStats start")
 		stats := s.collectStats()
-		logger.Trace("WS initial send: collectStats done")
 		payload, _ := json.Marshal(stats)
 		trySendWS(client, WSMessage{Type: "stats", Payload: payload})
-		logger.Trace("WS initial send: stats sent")
-
-		// Send user-specific config
-		s.sendConfig(client)
-
-		// Send indexer capabilities (categories, search types)
-		s.sendIndexerCaps(client)
-
-		// Send log history
 		s.sendLogHistory(client)
-
-		// Send auth info on connect (replaces /api/auth/check)
 		var mustChangePassword bool
 		if client.device != nil && client.device.Username == s.config.GetAdminUsername() {
 			mustChangePassword = s.config.AdminMustChangePassword
@@ -150,35 +137,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Handle commands
-			switch msg.Type {
-			case "get_config":
-				s.sendConfig(client)
-			case "save_config":
-				s.handleSaveConfigWS(conn, client, msg.Payload)
-			case "save_user_configs":
-				s.handleSaveUserConfigsWS(conn, client, msg.Payload)
-			case "get_users":
-				s.handleGetDevicesWS(client)
-			case "get_user":
-				s.handleGetDeviceWS(client, msg.Payload)
-			case "create_user":
-				s.handleCreateDeviceWS(client, msg.Payload)
-			case "delete_user":
-				s.handleDeleteDeviceWS(client, msg.Payload)
-			case "regenerate_token":
-				s.handleRegenerateTokenWS(client, msg.Payload)
-			case "update_password":
-				s.handleUpdatePasswordWS(client, msg.Payload)
-			case "close_session":
-				s.handleCloseSessionWS(msg.Payload)
-			case "fetch_caps":
-				s.handleFetchCapsWS(client)
-			case "restart":
-				s.handleRestartWS(conn)
-			case "stream_search":
-				s.handleStreamSearchWS(client, msg.Payload)
-			}
+			// WebSocket is only for stats and logs; all other operations use REST API.
+			// Ignore any legacy client commands (get_config, save_config, etc.).
+			_ = msg
 		}
 	}()
 
@@ -216,12 +177,6 @@ func (s *Server) sendStats(client *Client) {
 	trySendWS(client, WSMessage{Type: "stats", Payload: payload})
 }
 
-// configPayload is sent to the client; includes env_overrides for admin so the UI can show warnings
-type configPayload struct {
-	config.Config
-	EnvOverrides []string `json:"env_overrides,omitempty"`
-}
-
 func (s *Server) sendConfig(client *Client) {
 	// Admin always gets global config, devices get merged config. Never send admin hash/token to client.
 	var cfg config.Config
@@ -229,12 +184,6 @@ func (s *Server) sendConfig(client *Client) {
 		cfg = s.config.RedactForAPI()
 	} else if client.device != nil {
 		cfg = *s.config
-		if hasCustomFilters(client.device.Filters) {
-			cfg.Filters = client.device.Filters
-		}
-		if hasCustomSorting(client.device.Sorting) {
-			cfg.Sorting = client.device.Sorting
-		}
 		cfg = cfg.RedactForAPI()
 	} else {
 		cfg = s.config.RedactForAPI()
@@ -324,57 +273,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			return
 		}
 
-		// Reload components - granular when App is available (config-only skips NNTP/proxy restart)
-		go func() {
-			if s.app != nil {
-				comp, fullReload, err := s.app.Reload(&newCfg)
-				if err != nil {
-					logger.Error("Reload: App.Reload failed", "err", err)
-					return
-				}
-				s.ReloadFromComponents(comp, fullReload)
-				logger.Info("Reload: configuration reloaded successfully", "full", fullReload)
-				return
-			}
-			// Fallback when App not set (legacy)
-			base, err := initialization.BuildComponents(&newCfg)
-			if err != nil {
-				logger.Error("Reload: BuildComponents failed", "err", err)
-				return
-			}
-			cacheTTL := time.Duration(newCfg.CacheTTLSeconds) * time.Second
-			validator := validation.NewChecker(base.ProviderPools, base.ProviderOrder, cacheTTL, 5, 6)
-			triageService := triage.NewService(&base.Config.Filters, base.Config.Sorting)
-			s.mu.RLock()
-			availNZBURL := s.availNZBURL
-			availNZBAPIKey := s.availNZBAPIKey
-			tmdbAPIKey := s.tmdbAPIKey
-			tvdbAPIKey := s.tvdbAPIKey
-			s.mu.RUnlock()
-			availClient := availnzb.NewClient(availNZBURL, availNZBAPIKey)
-			tmdbClient := tmdb.NewClient(tmdbAPIKey)
-			dataDir := filepath.Dir(base.Config.LoadedPath)
-			if dataDir == "" {
-				dataDir, _ = os.Getwd()
-			}
-			tvdbClient := tvdb.NewClient(tvdbAPIKey, dataDir)
-			comp := &app.Components{
-				Config:               base.Config,
-				Indexer:              base.Indexer,
-				ProviderPools:        base.ProviderPools,
-				ProviderOrder:        base.ProviderOrder,
-				StreamingPools:       base.StreamingPools,
-				AvailNZBIndexerHosts: base.AvailNZBIndexerHosts,
-				IndexerCaps:          base.IndexerCaps,
-				Validator:            validator,
-				Triage:               triageService,
-				AvailClient:          availClient,
-				TMDBClient:           tmdbClient,
-				TVDBClient:           tvdbClient,
-			}
-			s.ReloadFromComponents(comp, true)
-			logger.Info("Reload: configuration reloaded successfully")
-		}()
+		s.reloadConfigAsync(&newCfg)
 
 		// Push updated config + caps back to client
 		s.sendConfig(client)
@@ -385,6 +284,60 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 
 	// Regular devices cannot save via this endpoint
 	trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save global configuration"}`)})
+}
+
+// reloadConfigAsync runs config reload in a goroutine (used by both WS and REST PUT /api/config).
+func (s *Server) reloadConfigAsync(newCfg *config.Config) {
+	go func() {
+		if s.app != nil {
+			comp, fullReload, err := s.app.Reload(newCfg)
+			if err != nil {
+				logger.Error("Reload: App.Reload failed", "err", err)
+				return
+			}
+			s.ReloadFromComponents(comp, fullReload)
+			logger.Info("Reload: configuration reloaded successfully", "full", fullReload)
+			return
+		}
+		base, err := initialization.BuildComponents(newCfg)
+		if err != nil {
+			logger.Error("Reload: BuildComponents failed", "err", err)
+			return
+		}
+		validator := validation.NewChecker(base.ProviderPools, base.ProviderOrder, 5, 6)
+		defaultFilters := config.DefaultFilterConfig()
+		defaultSorting := config.DefaultSortConfig()
+		triageService := triage.NewService(&defaultFilters, defaultSorting)
+		s.mu.RLock()
+		availNZBURL := s.availNZBURL
+		availNZBAPIKey := s.availNZBAPIKey
+		tmdbAPIKey := s.tmdbAPIKey
+		tvdbAPIKey := s.tvdbAPIKey
+		s.mu.RUnlock()
+		availClient := availnzb.NewClient(availNZBURL, availNZBAPIKey)
+		tmdbClient := tmdb.NewClient(tmdbAPIKey)
+		dataDir := filepath.Dir(base.Config.LoadedPath)
+		if dataDir == "" {
+			dataDir, _ = os.Getwd()
+		}
+		tvdbClient := tvdb.NewClient(tvdbAPIKey, dataDir)
+		comp := &app.Components{
+			Config:               base.Config,
+			Indexer:              base.Indexer,
+			ProviderPools:        base.ProviderPools,
+			ProviderOrder:        base.ProviderOrder,
+			StreamingPools:       base.StreamingPools,
+			AvailNZBIndexerHosts: base.AvailNZBIndexerHosts,
+			IndexerCaps:          base.IndexerCaps,
+			Validator:            validator,
+			Triage:               triageService,
+			AvailClient:          availClient,
+			TMDBClient:           tmdbClient,
+			TVDBClient:           tvdbClient,
+		}
+		s.ReloadFromComponents(comp, true)
+		logger.Info("Reload: configuration reloaded successfully")
+	}()
 }
 
 // handleFetchCapsWS re-fetches capabilities for all indexers and broadcasts to the client.
@@ -715,12 +668,13 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	// 1. Validate NNTP Providers
 	for i, p := range cfg.Providers {
 		wg.Add(1)
 		go func(idx int, provider config.Provider) {
 			defer wg.Done()
-			// Basic format check
+			if provider.Enabled != nil && !*provider.Enabled {
+				return
+			}
 			if provider.Host == "" {
 				mu.Lock()
 				errors[fmt.Sprintf("providers.%d.host", idx)] = "Host is required"
@@ -736,12 +690,14 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 		}(i, p)
 	}
 
-	// 2. Validate Internal Indexers (ping with timeout so save doesn't hang on slow/dead indexers)
 	const indexerPingTimeout = 5 * time.Second
 	for i, idx := range cfg.Indexers {
 		wg.Add(1)
 		go func(index int, indexerCfg config.IndexerConfig) {
 			defer wg.Done()
+			if indexerCfg.Enabled != nil && !*indexerCfg.Enabled {
+				return
+			}
 			if indexerCfg.URL == "" {
 				mu.Lock()
 				errors[fmt.Sprintf("indexers.%d.url", index)] = "URL is required"

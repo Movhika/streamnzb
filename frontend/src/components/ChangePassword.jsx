@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { AlertCircle, Loader2 } from "lucide-react"
+import { getApiUrl, apiFetch } from '../api'
 
 export default function ChangePassword({ username, onPasswordChanged }) {
   const [currentPassword, setCurrentPassword] = useState('')
@@ -11,95 +12,43 @@ export default function ChangePassword({ username, onPasswordChanged }) {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [ws, setWs] = useState(null)
-
-  // Wait for WebSocket connection
-  useEffect(() => {
-    const checkWS = () => {
-      if (window.ws && window.ws.readyState === WebSocket.OPEN) {
-        setWs(window.ws)
-        return
-      }
-      // Retry after a short delay
-      setTimeout(checkWS, 100)
-    }
-    checkWS()
-  }, [])
-
-  const sendCommand = (type, payload) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type, payload }))
-      return true
-    }
-    return false
-  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
-
     if (newPassword !== confirmPassword) {
       setError('New passwords do not match')
       return
     }
-
     if (newPassword.length < 6) {
       setError('Password must be at least 6 characters long')
       return
     }
-
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setError('WebSocket not connected. Please wait...')
-      return
-    }
-
     setLoading(true)
-
     try {
-      const token = localStorage.getItem('auth_token') || ''
-      
-      // First verify current password by attempting login
-      const loginResponse = await fetch('/api/login', {
+      const loginRes = await fetch(getApiUrl('/api/login'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ username, password: currentPassword }),
       })
-
-      const loginData = await loginResponse.json()
+      const loginData = await loginRes.json().catch(() => ({}))
       if (!loginData.success) {
         setError('Current password is incorrect')
         setLoading(false)
         return
       }
-
-      // Current password is correct, now update it via WebSocket
-      window.passwordChangeCallback = (payload) => {
-        setLoading(false)
-        if (payload.error) {
-          setError(payload.error)
-        } else {
-          // Update token if new one was provided
-          if (loginData.token) {
-            localStorage.setItem('auth_token', loginData.token)
-          }
-          // Password changed successfully, notify parent
-          onPasswordChanged()
-        }
-        delete window.passwordChangeCallback
-      }
-
-      if (!sendCommand('update_password', { username, password: newPassword })) {
-        setError('Failed to send update request')
-        setLoading(false)
-        delete window.passwordChangeCallback
-      }
+      await apiFetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password: newPassword }),
+      })
+      if (loginData.token) localStorage.setItem('auth_token', loginData.token)
+      onPasswordChanged()
     } catch (err) {
-      setError('Failed to connect to server')
+      setError(err.message || 'Failed to connect to server')
+    } finally {
       setLoading(false)
-      delete window.passwordChangeCallback
     }
   }
 

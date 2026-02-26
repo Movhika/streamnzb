@@ -77,16 +77,16 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 		return nil, err
 	}
 
-	cacheTTL := time.Duration(cfg.CacheTTLSeconds) * time.Second
 	const validationSampleSize = 5
 	validator := validation.NewChecker(
 		base.ProviderPools,
 		base.ProviderOrder,
-		cacheTTL,
 		validationSampleSize,
 		6,
 	)
-	triageSvc := triage.NewService(&cfg.Filters, cfg.Sorting)
+	defaultFilters := config.DefaultFilterConfig()
+	defaultSorting := config.DefaultSortConfig()
+	triageSvc := triage.NewService(&defaultFilters, defaultSorting)
 	availClient := availnzb.NewClient(opts.AvailNZBURL, opts.AvailNZBAPIKey)
 	if err := availClient.RefreshBackbones(); err != nil {
 		logger.Debug("AvailNZB backbones refresh on start", "err", err)
@@ -140,13 +140,12 @@ func ConfigChanged(old, new_ *config.Config) ReloadScope {
 		old.ProxyPort != new_.ProxyPort ||
 		old.ProxyAuthUser != new_.ProxyAuthUser ||
 		old.ProxyAuthPass != new_.ProxyAuthPass
-	validationChanged := old.CacheTTLSeconds != new_.CacheTTLSeconds
 
 	if providersChanged || indexersChanged {
 		return ReloadFull
 	}
-	if proxyChanged || validationChanged {
-		return ReloadFull // Validator depends on validation settings
+	if proxyChanged {
+		return ReloadFull // Validator depends on proxy settings
 	}
 	return ReloadConfigOnly
 }
@@ -164,8 +163,10 @@ func (a *App) Reload(newCfg *config.Config) (*Components, bool, error) {
 	switch scope {
 	case ReloadConfigOnly:
 		// No pool/indexer rebuild - just config + triage
-		logger.Info("Reload: config-only (filters, sorting, limits) - no NNTP/indexer restart")
-		triageSvc := triage.NewService(&newCfg.Filters, newCfg.Sorting)
+		logger.Info("Reload: config-only - no NNTP/indexer restart")
+		defaultFilters := config.DefaultFilterConfig()
+		defaultSorting := config.DefaultSortConfig()
+		triageSvc := triage.NewService(&defaultFilters, defaultSorting)
 		comp := *old
 		comp.Config = newCfg
 		comp.Triage = triageSvc

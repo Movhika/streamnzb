@@ -1073,10 +1073,7 @@ type SearchParams struct {
 // buildSearchParams builds the search request and content IDs for the given contentType and id.
 // Used by buildOrderedPlayList and GetAvailNZBStreams. Indexer overrides come from the stream (v1 may be nil).
 func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (*SearchParams, error) {
-	searchLimit := s.config.SearchResultLimit
-	if searchLimit <= 0 {
-		searchLimit = 1000
-	}
+	const searchLimit = 1000
 	req := indexer.SearchRequest{Limit: searchLimit}
 
 	searchID := id
