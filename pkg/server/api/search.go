@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"streamnzb/pkg/auth"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/server/stremio"
 	"streamnzb/pkg/services/metadata/tmdb"
 )
 
@@ -20,6 +22,7 @@ type tmdbSearchResult struct {
 	IMDbID    string `json:"imdb_id,omitempty"`
 	TVDBID    int    `json:"tvdb_id,omitempty"`
 	PosterURL string `json:"poster_url,omitempty"` // Small poster for dropdown (w92)
+	Overview  string `json:"overview,omitempty"`   // Short description
 }
 
 func (s *Server) handleTMDBSearch(w http.ResponseWriter, r *http.Request) {
@@ -57,12 +60,17 @@ func (s *Server) handleTMDBSearch(w http.ResponseWriter, r *http.Request) {
 		if r.PosterPath != "" {
 			posterURL = "https://image.tmdb.org/t/p/w92" + r.PosterPath
 		}
+		overview := ""
+		if r.Overview != "" {
+			overview = r.Overview
+		}
 		item := tmdbSearchResult{
 			TMDBID:    r.ID,
 			Title:     title,
 			Year:      year,
 			MediaType: r.MediaType,
 			PosterURL: posterURL,
+			Overview:  overview,
 		}
 		if r.MediaType == "movie" {
 			item.ID = strconv.Itoa(r.ID)
@@ -87,6 +95,107 @@ func (s *Server) handleTMDBSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results)
+}
+
+// tmdbTVDetailsResponse is the JSON shape for GET /api/tmdb/tv/:id/details
+type tmdbTVDetailsResponse struct {
+	Name    string                   `json:"name"`
+	Seasons []tmdbTVSeasonInfo      `json:"seasons"`
+}
+
+type tmdbTVSeasonInfo struct {
+	SeasonNumber int    `json:"season_number"`
+	EpisodeCount int    `json:"episode_count"`
+	Name         string `json:"name"`
+}
+
+// tmdbTVSeasonResponse is the JSON shape for GET /api/tmdb/tv/:id/seasons/:num
+type tmdbTVSeasonResponse struct {
+	SeasonNumber int                   `json:"season_number"`
+	Episodes     []tmdbTVEpisodeInfo   `json:"episodes"`
+}
+
+type tmdbTVEpisodeInfo struct {
+	EpisodeNumber int    `json:"episode_number"`
+	Name          string `json:"name"`
+	Overview      string `json:"overview,omitempty"`
+	AirDate       string `json:"air_date,omitempty"`
+}
+
+// handleTMDBTV handles GET /api/tmdb/tv/:id/details and GET /api/tmdb/tv/:id/seasons/:season
+func (s *Server) handleTMDBTV(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := auth.DeviceFromContext(r); !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/api/tmdb/tv/")
+	if path == r.URL.Path {
+		http.NotFound(w, r)
+		return
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 1 || parts[0] == "" {
+		http.Error(w, "tv id required", http.StatusBadRequest)
+		return
+	}
+	tmdbID, err := strconv.Atoi(parts[0])
+	if err != nil || tmdbID <= 0 {
+		http.Error(w, "invalid tv id", http.StatusBadRequest)
+		return
+	}
+	client := tmdb.NewClient(s.tmdbAPIKey)
+
+	if len(parts) == 1 || (len(parts) == 2 && parts[1] == "details") {
+		// GET /api/tmdb/tv/123/details or /api/tmdb/tv/123
+		details, err := client.GetTVDetails(tmdbID)
+		if err != nil {
+			logger.Debug("TMDB TV details failed", "id", tmdbID, "err", err)
+			http.Error(w, "TV details failed", http.StatusBadGateway)
+			return
+		}
+		seasons := make([]tmdbTVSeasonInfo, 0, len(details.Seasons))
+		for _, se := range details.Seasons {
+			seasons = append(seasons, tmdbTVSeasonInfo{
+				SeasonNumber: se.SeasonNumber,
+				EpisodeCount: se.EpisodeCount,
+				Name:         se.Name,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(tmdbTVDetailsResponse{Name: details.Name, Seasons: seasons})
+		return
+	}
+	if len(parts) >= 3 && parts[1] == "seasons" {
+		// GET /api/tmdb/tv/123/seasons/2
+		seasonNum, err := strconv.Atoi(parts[2])
+		if err != nil || seasonNum < 0 {
+			http.Error(w, "invalid season number", http.StatusBadRequest)
+			return
+		}
+		season, err := client.GetTVSeasonDetails(tmdbID, seasonNum)
+		if err != nil {
+			logger.Debug("TMDB TV season failed", "id", tmdbID, "season", seasonNum, "err", err)
+			http.Error(w, "Season details failed", http.StatusBadGateway)
+			return
+		}
+		episodes := make([]tmdbTVEpisodeInfo, 0, len(season.Episodes))
+		for _, ep := range season.Episodes {
+			episodes = append(episodes, tmdbTVEpisodeInfo{
+				EpisodeNumber: ep.EpisodeNumber,
+				Name:          ep.Name,
+				Overview:      ep.Overview,
+				AirDate:       ep.AirDate,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(tmdbTVSeasonResponse{SeasonNumber: season.SeasonNumber, Episodes: episodes})
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (s *Server) handleStreams(w http.ResponseWriter, r *http.Request) {
@@ -147,4 +256,39 @@ func (s *Server) handleStreamsAvail(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"streams": streams})
+}
+
+// handleSearchReleases returns all releases (indexer + AvailNZB) for a title with availability and per-stream tags.
+func (s *Server) handleSearchReleases(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := auth.DeviceFromContext(r); !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	contentType := r.URL.Query().Get("type")
+	id := r.URL.Query().Get("id")
+	if contentType == "" || id == "" {
+		http.Error(w, "type and id are required", http.StatusBadRequest)
+		return
+	}
+	if contentType != "movie" && contentType != "series" {
+		http.Error(w, "type must be movie or series", http.StatusBadRequest)
+		return
+	}
+	result, err := s.strmServer.GetSearchReleases(r.Context(), contentType, id)
+	if err != nil {
+		logger.Error("GetSearchReleases failed", "type", contentType, "id", id, "err", err)
+		http.Error(w, "Search releases failed", http.StatusInternalServerError)
+		return
+	}
+	if result == nil {
+		result = &stremio.SearchReleasesResponse{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		logger.Debug("Search releases encode failed", "err", err)
+	}
 }

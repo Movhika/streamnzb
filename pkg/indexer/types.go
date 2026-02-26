@@ -149,12 +149,16 @@ func (i *Item) ToRelease() *release.Release {
 			}
 		}
 	}
+	indexerName := i.ActualIndexer
+	if indexerName == "" && i.SourceIndexer != nil {
+		indexerName = i.SourceIndexer.Name()
+	}
 	return &release.Release{
 		Title:         i.Title,
 		Link:          i.Link,
 		DetailsURL:    i.ReleaseDetailsURL(),
 		Size:          i.Size,
-		Indexer:       i.ActualIndexer,
+		Indexer:       indexerName,
 		SourceIndexer: i.SourceIndexer,
 		PubDate:       i.PubDate,
 		GUID:          i.GUID,

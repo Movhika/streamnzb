@@ -1,9 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Loader2, Search, Film, Tv, ExternalLink, ChevronDown } from "lucide-react"
+import { Loader2, Search, Film, Tv, ChevronDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const DEBOUNCE_MS = 350
@@ -17,38 +15,43 @@ function useDebounce(value, delay) {
   return debouncedValue
 }
 
-function dedupeStreamsByUrl(streams) {
-  if (!Array.isArray(streams)) return []
-  const seen = new Set()
-  return streams.filter((s) => {
-    const key = s.url || s.name || ''
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+function formatSize(bytes) {
+  if (bytes <= 0) return '—'
+  const gb = bytes / (1024 ** 3)
+  if (gb >= 1) return `${gb.toFixed(1)} GB`
+  const mb = bytes / (1024 ** 2)
+  return `${mb.toFixed(0)} MB`
 }
 
-export function SearchPage({ authToken, config, sendCommand, ws }) {
+const authHeader = (token) => (token ? { Authorization: `Bearer ${token}` } : {})
+
+export function SearchPage({ authToken }) {
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState([])
+  const [tmdbResults, setTmdbResults] = useState([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState(null)
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [selected, setSelected] = useState(null)
-  const [availStreams, setAvailStreams] = useState([])
-  const [validatedStreams, setValidatedStreams] = useState([])
-  const [streamSearchDone, setStreamSearchDone] = useState(false)
-  const [streamsLoading, setStreamsLoading] = useState(false)
-  const [streamsError, setStreamsError] = useState(null)
-  const [loadingMore, setLoadingMore] = useState(false)
+  const [tvDetails, setTvDetails] = useState(null)
+  const [tvDetailsLoading, setTvDetailsLoading] = useState(false)
+  const [tvDetailsError, setTvDetailsError] = useState(null)
+  const [selectedSeason, setSelectedSeason] = useState(null)
+  const [episodes, setEpisodes] = useState([])
+  const [episodesLoading, setEpisodesLoading] = useState(false)
+  const [selectedEpisode, setSelectedEpisode] = useState(null)
+  const [releasesData, setReleasesData] = useState(null)
+  const [releasesLoading, setReleasesLoading] = useState(false)
+  const [releasesError, setReleasesError] = useState(null)
+  const [filterAvailability, setFilterAvailability] = useState(null)
+  const [filterStreamId, setFilterStreamId] = useState(null)
+  const [sortByStreamId, setSortByStreamId] = useState(null)
   const searchContainerRef = useRef(null)
-  const currentSearchRef = useRef(null) // { type, id } to match stream_result/done
 
   const debouncedQuery = useDebounce(query.trim(), DEBOUNCE_MS)
 
-  const fetchSearch = useCallback(async (q) => {
+  const fetchTmdbSearch = useCallback(async (q) => {
     if (!q || !authToken) {
-      setResults([])
+      setTmdbResults([])
       return
     }
     setSearchLoading(true)
@@ -60,15 +63,15 @@ export function SearchPage({ authToken, config, sendCommand, ws }) {
       if (!res.ok) {
         if (res.status === 401) setSearchError('Not authorized')
         else setSearchError('Search failed')
-        setResults([])
+        setTmdbResults([])
         return
       }
       const data = await res.json()
-      setResults(Array.isArray(data) ? data : [])
+      setTmdbResults(Array.isArray(data) ? data : [])
       setDropdownOpen(true)
-    } catch (err) {
+    } catch {
       setSearchError('Search failed')
-      setResults([])
+      setTmdbResults([])
     } finally {
       setSearchLoading(false)
     }
@@ -76,33 +79,14 @@ export function SearchPage({ authToken, config, sendCommand, ws }) {
 
   useEffect(() => {
     if (debouncedQuery) {
-      fetchSearch(debouncedQuery)
+      fetchTmdbSearch(debouncedQuery)
     } else {
-      setResults([])
+      setTmdbResults([])
       setDropdownOpen(false)
       setSearchLoading(false)
       setSearchError(null)
     }
-  }, [debouncedQuery, fetchSearch])
-
-  useEffect(() => {
-    const onMessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data)
-        if (msg.type === 'stream_result' && msg.payload && currentSearchRef.current) {
-          setValidatedStreams((prev) => dedupeStreamsByUrl([...prev, msg.payload]))
-        } else if (msg.type === 'stream_search_done' && currentSearchRef.current) {
-          setStreamSearchDone(true)
-          setStreamsLoading(false)
-          setLoadingMore(false)
-          currentSearchRef.current = null
-        }
-      } catch (_) {}
-    }
-    if (!ws) return
-    ws.addEventListener('message', onMessage)
-    return () => ws.removeEventListener('message', onMessage)
-  }, [ws])
+  }, [debouncedQuery, fetchTmdbSearch])
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -114,79 +98,135 @@ export function SearchPage({ authToken, config, sendCommand, ws }) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  const fetchReleases = useCallback(async (contentType, id) => {
+    setReleasesLoading(true)
+    setReleasesError(null)
+    try {
+      const res = await fetch(
+        `/api/search/releases?type=${encodeURIComponent(contentType)}&id=${encodeURIComponent(id)}`,
+        { headers: authHeader(authToken) }
+      )
+      if (!res.ok) {
+        setReleasesError(res.status === 401 ? 'Not authorized' : 'Failed to load releases')
+        setReleasesData(null)
+        return
+      }
+      const data = await res.json()
+      setReleasesData({ streams: data.streams || [], releases: data.releases || [] })
+    } catch {
+      setReleasesError('Failed to load releases')
+      setReleasesData(null)
+    } finally {
+      setReleasesLoading(false)
+    }
+  }, [authToken])
+
   const handleResultClick = useCallback(async (item) => {
     if (!authToken) return
-    const contentType = item.media_type === 'movie' ? 'movie' : 'series'
-    const id = item.id || (item.media_type === 'movie' ? String(item.tmdb_id) : `tmdb:${item.tmdb_id}`)
     setSelected(item)
-    setAvailStreams([])
-    setValidatedStreams([])
-    setStreamSearchDone(false)
-    setStreamsError(null)
+    setReleasesData(null)
+    setReleasesError(null)
+    setTvDetails(null)
+    setTvDetailsError(null)
+    setSelectedSeason(null)
+    setEpisodes([])
+    setSelectedEpisode(null)
+    setFilterAvailability(null)
+    setFilterStreamId(null)
+    setSortByStreamId(null)
     setDropdownOpen(false)
-    setStreamsLoading(true)
-    currentSearchRef.current = { type: contentType, id }
 
+    if (item.media_type === 'movie') {
+      const id = item.id || String(item.tmdb_id)
+      fetchReleases('movie', id)
+      return
+    }
+
+    // TV show: fetch seasons first
+    const tmdbId = item.tmdb_id
+    setTvDetailsLoading(true)
     try {
-      const availRes = await fetch(
-        `/api/streams/avail?type=${encodeURIComponent(contentType)}&id=${encodeURIComponent(id)}`,
-        { headers: { Authorization: `Bearer ${authToken}` } }
-      )
-      if (availRes.ok) {
-        const availData = await availRes.json()
-        setAvailStreams(availData.streams || [])
+      const res = await fetch(`/api/tmdb/tv/${tmdbId}/details`, { headers: authHeader(authToken) })
+      if (!res.ok) {
+        setTvDetailsError(res.status === 401 ? 'Not authorized' : 'Failed to load show details')
+        setTvDetails(null)
+        return
       }
-    } catch (_) {}
-
-    if (sendCommand && ws && ws.readyState === WebSocket.OPEN) {
-      sendCommand('stream_search', { type: contentType, id })
-    } else {
-      setStreamsLoading(false)
-      setStreamSearchDone(true)
-      currentSearchRef.current = null
+      const data = await res.json()
+      setTvDetails({ name: data.name, seasons: data.seasons || [] })
+    } catch {
+      setTvDetailsError('Failed to load show details')
+      setTvDetails(null)
+    } finally {
+      setTvDetailsLoading(false)
     }
-  }, [authToken, sendCommand, ws])
+  }, [authToken, fetchReleases])
 
-  const handleLoadMore = useCallback(() => {
-    if (!selected || !authToken || !currentSearchRef.current) return
-    const contentType = selected.media_type === 'movie' ? 'movie' : 'series'
-    const id = selected.id || (selected.media_type === 'movie' ? String(selected.tmdb_id) : `tmdb:${selected.tmdb_id}`)
-    setLoadingMore(true)
-    currentSearchRef.current = { type: contentType, id }
-    if (sendCommand && ws && ws.readyState === WebSocket.OPEN) {
-      sendCommand('stream_search', { type: contentType, id })
-    } else {
-      setLoadingMore(false)
+  // When TV season is selected, fetch episodes
+  useEffect(() => {
+    if (!selected || selected.media_type !== 'tv' || selectedSeason == null) {
+      setEpisodes([])
+      setSelectedEpisode(null)
+      return
     }
-  }, [selected, authToken, sendCommand, ws])
+    setEpisodesLoading(true)
+    setSelectedEpisode(null)
+    fetch(`/api/tmdb/tv/${selected.tmdb_id}/seasons/${selectedSeason}`, { headers: authHeader(authToken) })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Failed to load episodes'))))
+      .then((data) => setEpisodes(data.episodes || []))
+      .catch(() => setEpisodes([]))
+      .finally(() => setEpisodesLoading(false))
+  }, [selected, selectedSeason, authToken])
 
-  const allStreams = dedupeStreamsByUrl([...availStreams, ...validatedStreams])
-  const showLoadMore = selected && streamSearchDone && !streamsLoading && !loadingMore && allStreams.length > 0
+  // When TV episode is selected, fetch releases
+  useEffect(() => {
+    if (!selected || selected.media_type !== 'tv' || selectedSeason == null || selectedEpisode == null) return
+    const id = `tmdb:${selected.tmdb_id}:${selectedSeason}:${selectedEpisode}`
+    fetchReleases('series', id)
+  }, [selected, selectedSeason, selectedEpisode, fetchReleases])
 
-  const addonBaseUrl = config?.addon_base_url ? config.addon_base_url.replace(/\/$/, '') : window.location.origin
-  const manifestUrl = authToken ? `${addonBaseUrl}/${authToken}/manifest.json` : addonBaseUrl
+  const filteredAndSortedReleases = releasesData?.releases
+    ? (() => {
+        let list = [...releasesData.releases]
+        if (filterAvailability) {
+          list = list.filter((r) => r.availability === filterAvailability)
+        }
+        if (filterStreamId) {
+          list = list.filter((r) => {
+            const tag = r.stream_tags?.find((t) => t.stream_id === filterStreamId)
+            return tag?.fits
+          })
+        }
+        if (sortByStreamId) {
+          list.sort((a, b) => {
+            const sa = a.stream_tags?.find((t) => t.stream_id === sortByStreamId)?.score ?? 0
+            const sb = b.stream_tags?.find((t) => t.stream_id === sortByStreamId)?.score ?? 0
+            return sb - sa
+          })
+        }
+        return list
+      })()
+    : []
+
+  const streams = releasesData?.streams ?? []
 
   return (
-    <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6 px-4 lg:px-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Search className="h-5 w-5" />
-            Search
-          </CardTitle>
-          <CardDescription>
-            Search movies and TV shows. Results show a dropdown with posters. Click a result to see AvailNZB streams first, then validated streams arrive via WebSocket.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="relative" ref={searchContainerRef}>
+    <div className="py-4 md:py-6 px-4 lg:px-6">
+      <div className="rounded-lg border bg-card text-card-foreground shadow-sm">
+        <div className="p-4 md:p-6 flex flex-col gap-6">
+        <div>
+          <p className="text-sm text-muted-foreground mb-4">
+            Search movies and TV shows. Pick a title to see all releases from indexers and AvailNZB. Use tags to filter by availability or stream, and to sort by stream priority.
+          </p>
+
+          <div className="relative max-w-xl" ref={searchContainerRef}>
             <div className="relative">
               <Input
                 type="text"
                 placeholder="Search movies or TV shows..."
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                onFocus={() => results.length > 0 && setDropdownOpen(true)}
+                onFocus={() => tmdbResults.length > 0 && setDropdownOpen(true)}
                 className="pr-10"
               />
               {searchLoading && (
@@ -194,7 +234,7 @@ export function SearchPage({ authToken, config, sendCommand, ws }) {
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 </div>
               )}
-              {!searchLoading && results.length > 0 && (
+              {!searchLoading && tmdbResults.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setDropdownOpen((o) => !o)}
@@ -205,12 +245,12 @@ export function SearchPage({ authToken, config, sendCommand, ws }) {
                 </button>
               )}
             </div>
-            {dropdownOpen && results.length > 0 && (
+            {dropdownOpen && tmdbResults.length > 0 && (
               <ul
                 className="absolute z-50 mt-1 max-h-[min(70vh,400px)] w-full overflow-auto rounded-md border bg-popover py-1 shadow-md"
                 role="listbox"
               >
-                {results.map((item) => (
+                {tmdbResults.map((item) => (
                   <li key={`${item.media_type}-${item.tmdb_id}`} role="option">
                     <button
                       type="button"
@@ -222,27 +262,16 @@ export function SearchPage({ authToken, config, sendCommand, ws }) {
                     >
                       <div className="h-12 w-10 shrink-0 overflow-hidden rounded bg-muted">
                         {item.poster_url ? (
-                          <img
-                            src={item.poster_url}
-                            alt=""
-                            className="h-full w-full object-cover"
-                            loading="lazy"
-                          />
+                          <img src={item.poster_url} alt="" className="h-full w-full object-cover" loading="lazy" />
                         ) : (
                           <div className="flex h-full w-full items-center justify-center">
-                            {item.media_type === 'movie' ? (
-                              <Film className="h-5 w-5 text-muted-foreground" />
-                            ) : (
-                              <Tv className="h-5 w-5 text-muted-foreground" />
-                            )}
+                            {item.media_type === 'movie' ? <Film className="h-5 w-5 text-muted-foreground" /> : <Tv className="h-5 w-5 text-muted-foreground" />}
                           </div>
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
                         <span className="font-medium truncate block">{item.title}</span>
-                        {item.year && (
-                          <span className="text-muted-foreground text-sm">{item.year}</span>
-                        )}
+                        {item.year && <span className="text-muted-foreground text-sm">{item.year}</span>}
                       </div>
                       <Badge variant="secondary" className="shrink-0 text-xs">
                         {item.media_type === 'movie' ? 'Movie' : 'TV'}
@@ -253,77 +282,235 @@ export function SearchPage({ authToken, config, sendCommand, ws }) {
               </ul>
             )}
           </div>
-          {searchError && (
-            <p className="text-sm text-destructive">{searchError}</p>
-          )}
-        </CardContent>
-      </Card>
+          {searchError && <p className="text-sm text-destructive mt-2">{searchError}</p>}
+        </div>
 
-      {selected && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{selected.title} {selected.year && `(${selected.year})`}</CardTitle>
-            <CardDescription>
-              AvailNZB results appear first; stream results stream in below. Open the addon in Stremio to play.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {(streamsLoading || loadingMore) && (
-              <div className="flex items-center gap-2 py-2">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">
-                  {loadingMore ? 'Loading more...' : 'Validating streams...'}
-                </span>
-              </div>
-            )}
-            {streamsError && (
-              <p className="text-sm text-destructive">{streamsError}</p>
-            )}
-            {!streamsLoading && !streamsError && allStreams.length === 0 && streamSearchDone && (
-              <p className="text-sm text-muted-foreground">No streams found.</p>
-            )}
-            {allStreams.length > 0 && (
-              <>
-                <ul className="space-y-2">
-                  {allStreams.map((s, i) => (
-                    <li
-                      key={s.url || i}
-                      className="rounded-lg border p-3 text-sm"
-                    >
-                      <div className="font-medium">{s.name || s.title || 'Stream'}</div>
-                      {s.description && (
-                        <div className="mt-1 text-muted-foreground line-clamp-2">{s.description}</div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                {showLoadMore && (
-                  <div className="pt-2">
-                    <Button variant="outline" size="sm" onClick={handleLoadMore} disabled={loadingMore}>
-                      {loadingMore ? (
-                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                      ) : null}
-                      Load more
-                    </Button>
+        {selected && (
+          <>
+            <div className="flex gap-4 rounded-md border bg-muted/30 p-4">
+              <div className="h-32 w-24 shrink-0 overflow-hidden rounded-md bg-muted">
+                {selected.poster_url ? (
+                  <img
+                    src={selected.poster_url}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center">
+                    {selected.media_type === 'movie' ? (
+                      <Film className="h-10 w-10 text-muted-foreground" />
+                    ) : (
+                      <Tv className="h-10 w-10 text-muted-foreground" />
+                    )}
                   </div>
                 )}
-                <div className="pt-2">
-                  <Button variant="outline" size="sm" asChild>
-                    <a href={manifestUrl} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="h-4 w-4 mr-2" />
-                      Open addon in Stremio
-                    </a>
-                  </Button>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-lg font-semibold">{selected.title}</h3>
+                  {selected.year && (
+                    <span className="text-muted-foreground text-sm">({selected.year})</span>
+                  )}
+                  <Badge variant="secondary" className="text-xs">
+                    {selected.media_type === 'movie' ? 'Movie' : 'TV'}
+                  </Badge>
                 </div>
+                {selected.overview && (
+                  <p className="text-sm text-muted-foreground mt-2 line-clamp-3">{selected.overview}</p>
+                )}
+                {selected.media_type === 'tv' && (
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    {tvDetailsLoading && (
+                      <span className="text-sm text-muted-foreground flex items-center gap-1">
+                        <Loader2 className="h-4 w-4 animate-spin" /> Loading seasons…
+                      </span>
+                    )}
+                    {tvDetailsError && (
+                      <p className="text-sm text-destructive">{tvDetailsError}</p>
+                    )}
+                    {tvDetails && tvDetails.seasons?.length > 0 && (
+                      <>
+                        <label className="text-sm font-medium">
+                          Season
+                          <select
+                            value={selectedSeason ?? ''}
+                            onChange={(e) => setSelectedSeason(e.target.value === '' ? null : parseInt(e.target.value, 10))}
+                            className="ml-2 rounded-md border bg-background px-2 py-1 text-sm"
+                          >
+                            <option value="">Select season</option>
+                            {tvDetails.seasons
+                              .filter((se) => se.season_number >= 0)
+                              .map((se) => (
+                                <option key={se.season_number} value={se.season_number}>
+                                  {se.season_number === 0 ? 'Specials' : `Season ${se.season_number}`}
+                                  {se.episode_count > 0 ? ` (${se.episode_count} episodes)` : ''}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                        {selectedSeason != null && (
+                          <label className="text-sm font-medium">
+                            Episode
+                            <select
+                              value={selectedEpisode ?? ''}
+                              onChange={(e) => setSelectedEpisode(e.target.value === '' ? null : parseInt(e.target.value, 10))}
+                              disabled={episodesLoading}
+                              className="ml-2 rounded-md border bg-background px-2 py-1 text-sm disabled:opacity-50"
+                            >
+                              <option value="">
+                                {episodesLoading ? 'Loading…' : 'Select episode'}
+                              </option>
+                              {episodes.map((ep) => (
+                                <option key={ep.episode_number} value={ep.episode_number}>
+                                  E{ep.episode_number} {ep.name ? `– ${ep.name}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {releasesLoading && (
+              <div className="flex items-center gap-2 py-6">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Loading releases from indexers and AvailNZB…</span>
+              </div>
+            )}
+            {releasesError && <p className="text-sm text-destructive">{releasesError}</p>}
+
+            {selected.media_type === 'tv' && !releasesData && !releasesLoading && tvDetails && (
+              <p className="text-sm text-muted-foreground">Choose season and episode above to load releases.</p>
+            )}
+
+            {!releasesLoading && !releasesError && releasesData && (
+              <>
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">Filters:</span>
+                  <Badge
+                    variant={filterAvailability === null ? "secondary" : "outline"}
+                    className={cn("cursor-pointer", filterAvailability === null && "ring-2 ring-primary/20")}
+                    onClick={() => setFilterAvailability(null)}
+                  >
+                    All availability
+                  </Badge>
+                  {['Available', 'Unavailable', 'Unknown'].map((av) => (
+                    <Badge
+                      key={av}
+                      variant={filterAvailability === av ? "default" : "outline"}
+                      className="cursor-pointer"
+                      onClick={() => setFilterAvailability((prev) => (prev === av ? null : av))}
+                    >
+                      {av}
+                    </Badge>
+                  ))}
+                  <span className="text-muted-foreground ml-2">Stream:</span>
+                  <Badge
+                    variant={filterStreamId === null ? "secondary" : "outline"}
+                    className={cn("cursor-pointer", filterStreamId === null && "ring-2 ring-primary/20")}
+                    onClick={() => setFilterStreamId(null)}
+                  >
+                    All streams
+                  </Badge>
+                  {streams.map((st) => (
+                    <Badge
+                      key={st.id}
+                      variant={filterStreamId === st.id ? "default" : "outline"}
+                      className="cursor-pointer"
+                      onClick={() => setFilterStreamId((prev) => (prev === st.id ? null : st.id))}
+                    >
+                      {st.name} (fits)
+                    </Badge>
+                  ))}
+                  <span className="text-muted-foreground ml-2">Sort by:</span>
+                  <Badge
+                    variant={sortByStreamId === null ? "secondary" : "outline"}
+                    className="cursor-pointer"
+                    onClick={() => setSortByStreamId(null)}
+                  >
+                    Default
+                  </Badge>
+                  {streams.map((st) => (
+                    <Badge
+                      key={st.id}
+                      variant={sortByStreamId === st.id ? "default" : "outline"}
+                      className="cursor-pointer"
+                      onClick={() => setSortByStreamId((prev) => (prev === st.id ? null : st.id))}
+                    >
+                      {st.name} priority
+                    </Badge>
+                  ))}
+                </div>
+
+                <p className="text-sm text-muted-foreground">
+                  {filteredAndSortedReleases.length} release{filteredAndSortedReleases.length !== 1 ? 's' : ''}. Click a tag to filter or sort.
+                </p>
+
+                {filteredAndSortedReleases.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No releases match the current filters.</p>
+                ) : (
+                  <div className="rounded-md border overflow-x-auto -mx-1">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/50">
+                          <th className="text-left p-3 font-medium">Title</th>
+                          <th className="text-right p-3 font-medium w-24">Size</th>
+                          <th className="text-left p-3 font-medium w-28">Indexer</th>
+                          <th className="text-left p-3 font-medium">Availability</th>
+                          <th className="text-left p-3 font-medium">Streams</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAndSortedReleases.map((r, i) => (
+                          <tr key={r.details_url || `${r.title}-${r.size}-${i}`} className="border-b last:border-0 hover:bg-muted/30">
+                            <td className="p-3 font-mono text-xs truncate max-w-[280px]" title={r.title}>{r.title}</td>
+                            <td className="p-3 text-right text-muted-foreground">{formatSize(r.size)}</td>
+                            <td className="p-3 text-muted-foreground">{r.indexer || '—'}</td>
+                            <td className="p-3">
+                              <Badge
+                                variant={r.availability === 'Available' ? 'default' : r.availability === 'Unavailable' ? 'destructive' : 'secondary'}
+                                className="cursor-pointer"
+                                onClick={() => setFilterAvailability((prev) => (prev === r.availability ? null : r.availability))}
+                              >
+                                {r.availability}
+                              </Badge>
+                            </td>
+                            <td className="p-3">
+                              <div className="flex flex-wrap gap-1">
+                                {(r.stream_tags || []).map((t) => (
+                                  <Badge
+                                    key={t.stream_id}
+                                    variant={t.fits ? 'secondary' : 'outline'}
+                                    className={cn("cursor-pointer", !t.fits && "opacity-60")}
+                                    onClick={() => setFilterStreamId((prev) => (prev === t.stream_id ? null : t.stream_id))}
+                                    title={`Score: ${t.score}`}
+                                  >
+                                    {t.stream_name} {t.fits ? '✓' : '✗'}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </>
             )}
-          </CardContent>
-        </Card>
-      )}
+          </>
+        )}
 
-      {!authToken && (
-        <p className="text-sm text-muted-foreground">Sign in to search and load streams.</p>
-      )}
+        {!authToken && (
+          <p className="text-sm text-muted-foreground">Sign in to search and view releases.</p>
+        )}
+        </div>
+      </div>
     </div>
   )
 }

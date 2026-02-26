@@ -68,7 +68,8 @@ type SearchMultiResult struct {
 	FirstAirDate   string `json:"first_air_date"` // TV
 	OriginalTitle  string `json:"original_title"`
 	OriginalName   string `json:"original_name"`
-	PosterPath     string `json:"poster_path"`     // e.g. "/abc.jpg" for image.tmdb.org/t/p/w92/abc.jpg"
+	PosterPath     string `json:"poster_path"`   // e.g. "/abc.jpg" for image.tmdb.org/t/p/w92/abc.jpg"
+	Overview       string `json:"overview"`      // Short description
 }
 
 // ExternalIDsResponse represents the response from /{type}/{id}/external_ids
@@ -227,8 +228,31 @@ type MovieDetails struct {
 
 // TVDetails is the response from GET /tv/{id}
 type TVDetails struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID                int            `json:"id"`
+	Name              string         `json:"name"`
+	NumberOfSeasons   int            `json:"number_of_seasons"`
+	Seasons           []TVSeasonInfo `json:"seasons"`
+}
+
+// TVSeasonInfo is one season in TV details (season_number 0 is usually "Specials").
+type TVSeasonInfo struct {
+	SeasonNumber int `json:"season_number"`
+	EpisodeCount int `json:"episode_count"`
+	Name         string `json:"name"`
+}
+
+// TVSeasonDetails is the response from GET /tv/{id}/season/{season_number}
+type TVSeasonDetails struct {
+	SeasonNumber int             `json:"season_number"`
+	Episodes     []TVEpisodeInfo `json:"episodes"`
+}
+
+// TVEpisodeInfo is one episode in a season.
+type TVEpisodeInfo struct {
+	EpisodeNumber int    `json:"episode_number"`
+	Name          string `json:"name"`
+	Overview      string `json:"overview"`
+	AirDate       string `json:"air_date"`
 }
 
 // GetMovieTitle returns the movie title for text-based search.
@@ -560,6 +584,27 @@ func (c *Client) GetTVDetails(tmdbID int) (*TVDetails, error) {
 	var d TVDetails
 	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
 		return nil, fmt.Errorf("TMDB TV decode: %w", err)
+	}
+	return &d, nil
+}
+
+// GetTVSeasonDetails fetches episode list for a season (GET /tv/{id}/season/{season_number}).
+func (c *Client) GetTVSeasonDetails(seriesID, seasonNumber int) (*TVSeasonDetails, error) {
+	if c.apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+	endpoint := fmt.Sprintf("https://api.themoviedb.org/3/tv/%d/season/%d", seriesID, seasonNumber)
+	resp, err := c.doRequest(endpoint, url.Values{})
+	if err != nil {
+		return nil, fmt.Errorf("TMDB TV season details: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB returned status: %d", resp.StatusCode)
+	}
+	var d TVSeasonDetails
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		return nil, fmt.Errorf("TMDB TV season decode: %w", err)
 	}
 	return &d, nil
 }

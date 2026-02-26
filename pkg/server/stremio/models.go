@@ -45,3 +45,34 @@ type BehaviorHints struct {
 	VideoSize        int64    `json:"videoSize,omitempty"`
 	Filename         string   `json:"filename,omitempty"`
 }
+
+// SearchReleasesResponse is the response for the search releases API (indexer + AvailNZB, tagged by availability and per-stream).
+type SearchReleasesResponse struct {
+	Streams  []SearchStreamInfo  `json:"streams"`
+	Releases []SearchReleaseTag  `json:"releases"`
+}
+
+// SearchStreamInfo is one stream for the search UI (filter/sort by stream).
+type SearchStreamInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// SearchReleaseTag is one release with availability and per-stream tags.
+type SearchReleaseTag struct {
+	Title         string              `json:"title"`
+	Link          string              `json:"link"`
+	DetailsURL    string              `json:"details_url"`
+	Size          int64               `json:"size"`
+	Indexer       string              `json:"indexer"`
+	Availability  string              `json:"availability"` // "Available", "Unavailable", "Unknown"
+	StreamTags    []SearchStreamTag   `json:"stream_tags"`
+}
+
+// SearchStreamTag is per-stream: does this release fit the stream's filters and its priority score.
+type SearchStreamTag struct {
+	StreamID   string `json:"stream_id"`
+	StreamName string `json:"stream_name"`
+	Fits       bool   `json:"fits"`
+	Score      int    `json:"score"`
+}

@@ -335,8 +335,8 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	// For TV: use t=search for string queries (per Newznab base search); t=tvsearch for ID/structured (tvdbid, season/ep).
 	useTVSearchParams := false
 	if isMovieSearch && (caps == nil || caps.Searching.MovieSearch) {
-		// ID-only movie search uses t=movie (imdbid/tmdbid); text search uses t=search
-		if req.Query == "" && (req.IMDbID != "" || req.TMDBID != "") {
+		// ID-only movie search uses t=movie with imdbid only; text search uses t=search
+		if req.Query == "" && req.IMDbID != "" {
 			params.Set("t", "movie")
 		} else {
 			params.Set("t", "search")
@@ -364,17 +364,15 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			query = extraTerms
 		}
 	}
-	idOnlyMovie := isMovieSearch && req.Query == "" && (req.TMDBID != "" || req.IMDbID != "")
+	idOnlyMovie := isMovieSearch && req.Query == "" && req.IMDbID != ""
 	if query != "" && !idOnlyMovie {
 		params.Set("q", query)
 	}
 
-	if req.IMDbID != "" {
+	// Only send IDs that Newznab uses: imdbid for movie; tvdbid+season+ep for tvsearch (no imdbid on tvsearch)
+	if isMovieSearch && req.IMDbID != "" {
 		imdbID := strings.TrimPrefix(req.IMDbID, "tt")
 		params.Set("imdbid", imdbID)
-	}
-	if req.TMDBID != "" {
-		params.Set("tmdbid", req.TMDBID)
 	}
 	if req.TVDBID != "" {
 		params.Set("tvdbid", req.TVDBID)

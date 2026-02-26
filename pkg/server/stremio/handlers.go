@@ -643,8 +643,171 @@ func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id strin
 	}, nil
 }
 
+// GetSearchReleases returns all releases from indexers and AvailNZB for a title, with availability and per-stream tags.
+// Used by the search UI to show full results and filter/sort by availability or stream.
+func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) (*SearchReleasesResponse, error) {
+	raw, err := s.getOrBuildRawSearchResult(ctx, contentType, id)
+	if err != nil || raw == nil {
+		return nil, err
+	}
+
+	// Build unified list: (release, availability). AvailNZB first (all reports), then indexer-only with "Unknown".
+	type releaseWithAvail struct {
+		rel   *release.Release
+		avail string // "Available", "Unavailable", "Unknown"
+	}
+	seenDetailsURL := make(map[string]bool)
+	seenTitleSize := make(map[string]bool)
+	var unified []releaseWithAvail
+
+	addKey := func(detailsURL string, title string, size int64) bool {
+		if detailsURL != "" && seenDetailsURL[detailsURL] {
+			return true
+		}
+		key := release.NormalizeTitle(title) + ":" + strconv.FormatInt(size, 10)
+		if seenTitleSize[key] {
+			return true
+		}
+		if detailsURL != "" {
+			seenDetailsURL[detailsURL] = true
+		}
+		seenTitleSize[key] = true
+		return false
+	}
+
+	if raw.AvailResult != nil {
+		for _, rws := range raw.AvailResult.Releases {
+			if rws == nil || rws.Release == nil {
+				continue
+			}
+			r := rws.Release
+			avail := "Unavailable"
+			if rws.Available {
+				avail = "Available"
+			}
+			if addKey(r.DetailsURL, r.Title, r.Size) {
+				continue
+			}
+			unified = append(unified, releaseWithAvail{rel: r, avail: avail})
+		}
+	}
+	for _, r := range raw.IndexerReleases {
+		if r == nil {
+			continue
+		}
+		if addKey(r.DetailsURL, r.Title, r.Size) {
+			continue
+		}
+		unified = append(unified, releaseWithAvail{rel: r, avail: "Unknown"})
+	}
+
+	// Per-release, per-stream: fits and score
+	streams := s.streamConfigsForStreamRequest()
+	releaseScores := make(map[string]map[string]struct{ Fits bool; Score int }) // detailsURL -> streamId -> {Fits, Score}
+	for _, str := range streams {
+		if str == nil {
+			continue
+		}
+		releasesOnly := make([]*release.Release, 0, len(unified))
+		for _, u := range unified {
+			releasesOnly = append(releasesOnly, u.rel)
+		}
+		candidates := s.triageCandidates(str, releasesOnly)
+		for _, c := range candidates {
+			if c.Release == nil {
+				continue
+			}
+			key := c.Release.DetailsURL
+			if key == "" {
+				key = release.NormalizeTitle(c.Release.Title) + ":" + strconv.FormatInt(c.Release.Size, 10)
+			}
+			if releaseScores[key] == nil {
+				releaseScores[key] = make(map[string]struct{ Fits bool; Score int })
+			}
+			releaseScores[key][str.ID] = struct{ Fits bool; Score int }{Fits: true, Score: c.Score}
+		}
+		// Mark releases that were not in candidates as not fitting (filtered out)
+		for _, u := range unified {
+			key := u.rel.DetailsURL
+			if key == "" {
+				key = release.NormalizeTitle(u.rel.Title) + ":" + strconv.FormatInt(u.rel.Size, 10)
+			}
+			if releaseScores[key] == nil {
+				releaseScores[key] = make(map[string]struct{ Fits bool; Score int })
+			}
+			if _, ok := releaseScores[key][str.ID]; !ok {
+				releaseScores[key][str.ID] = struct{ Fits bool; Score int }{Fits: false, Score: 0}
+			}
+		}
+	}
+
+	// Build stream list for response
+	streamInfos := make([]SearchStreamInfo, 0, len(streams))
+	for _, str := range streams {
+		if str != nil {
+			streamInfos = append(streamInfos, SearchStreamInfo{ID: str.ID, Name: str.Name})
+		}
+	}
+
+	// Build release list with tags
+	releasesOut := make([]SearchReleaseTag, 0, len(unified))
+	for _, u := range unified {
+		r := u.rel
+		key := r.DetailsURL
+		if key == "" {
+			key = release.NormalizeTitle(r.Title) + ":" + strconv.FormatInt(r.Size, 10)
+		}
+		tags := make([]SearchStreamTag, 0, len(streams))
+		for _, str := range streams {
+			if str == nil {
+				continue
+			}
+			ts := releaseScores[key][str.ID]
+			tags = append(tags, SearchStreamTag{
+				StreamID:   str.ID,
+				StreamName: str.Name,
+				Fits:       ts.Fits,
+				Score:      ts.Score,
+			})
+		}
+		idxName := r.Indexer
+		if idxName == "" && r.SourceIndexer != nil {
+			if idx, ok := r.SourceIndexer.(indexer.Indexer); ok {
+				idxName = idx.Name()
+			}
+		}
+		if idxName == "" {
+			idxName = "Indexer"
+		}
+		releasesOut = append(releasesOut, SearchReleaseTag{
+			Title:        r.Title,
+			Link:         r.Link,
+			DetailsURL:   r.DetailsURL,
+			Size:         r.Size,
+			Indexer:      idxName,
+			Availability: u.avail,
+			StreamTags:   tags,
+		})
+	}
+
+	return &SearchReleasesResponse{Streams: streamInfos, Releases: releasesOut}, nil
+}
+
 // buildOrderedPlayListFromRaw applies one stream's filters/sorting to raw results (triage, merge, filter, sort).
 func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.Stream) (*orderedPlayListResult, error) {
+	// Set of DetailsURLs that AvailNZB reports as unavailable — exclude these from Stremio play list.
+	unavailableDetailsURLs := make(map[string]bool)
+	if raw.AvailResult != nil {
+		for _, rws := range raw.AvailResult.Releases {
+			if rws == nil || rws.Release == nil || rws.Available {
+				continue
+			}
+			if rws.Release.DetailsURL != "" {
+				unavailableDetailsURLs[rws.Release.DetailsURL] = true
+			}
+		}
+	}
+
 	availCandidates := s.triageCandidates(str, raw.AvailReleases)
 	indexerCandidates := s.triageCandidates(str, raw.IndexerReleases)
 
@@ -654,11 +817,17 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 		if c.Release == nil || c.Release.DetailsURL == "" {
 			continue
 		}
+		if unavailableDetailsURLs[c.Release.DetailsURL] {
+			continue
+		}
 		seenURL[c.Release.DetailsURL] = true
 		merged = append(merged, c)
 	}
 	for _, c := range indexerCandidates {
 		if c.Release == nil || c.Release.DetailsURL == "" {
+			continue
+		}
+		if unavailableDetailsURLs[c.Release.DetailsURL] {
 			continue
 		}
 		if seenURL[c.Release.DetailsURL] {
@@ -817,15 +986,31 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 	} else {
 		req.Cat = "5000"
 	}
-	if contentType == "series" && req.IMDbID != "" && req.TVDBID == "" {
-		if s.tvdbClient != nil {
-			if tvdbID, err := s.tvdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
-				req.TVDBID = tvdbID
+	// Resolve TVDB (and optionally IMDb) for series so indexers get tvdbid+season+ep and AvailNZB gets correct IDs.
+	if contentType == "series" {
+		if req.IMDbID != "" && req.TVDBID == "" {
+			if s.tvdbClient != nil {
+				if tvdbID, err := s.tvdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
+					req.TVDBID = tvdbID
+				}
+			}
+			if req.TVDBID == "" && s.tmdbClient != nil {
+				if tvdbID, err := s.tmdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
+					req.TVDBID = tvdbID
+				}
 			}
 		}
-		if req.TVDBID == "" && s.tmdbClient != nil {
-			if tvdbID, err := s.tmdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
-				req.TVDBID = tvdbID
+		if req.TVDBID == "" && req.TMDBID != "" && s.tmdbClient != nil {
+			if tmdbIDNum, err := strconv.Atoi(req.TMDBID); err == nil {
+				if extIDs, err := s.tmdbClient.GetExternalIDs(tmdbIDNum, "tv"); err == nil {
+					if extIDs.TVDBID != 0 {
+						req.TVDBID = strconv.Itoa(extIDs.TVDBID)
+					}
+					if extIDs.IMDbID != "" && req.IMDbID == "" {
+						req.IMDbID = extIDs.IMDbID
+						imdbForText = extIDs.IMDbID
+					}
+				}
 			}
 		}
 	}
