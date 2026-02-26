@@ -100,10 +100,10 @@ func (s *Server) handleCreateStreamConfig(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if body.Filters.AllowedQualities == nil && body.Filters.BlockedQualities == nil {
+	if len(body.Filters.QualityInclude) == 0 && len(body.Filters.QualityAvoid) == 0 && body.Filters.MinSizeGB == 0 && body.Filters.MaxSizeGB == 0 {
 		body.Filters = config.DefaultFilterConfig()
 	}
-	if body.Sorting.ResolutionWeights == nil && body.Sorting.CodecWeights == nil {
+	if len(body.Sorting.ResolutionOrder) == 0 && len(body.Sorting.CodecOrder) == 0 {
 		body.Sorting = config.DefaultSortConfig()
 	}
 	id, err := s.streamManager.Create(&body)

@@ -170,79 +170,39 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// hasCustomFilters checks if user has custom filter configuration
-// Returns true only if user has explicitly set non-default values
-// Note: Empty FilterConfig structs have zero values (false, 0, "", nil slices)
-// We only consider it custom if at least one field is explicitly set to a non-zero value
+// hasCustomFilters checks if user has custom filter configuration (Include/Avoid).
 func hasCustomFilters(filters config.FilterConfig) bool {
-	// Check if any filter field is explicitly set (non-empty/non-zero)
-	return len(filters.AllowedQualities) > 0 ||
-		len(filters.BlockedQualities) > 0 ||
-		filters.MinResolution != "" ||
-		filters.MaxResolution != "" ||
-		len(filters.AllowedCodecs) > 0 ||
-		len(filters.BlockedCodecs) > 0 ||
-		len(filters.RequiredAudio) > 0 ||
-		len(filters.AllowedAudio) > 0 ||
-		filters.MinChannels != "" ||
-		filters.RequireHDR ||
-		len(filters.AllowedHDR) > 0 ||
-		len(filters.BlockedHDR) > 0 ||
-		filters.BlockSDR ||
-		len(filters.RequiredLanguages) > 0 ||
-		len(filters.AllowedLanguages) > 0 ||
-		filters.BlockDubbed ||
-		filters.BlockCam ||
-		filters.RequireProper ||
-		// AllowRepack: We can't distinguish between "not set" (false) and "explicitly set to false"
-		// So we'll only mark as custom if AllowRepack is false AND at least one other field is set
-		(!filters.AllowRepack && hasAnyOtherFilterSet(filters)) ||
-		filters.BlockHardcoded ||
-		filters.MinBitDepth != "" ||
-		filters.MinSizeGB > 0 ||
-		filters.MaxSizeGB > 0 ||
-		len(filters.BlockedGroups) > 0
+	return len(filters.AudioInclude) > 0 || len(filters.AudioAvoid) > 0 ||
+		len(filters.BitDepthInclude) > 0 || len(filters.BitDepthAvoid) > 0 ||
+		len(filters.ChannelsInclude) > 0 || len(filters.ChannelsAvoid) > 0 ||
+		len(filters.CodecInclude) > 0 || len(filters.CodecAvoid) > 0 ||
+		len(filters.ContainerInclude) > 0 || len(filters.ContainerAvoid) > 0 ||
+		len(filters.EditionInclude) > 0 || len(filters.EditionAvoid) > 0 ||
+		len(filters.HDRInclude) > 0 || len(filters.HDRAvoid) > 0 ||
+		len(filters.LanguagesInclude) > 0 || len(filters.LanguagesAvoid) > 0 ||
+		len(filters.NetworkInclude) > 0 || len(filters.NetworkAvoid) > 0 ||
+		len(filters.QualityInclude) > 0 || len(filters.QualityAvoid) > 0 ||
+		len(filters.RegionInclude) > 0 || len(filters.RegionAvoid) > 0 ||
+		len(filters.ResolutionInclude) > 0 || len(filters.ResolutionAvoid) > 0 ||
+		len(filters.ThreeDInclude) > 0 || len(filters.ThreeDAvoid) > 0 ||
+		len(filters.GroupInclude) > 0 || len(filters.GroupAvoid) > 0 ||
+		filters.DubbedAvoid != nil || filters.HardcodedAvoid != nil ||
+		filters.ProperInclude != nil || filters.RepackInclude != nil || filters.RepackAvoid != nil ||
+		filters.ExtendedInclude != nil || filters.UnratedInclude != nil ||
+		filters.MinSizeGB > 0 || filters.MaxSizeGB > 0 ||
+		filters.MinYear > 0 || filters.MaxYear > 0
 }
 
-// hasAnyOtherFilterSet checks if any filter field (except AllowRepack) is set
-func hasAnyOtherFilterSet(filters config.FilterConfig) bool {
-	return len(filters.AllowedQualities) > 0 ||
-		len(filters.BlockedQualities) > 0 ||
-		filters.MinResolution != "" ||
-		filters.MaxResolution != "" ||
-		len(filters.AllowedCodecs) > 0 ||
-		len(filters.BlockedCodecs) > 0 ||
-		len(filters.RequiredAudio) > 0 ||
-		len(filters.AllowedAudio) > 0 ||
-		filters.MinChannels != "" ||
-		filters.RequireHDR ||
-		len(filters.AllowedHDR) > 0 ||
-		len(filters.BlockedHDR) > 0 ||
-		filters.BlockSDR ||
-		len(filters.RequiredLanguages) > 0 ||
-		len(filters.AllowedLanguages) > 0 ||
-		filters.BlockDubbed ||
-		filters.BlockCam ||
-		filters.RequireProper ||
-		filters.BlockHardcoded ||
-		filters.MinBitDepth != "" ||
-		filters.MinSizeGB > 0 ||
-		filters.MaxSizeGB > 0 ||
-		len(filters.BlockedGroups) > 0
-}
-
-// hasCustomSorting checks if user has custom sorting configuration
+// hasCustomSorting checks if user has custom sorting (order lists or weights).
 func hasCustomSorting(sorting config.SortConfig) bool {
-	// Check if any sorting field is set (non-empty/non-zero)
-	return len(sorting.ResolutionWeights) > 0 ||
-		len(sorting.CodecWeights) > 0 ||
-		len(sorting.AudioWeights) > 0 ||
-		len(sorting.QualityWeights) > 0 ||
-		len(sorting.VisualTagWeights) > 0 ||
-		sorting.GrabWeight != 0 ||
-		sorting.AgeWeight != 0 ||
-		len(sorting.PreferredGroups) > 0 ||
-		len(sorting.PreferredLanguages) > 0
+	return len(sorting.ResolutionOrder) > 0 || len(sorting.CodecOrder) > 0 ||
+		len(sorting.AudioOrder) > 0 || len(sorting.QualityOrder) > 0 ||
+		len(sorting.VisualTagOrder) > 0 || len(sorting.ChannelsOrder) > 0 ||
+		len(sorting.BitDepthOrder) > 0 || len(sorting.ContainerOrder) > 0 ||
+		len(sorting.LanguagesOrder) > 0 || len(sorting.GroupOrder) > 0 ||
+		len(sorting.EditionOrder) > 0 || len(sorting.NetworkOrder) > 0 ||
+		len(sorting.RegionOrder) > 0 || len(sorting.ThreeDOrder) > 0 ||
+		sorting.GrabWeight != 0 || sorting.AgeWeight != 0
 }
 
 // REST endpoint removed - config saving now uses WebSocket

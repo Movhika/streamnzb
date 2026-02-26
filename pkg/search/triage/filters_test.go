@@ -17,9 +17,9 @@ func TestCheckResolution(t *testing.T) {
 		shouldPass bool
 	}{
 		{
-			name: "1080p passes with min 1080p",
+			name: "1080p passes with include 1080p",
 			cfg: &config.FilterConfig{
-				MinResolution: "1080p",
+				ResolutionInclude: []string{"1080p", "4k"},
 			},
 			parsed: &parser.ParsedRelease{
 				Resolution: "1080p",
@@ -27,9 +27,9 @@ func TestCheckResolution(t *testing.T) {
 			shouldPass: true,
 		},
 		{
-			name: "720p rejected with min 1080p",
+			name: "720p rejected with include only 1080p/4k",
 			cfg: &config.FilterConfig{
-				MinResolution: "1080p",
+				ResolutionInclude: []string{"1080p", "4k"},
 			},
 			parsed: &parser.ParsedRelease{
 				Resolution: "720p",
@@ -37,9 +37,9 @@ func TestCheckResolution(t *testing.T) {
 			shouldPass: false,
 		},
 		{
-			name: "SD/480p rejected with min 1080p",
+			name: "SD/480p rejected with include only 1080p/4k",
 			cfg: &config.FilterConfig{
-				MinResolution: "1080p",
+				ResolutionInclude: []string{"1080p", "4k"},
 			},
 			parsed: &parser.ParsedRelease{
 				Resolution: "480p",
@@ -47,9 +47,9 @@ func TestCheckResolution(t *testing.T) {
 			shouldPass: false,
 		},
 		{
-			name: "Empty resolution rejected when min filter set",
+			name: "Empty resolution rejected when include set",
 			cfg: &config.FilterConfig{
-				MinResolution: "1080p",
+				ResolutionInclude: []string{"1080p"},
 			},
 			parsed: &parser.ParsedRelease{
 				Resolution: "",
@@ -65,9 +65,9 @@ func TestCheckResolution(t *testing.T) {
 			shouldPass: true,
 		},
 		{
-			name: "4K passes with max 4K",
+			name: "4K passes with include 4k",
 			cfg: &config.FilterConfig{
-				MaxResolution: "2160p",
+				ResolutionInclude: []string{"4k", "1080p"},
 			},
 			parsed: &parser.ParsedRelease{
 				Resolution: "2160p",
@@ -75,9 +75,9 @@ func TestCheckResolution(t *testing.T) {
 			shouldPass: true,
 		},
 		{
-			name: "4K rejected with max 1080p",
+			name: "4K rejected with avoid 4k",
 			cfg: &config.FilterConfig{
-				MaxResolution: "1080p",
+				ResolutionAvoid: []string{"4k"},
 			},
 			parsed: &parser.ParsedRelease{
 				Resolution: "2160p",
@@ -107,7 +107,7 @@ func TestCheckCodec(t *testing.T) {
 		{
 			name: "H264 passes when allowed",
 			cfg: &config.FilterConfig{
-				AllowedCodecs: []string{"H264", "HEVC"},
+				CodecInclude: []string{"H264", "HEVC"},
 			},
 			parsed: &parser.ParsedRelease{
 				Codec: "H264",
@@ -117,7 +117,7 @@ func TestCheckCodec(t *testing.T) {
 		{
 			name: "HEVC passes when allowed",
 			cfg: &config.FilterConfig{
-				AllowedCodecs: []string{"H264", "HEVC"},
+				CodecInclude: []string{"H264", "HEVC"},
 			},
 			parsed: &parser.ParsedRelease{
 				Codec: "HEVC",
@@ -127,7 +127,7 @@ func TestCheckCodec(t *testing.T) {
 		{
 			name: "AV1 rejected when only H264/HEVC allowed",
 			cfg: &config.FilterConfig{
-				AllowedCodecs: []string{"H264", "HEVC"},
+				CodecInclude: []string{"H264", "HEVC"},
 			},
 			parsed: &parser.ParsedRelease{
 				Codec: "AV1",
@@ -137,7 +137,7 @@ func TestCheckCodec(t *testing.T) {
 		{
 			name: "Empty codec rejected when allowed list set",
 			cfg: &config.FilterConfig{
-				AllowedCodecs: []string{"H264", "HEVC"},
+				CodecInclude: []string{"H264", "HEVC"},
 			},
 			parsed: &parser.ParsedRelease{
 				Codec: "",
@@ -155,7 +155,7 @@ func TestCheckCodec(t *testing.T) {
 		{
 			name: "Blocked codec rejected",
 			cfg: &config.FilterConfig{
-				BlockedCodecs: []string{"AV1"},
+				CodecAvoid: []string{"AV1"},
 			},
 			parsed: &parser.ParsedRelease{
 				Codec: "AV1",
@@ -165,7 +165,7 @@ func TestCheckCodec(t *testing.T) {
 		{
 			name: "Non-blocked codec passes",
 			cfg: &config.FilterConfig{
-				BlockedCodecs: []string{"AV1"},
+				CodecAvoid: []string{"AV1"},
 			},
 			parsed: &parser.ParsedRelease{
 				Codec: "H264",

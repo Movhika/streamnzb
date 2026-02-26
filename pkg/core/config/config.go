@@ -29,118 +29,32 @@ type Provider struct {
 	Enabled     *bool  `json:"enabled,omitempty"`  // Whether this provider is enabled. nil = not set (old config)
 }
 
-// FilterConfig holds user filtering preferences for PTT-based release filtering
-type FilterConfig struct {
-	// Quality filters
-	AllowedQualities []string `json:"allowed_qualities"` // e.g., ["BluRay", "WEB-DL", "HDTV"]
-	BlockedQualities []string `json:"blocked_qualities"` // e.g., ["CAM", "TeleSync"]
+// FilterConfig and SortConfig are defined in config_filter_sort.go (Include/Avoid and Order lists with legacy JSON migration).
 
-	// Resolution filters
-	MinResolution string `json:"min_resolution"` // e.g., "720p"
-	MaxResolution string `json:"max_resolution"` // e.g., "2160p"
-
-	// Codec filters
-	AllowedCodecs []string `json:"allowed_codecs"` // e.g., ["HEVC", "AVC"]
-	BlockedCodecs []string `json:"blocked_codecs"` // e.g., ["MPEG-2"]
-
-	// Audio filters
-	RequiredAudio []string `json:"required_audio"` // e.g., ["Atmos", "TrueHD"]
-	AllowedAudio  []string `json:"allowed_audio"`  // e.g., ["DTS", "DD", "AAC"]
-	MinChannels   string   `json:"min_channels"`   // e.g., "5.1"
-
-	// Visual tag filters (HDR and 3D)
-	RequireHDR bool     `json:"require_hdr"` // Require any visual tag (HDR or 3D)
-	AllowedHDR []string `json:"allowed_hdr"` // Allowed visual tags e.g., ["DV", "HDR10+", "3D"]
-	BlockedHDR []string `json:"blocked_hdr"` // Blocked visual tags e.g., ["DV"] to block Dolby Vision, ["3D"] to block 3D
-	BlockSDR   bool     `json:"block_sdr"`   // Block SDR releases
-
-	// Language filters
-	RequiredLanguages []string `json:"required_languages"` // e.g., ["en"]
-	AllowedLanguages  []string `json:"allowed_languages"`  // e.g., ["en", "multi"]
-	BlockDubbed       bool     `json:"block_dubbed"`
-
-	// Other filters
-	BlockCam       bool   `json:"block_cam"` // Block CAM/TS/TC
-	RequireProper  bool   `json:"require_proper"`
-	AllowRepack    bool   `json:"allow_repack"`
-	BlockHardcoded bool   `json:"block_hardcoded"`
-	MinBitDepth    string `json:"min_bit_depth"` // e.g., "10bit"
-
-	// Size filters
-	MinSizeGB float64 `json:"min_size_gb"`
-	MaxSizeGB float64 `json:"max_size_gb"`
-
-	// Group filters (blocking only)
-	BlockedGroups []string `json:"blocked_groups"`
-}
-
-// DefaultFilterConfig returns built-in filter defaults for fresh devices.
+// DefaultFilterConfig returns built-in filter defaults (Avoid CAM/TeleSync).
 func DefaultFilterConfig() FilterConfig {
 	return FilterConfig{
-		BlockedQualities: []string{"CAM", "TeleSync"},
-		BlockCam:         true,
+		QualityAvoid: []string{"CAM", "TeleSync"},
+		DubbedAvoid:   ptrBool(true),
 	}
 }
 
-// SortConfig holds weights for triage scoring
-type SortConfig struct {
-	ResolutionWeights map[string]int `json:"resolution_weights"`
-	CodecWeights      map[string]int `json:"codec_weights"`
-	AudioWeights      map[string]int `json:"audio_weights"`
-	QualityWeights    map[string]int `json:"quality_weights"`
-	VisualTagWeights  map[string]int `json:"visual_tag_weights"` // e.g., {"DV": 1500, "HDR10+": 1200, "HDR": 1000, "3D": 800}
-	GrabWeight        float64        `json:"grab_weight"`
-	AgeWeight         float64        `json:"age_weight"`
-
-	// Preference boosts (prioritization, not filtering)
-	PreferredGroups    []string `json:"preferred_groups"`    // e.g., ["FLUX", "NTb"]
-	PreferredLanguages []string `json:"preferred_languages"` // e.g., ["en", "multi"]
-}
-
-// DefaultSortConfig returns built-in sort weights used when config has empty values.
+// DefaultSortConfig returns default order lists and weights.
 func DefaultSortConfig() SortConfig {
 	return SortConfig{
-		ResolutionWeights: map[string]int{
-			"4k":    4000000,
-			"1080p": 3000000,
-			"720p":  2000000,
-			"sd":    1000000,
-		},
-		CodecWeights: map[string]int{
-			"HEVC": 1000,
-			"x265": 1000,
-			"x264": 500,
-			"AVC":  500,
-		},
-		AudioWeights: map[string]int{
-			"Atmos":  1500,
-			"TrueHD": 1200,
-			"DTS-HD": 1000,
-			"DTS-X":  1000,
-			"DTS":    500,
-			"DD+":    400,
-			"DD":     300,
-			"AC3":    200,
-			"5.1":    500,
-			"7.1":    1000,
-		},
-		QualityWeights: map[string]int{
-			"BluRay":  2000,
-			"WEB-DL":  1500,
-			"WEBRip":  1200,
-			"HDTV":    1000,
-			"Blu-ray": 2000,
-		},
-		VisualTagWeights: map[string]int{
-			"DV":     1500,
-			"HDR10+": 1200,
-			"HDR":    1000,
-			"3D":     800,
-		},
-		GrabWeight: 0.5,
-		AgeWeight:  1.0,
+		ResolutionOrder: []string{"4k", "1080p", "720p", "sd"},
+		CodecOrder:      []string{"HEVC", "x265", "AVC", "x264"},
+		AudioOrder:      []string{"Atmos", "TrueHD", "DTS-HD", "DTS-X", "DTS", "DD+", "DD", "AC3", "5.1", "7.1"},
+		QualityOrder:    []string{"BluRay", "Blu-ray", "WEB-DL", "WEBRip", "HDTV"},
+		VisualTagOrder:  []string{"DV", "HDR10+", "HDR", "3D"},
+		ChannelsOrder:   []string{"7.1", "5.1", "stereo", "2.0", "mono"},
+		BitDepthOrder:   []string{"12bit", "10bit", "8bit"},
+		GrabWeight:      0.5,
+		AgeWeight:       1.0,
 	}
 }
+
+func ptrBool(b bool) *bool { return &b }
 
 // IndexerSearchConfig holds indexer/search overrides (per-device per-indexer). Pointers = nil means use indexer's value. Used in Device.IndexerOverrides and API payloads.
 type IndexerSearchConfig struct {

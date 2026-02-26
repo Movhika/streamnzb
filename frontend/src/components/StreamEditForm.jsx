@@ -10,23 +10,52 @@ import { SortingSection } from "@/components/SortingSection"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import {
+  DefaultResolutionOrder,
+  DefaultCodecOrder,
+  DefaultAudioOrder,
+  DefaultQualityOrder,
+  DefaultVisualTagOrder,
+  DefaultChannelsOrder,
+  DefaultBitDepthOrder,
+  DefaultContainerOrder,
+  DefaultLanguagesOrder,
+  DefaultEditionOrder,
+  DefaultNetworkOrder,
+  DefaultRegionOrder,
+  DefaultThreeDOrder,
+} from "@/constants/pttOptions"
 
 const defaultFilters = {
-  allowed_qualities: [], blocked_qualities: [], min_resolution: '', max_resolution: '',
-  allowed_codecs: [], blocked_codecs: [], required_audio: [], allowed_audio: [],
-  min_channels: '', require_hdr: false, allowed_hdr: [], blocked_hdr: [], block_sdr: false,
-  required_languages: [], allowed_languages: [], block_dubbed: false, block_cam: false,
-  require_proper: false, allow_repack: true, block_hardcoded: false, min_bit_depth: '',
-  min_size_gb: 0, max_size_gb: 0, blocked_groups: []
+  quality_include: [], quality_avoid: [], resolution_include: [], resolution_avoid: [],
+  codec_include: [], codec_avoid: [], audio_include: [], audio_avoid: [],
+  channels_include: [], channels_avoid: [], hdr_include: [], hdr_avoid: [],
+  three_d_include: [], three_d_avoid: [], bit_depth_include: [], bit_depth_avoid: [],
+  container_include: [], container_avoid: [], languages_include: [], languages_avoid: [],
+  edition_include: [], edition_avoid: [], network_include: [], network_avoid: [],
+  region_include: [], region_avoid: [], group_include: [], group_avoid: [],
+  dubbed_avoid: undefined, hardcoded_avoid: undefined, proper_include: undefined,
+  repack_include: undefined, repack_avoid: undefined, extended_include: undefined, unrated_include: undefined,
+  min_size_gb: 0, max_size_gb: 0, min_year: 0, max_year: 0
 }
 
 const defaultSorting = {
-  resolution_weights: { '4k': 4000000, '1080p': 3000000, '720p': 2000000, 'sd': 1000000 },
-  codec_weights: { 'HEVC': 1000, 'x265': 1000, 'x264': 500, 'AVC': 500 },
-  audio_weights: { 'Atmos': 1500, 'TrueHD': 1200, 'DTS-HD': 1000, 'DTS-X': 1000, 'DTS': 500, 'DD+': 400, 'DD': 300, 'AC3': 200, '5.1': 500, '7.1': 1000 },
-  quality_weights: { 'BluRay': 2000, 'WEB-DL': 1500, 'WEBRip': 1200, 'HDTV': 1000, 'Blu-ray': 2000 },
-  visual_tag_weights: { 'DV': 1500, 'HDR10+': 1200, 'HDR': 1000, '3D': 800 },
-  grab_weight: 0.5, age_weight: 1.0, preferred_groups: [], preferred_languages: []
+  resolution_order: DefaultResolutionOrder,
+  codec_order: DefaultCodecOrder,
+  audio_order: DefaultAudioOrder,
+  quality_order: DefaultQualityOrder,
+  visual_tag_order: DefaultVisualTagOrder,
+  channels_order: DefaultChannelsOrder,
+  bit_depth_order: DefaultBitDepthOrder,
+  container_order: DefaultContainerOrder,
+  languages_order: DefaultLanguagesOrder,
+  group_order: [],
+  edition_order: DefaultEditionOrder,
+  network_order: DefaultNetworkOrder,
+  region_order: DefaultRegionOrder,
+  three_d_order: DefaultThreeDOrder,
+  grab_weight: 0.5,
+  age_weight: 1.0
 }
 
 function getApiUrl(path) {
@@ -80,15 +109,7 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
             name: data.name ?? data.id ?? 'Stream',
             show_all_stream: data.show_all_stream === true,
             filters: { ...defaultFilters, ...(data.filters || {}) },
-            sorting: {
-              ...defaultSorting,
-              ...(data.sorting || {}),
-              resolution_weights: { ...defaultSorting.resolution_weights, ...(data.sorting?.resolution_weights || {}) },
-              codec_weights: { ...defaultSorting.codec_weights, ...(data.sorting?.codec_weights || {}) },
-              audio_weights: { ...defaultSorting.audio_weights, ...(data.sorting?.audio_weights || {}) },
-              quality_weights: { ...defaultSorting.quality_weights, ...(data.sorting?.quality_weights || {}) },
-              visual_tag_weights: { ...defaultSorting.visual_tag_weights, ...(data.sorting?.visual_tag_weights || {}) }
-            }
+            sorting: { ...defaultSorting, ...(data.sorting || {}) }
           })
         }
       })

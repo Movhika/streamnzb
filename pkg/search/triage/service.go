@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"streamnzb/pkg/core/config"
+	"streamnzb/pkg/core/config/pttoptions"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/search/parser"
 )
@@ -54,11 +55,8 @@ func (s *Service) Filter(releases []*release.Release) []Candidate {
 		// Determine group (preserved for metadata but no longer used for selection)
 		group := parsed.ResolutionGroup()
 
-		// Calculate score
+		// Calculate score (order-list scaling 10→0 per category + grab/age)
 		score := s.calculateScore(rel, parsed)
-
-		// Apply score boost for preferred attributes
-		score += scoreBoost(s.SortConfig, parsed)
 
 		// Prioritize ID-based results over text-based (ForceQuery dual search)
 		if rel.QuerySource == "id" {
@@ -88,140 +86,233 @@ func (s *Service) Filter(releases []*release.Release) []Candidate {
 	return candidates
 }
 
-// shouldInclude checks if a release passes all filter criteria
+// shouldInclude checks if a release passes all filter criteria (Include/Avoid per category).
 func (s *Service) shouldInclude(rel *release.Release, parsed *parser.ParsedRelease) bool {
 	cfg := s.FilterConfig
-
-	// Quality filters
-	if !checkQuality(cfg, parsed) {
+	if !checkQuality(cfg, parsed) ||
+		!checkResolution(cfg, parsed) ||
+		!checkCodec(cfg, parsed) ||
+		!checkAudio(cfg, parsed) ||
+		!checkChannels(cfg, parsed) ||
+		!checkHDR(cfg, parsed) ||
+		!checkBitDepth(cfg, parsed) ||
+		!checkContainer(cfg, parsed) ||
+		!checkEdition(cfg, parsed) ||
+		!checkThreeD(cfg, parsed) ||
+		!checkNetwork(cfg, parsed) ||
+		!checkRegion(cfg, parsed) ||
+		!checkLanguages(cfg, parsed, rel) ||
+		!checkGroup(cfg, parsed) ||
+		!checkBooleans(cfg, parsed) ||
+		!checkSize(cfg, rel) ||
+		!checkYear(cfg, parsed) {
 		return false
 	}
-
-	// Resolution filters
-	if !checkResolution(cfg, parsed) {
-		return false
-	}
-
-	// Codec filters
-	if !checkCodec(cfg, parsed) {
-		return false
-	}
-
-	// Audio filters
-	if !checkAudio(cfg, parsed) {
-		return false
-	}
-
-	// HDR filters
-	if !checkHDR(cfg, parsed) {
-		return false
-	}
-
-	// Language filters
-	if !checkLanguages(cfg, parsed, rel) {
-		return false
-	}
-
-	// Other filters
-	if !checkOther(cfg, parsed) {
-		return false
-	}
-
-	// Group filters
-	if !checkGroup(cfg, parsed) {
-		return false
-	}
-
-	// Size filters
-	if !checkSize(cfg, rel) {
-		return false
-	}
-
 	return true
 }
 
+// orderListScore returns points for first match in ordered list: 10 for 1st, scaling to 0 for last. n=1 => 10.
+func orderListScore(n int, firstMatchIndex int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n == 1 {
+		return 10
+	}
+	if firstMatchIndex < 0 || firstMatchIndex >= n {
+		return 0
+	}
+	// 10 * (n - 1 - i) / (n - 1)
+	return 10 * (n - 1 - firstMatchIndex) / (n - 1)
+}
+
+// firstMatchIndex returns the 0-based index of the first list option that matches the release for this category, or -1.
+func (s *Service) firstMatchResolution(p *parser.ParsedRelease) int {
+	group := pttoptions.NormalizeResolutionToGroup(p.Resolution)
+	for i, opt := range s.SortConfig.ResolutionOrder {
+		if strings.EqualFold(opt, group) || strings.Contains(strings.ToLower(p.Resolution), strings.ToLower(opt)) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Service) firstMatchCodec(p *parser.ParsedRelease) int {
+	if p.Codec == "" {
+		return -1
+	}
+	for i, opt := range s.SortConfig.CodecOrder {
+		if strings.Contains(strings.ToLower(p.Codec), strings.ToLower(opt)) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Service) firstMatchAudio(p *parser.ParsedRelease) int {
+	for i, opt := range s.SortConfig.AudioOrder {
+		for _, a := range p.Audio {
+			if strings.Contains(strings.ToLower(a), strings.ToLower(opt)) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func (s *Service) firstMatchQuality(p *parser.ParsedRelease) int {
+	for i, opt := range s.SortConfig.QualityOrder {
+		if strings.Contains(strings.ToLower(p.Quality), strings.ToLower(opt)) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Service) firstMatchVisualTag(p *parser.ParsedRelease) int {
+	tags := make([]string, 0, len(p.HDR)+1)
+	tags = append(tags, p.HDR...)
+	if p.ThreeD != "" {
+		tags = append(tags, p.ThreeD)
+	}
+	for i, opt := range s.SortConfig.VisualTagOrder {
+		optLower := strings.ToLower(opt)
+		for _, tag := range tags {
+			if strings.Contains(strings.ToLower(tag), optLower) || (optLower == "3d" && strings.HasPrefix(strings.ToLower(tag), "3d")) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func (s *Service) firstMatchChannels(p *parser.ParsedRelease) int {
+	for i, opt := range s.SortConfig.ChannelsOrder {
+		for _, ch := range p.Channels {
+			if strings.EqualFold(ch, opt) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func (s *Service) firstMatchGroup(p *parser.ParsedRelease) int {
+	if p.Group == "" {
+		return -1
+	}
+	g := strings.ToLower(p.Group)
+	for i, opt := range s.SortConfig.GroupOrder {
+		opt = strings.ToLower(strings.TrimSpace(opt))
+		if opt == g || strings.Contains(g, opt) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Service) firstMatchSingle(value string, order []string) int {
+	if value == "" {
+		return -1
+	}
+	v := strings.ToLower(value)
+	for i, opt := range order {
+		if strings.Contains(v, strings.ToLower(opt)) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Service) firstMatchLanguages(p *parser.ParsedRelease, rel *release.Release) int {
+	languages := mergeReleaseLanguages(p.Languages, nil)
+	if rel != nil && len(rel.Languages) > 0 {
+		languages = mergeReleaseLanguages(p.Languages, rel.Languages)
+	}
+	for i, opt := range s.SortConfig.LanguagesOrder {
+		for _, lang := range languages {
+			if languageMatches(opt, lang) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
 func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) int {
-	// 1. Resolution Priority (Primary Sort)
-	resolutionScore := 0
-	group := p.ResolutionGroup()
-	if weight, ok := s.SortConfig.ResolutionWeights[group]; ok {
-		resolutionScore = weight
-	} else if weight, ok := s.SortConfig.ResolutionWeights["sd"]; ok && (resolutionScore == 0) {
-		resolutionScore = weight
+	score := 0
+	order := s.SortConfig.ResolutionOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchResolution(p))
+	}
+	order = s.SortConfig.CodecOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchCodec(p))
+	}
+	order = s.SortConfig.AudioOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchAudio(p))
+	}
+	order = s.SortConfig.QualityOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchQuality(p))
+	}
+	order = s.SortConfig.VisualTagOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchVisualTag(p))
+	}
+	order = s.SortConfig.ChannelsOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchChannels(p))
+	}
+	order = s.SortConfig.BitDepthOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchSingle(p.BitDepth, order))
+	}
+	order = s.SortConfig.ContainerOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchSingle(p.Container, order))
+	}
+	order = s.SortConfig.LanguagesOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchLanguages(p, rel))
+	}
+	order = s.SortConfig.GroupOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchGroup(p))
+	}
+	order = s.SortConfig.EditionOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchSingle(p.Edition, order))
+	}
+	order = s.SortConfig.NetworkOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchSingle(p.Network, order))
+	}
+	order = s.SortConfig.RegionOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchSingle(p.Region, order))
+	}
+	order = s.SortConfig.ThreeDOrder
+	if len(order) > 0 {
+		score += orderListScore(len(order), s.firstMatchSingle(p.ThreeD, order))
 	}
 
-	// 2. Attribute Boosts (Secondary Sort)
-	attributeBoost := 0
-
-	// Codec boost: use max matching weight (order from PriorityList matters via weight values)
-	if p.Codec != "" {
-		if w := maxMatchingWeight(s.SortConfig.CodecWeights, strings.ToLower(p.Codec), true); w > 0 {
-			attributeBoost += w
-		}
-	}
-
-	// Audio boost: sum all matching (e.g. "Atmos" + "5.1")
-	for _, audio := range p.Audio {
-		for name, weight := range s.SortConfig.AudioWeights {
-			if strings.Contains(strings.ToLower(audio), strings.ToLower(name)) {
-				attributeBoost += weight
-			}
-		}
-	}
-
-	// Quality boost: use max matching weight
-	if p.Quality != "" {
-		if w := maxMatchingWeight(s.SortConfig.QualityWeights, strings.ToLower(p.Quality), true); w > 0 {
-			attributeBoost += w
-		}
-	}
-
-	// Visual tag boost (HDR and 3D)
-	// Combine HDR and 3D into visual tags
-	// PTT ThreeD formats: "3D", "3D HSBS", "3D SBS", "3D HOU", "3D OU"
-	if len(s.SortConfig.VisualTagWeights) > 0 {
-		visualTags := make([]string, 0)
-		visualTags = append(visualTags, p.HDR...)
-		if p.ThreeD != "" {
-			visualTags = append(visualTags, p.ThreeD)
-		}
-		for _, tag := range visualTags {
-			tagLower := strings.ToLower(tag)
-			var maxWeight int
-			for name, weight := range s.SortConfig.VisualTagWeights {
-				nameLower := strings.ToLower(name)
-				if strings.Contains(tagLower, nameLower) || (nameLower == "3d" && strings.HasPrefix(tagLower, "3d")) {
-					if weight > maxWeight {
-						maxWeight = weight
-					}
-				}
-			}
-			attributeBoost += maxWeight
-		}
-	}
-
-	// 3. Age Score
-	ageScore := 0.0
+	// Age
 	if rel.PubDate != "" {
 		pubTime, err := time.Parse(time.RFC1123Z, rel.PubDate)
 		if err != nil {
 			pubTime, err = time.Parse(time.RFC1123, rel.PubDate)
 		}
-
 		if err == nil {
 			ageHours := time.Since(pubTime).Hours()
-			// Invert so newer = higher score
-			ageScore = (100000.0 - ageHours) * s.SortConfig.AgeWeight
+			score += int((100000.0 - ageHours) * s.SortConfig.AgeWeight)
 		}
 	}
-
-	score := resolutionScore + attributeBoost + int(ageScore)
-
-	// 4. Popularity (Grabs)
+	// Grabs
 	if rel.Grabs > 0 {
 		score += int(float64(rel.Grabs) * s.SortConfig.GrabWeight)
 	}
-
 	return score
 }
 
@@ -262,18 +353,3 @@ func (s *Service) deduplicateReleases(candidates []Candidate) []Candidate {
 	return result
 }
 
-// maxMatchingWeight returns the highest weight from the map where value contains the key (case-insensitive).
-// Ensures user's priority order (via weight values) is respected when multiple keys could match.
-func maxMatchingWeight(weights map[string]int, value string, valueContainsKey bool) int {
-	var max int
-	for name, weight := range weights {
-		nameLower := strings.ToLower(name)
-		valLower := strings.ToLower(value)
-		if valueContainsKey && strings.Contains(valLower, nameLower) {
-			if weight > max {
-				max = weight
-			}
-		}
-	}
-	return max
-}

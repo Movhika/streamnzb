@@ -4,17 +4,18 @@ import (
 	"strconv"
 	"strings"
 
+	"streamnzb/pkg/core/config/pttoptions"
+
 	"github.com/MunifTanjim/go-ptt"
 )
 
-// ParsedRelease contains parsed metadata from a release title
-// Matches PTT parser output structure
+// ParsedRelease contains parsed metadata from a release title (go-ptt Result + normalized Codec).
 type ParsedRelease struct {
 	Title      string
 	Year       int
 	Resolution string
 	Quality    string
-	Codec      string
+	Codec      string   // Canonical: AVC, HEVC, MPEG-2, DivX, Xvid
 	Audio      []string
 	Channels   []string
 	HDR        []string
@@ -23,7 +24,6 @@ type ParsedRelease struct {
 	Season     int
 	Episode    int
 
-	// Additional metadata
 	Languages []string
 	Network   string
 	Repack    bool
@@ -32,48 +32,84 @@ type ParsedRelease struct {
 	Unrated   bool
 	ThreeD    string
 	Size      string
+	BitDepth  string
+	Dubbed    bool
+	Hardcoded bool
 
-	// PTT fields we were missing
-	BitDepth  string // e.g., "8bit", "10bit", "12bit"
-	Dubbed    bool   // Dubbed audio track
-	Hardcoded bool   // Hardcoded subtitles
+	// Extra PTT fields for filter/sort
+	Edition      string
+	Date         string   // YYYY-MM-DD
+	Commentary   bool
+	Complete     bool
+	Convert      bool
+	Documentary  bool
+	Remastered   bool
+	Retail       bool
+	Subbed       bool
+	Uncensored   bool
+	Upscaled     bool
+	Region       string
+	ReleaseTypes []string
+	EpisodeCode  string
+	Site         string
+	Extension    string
+	Volumes      []int
 }
 
-// ParseReleaseTitle parses a release title using go-ptt
+// ParseReleaseTitle parses a release title using go-ptt and normalizes Codec to canonical (AVC, HEVC, etc.).
 func ParseReleaseTitle(title string) *ParsedRelease {
 	info := ptt.Parse(title)
 
-	parsed := &ParsedRelease{
-		Title:      info.Title,
-		Resolution: info.Resolution,
-		Quality:    info.Quality,
-		Codec:      info.Codec,
-		Audio:      info.Audio,
-		Channels:   info.Channels,
-		HDR:        info.HDR,
-		Container:  info.Container,
-		Group:      info.Group,
-		Languages:  info.Languages,
-		Network:    info.Network,
-		Repack:     info.Repack,
-		Proper:     info.Proper,
-		Extended:   info.Extended,
-		Unrated:    info.Unrated,
-		ThreeD:     info.ThreeD,
-		Size:       info.Size,
-		BitDepth:   info.BitDepth,
-		Dubbed:     info.Dubbed,
-		Hardcoded:  info.Hardcoded,
+	codec := pttoptions.NormalizeCodec(info.Codec)
+	if codec == "" && info.Codec != "" {
+		codec = info.Codec
 	}
 
-	// Convert year from string to int
+	parsed := &ParsedRelease{
+		Title:       info.Title,
+		Resolution:  info.Resolution,
+		Quality:     info.Quality,
+		Codec:       codec,
+		Audio:       info.Audio,
+		Channels:    info.Channels,
+		HDR:         info.HDR,
+		Container:   info.Container,
+		Group:       info.Group,
+		Languages:   info.Languages,
+		Network:     info.Network,
+		Repack:      info.Repack,
+		Proper:      info.Proper,
+		Extended:    info.Extended,
+		Unrated:     info.Unrated,
+		ThreeD:      info.ThreeD,
+		Size:        info.Size,
+		BitDepth:    info.BitDepth,
+		Dubbed:      info.Dubbed,
+		Hardcoded:   info.Hardcoded,
+		Edition:     info.Edition,
+		Date:        info.Date,
+		Commentary:  info.Commentary,
+		Complete:    info.Complete,
+		Convert:     info.Convert,
+		Documentary: info.Documentary,
+		Remastered:  info.Remastered,
+		Retail:      info.Retail,
+		Subbed:      info.Subbed,
+		Uncensored:  info.Uncensored,
+		Upscaled:    info.Upscaled,
+		Region:      info.Region,
+		ReleaseTypes: info.ReleaseTypes,
+		EpisodeCode: info.EpisodeCode,
+		Site:        info.Site,
+		Extension:   info.Extension,
+		Volumes:     info.Volumes,
+	}
+
 	if info.Year != "" {
 		if year, err := strconv.Atoi(info.Year); err == nil {
 			parsed.Year = year
 		}
 	}
-
-	// Extract season/episode if available
 	if len(info.Seasons) > 0 {
 		parsed.Season = info.Seasons[0]
 	}

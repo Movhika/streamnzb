@@ -1,6 +1,25 @@
 import React, { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { FormField, FormItem, FormLabel, FormControl, FormDescription, FormMessage } from "@/components/ui/form"
+import { PriorityList, PrioritySubsetList, MultiplierSlider } from "@/components/ui/priority-list"
+import { useFormContext } from "react-hook-form"
+import {
+  ResolutionGroupOptions,
+  resolutionGroupLabels,
+  CodecOptions,
+  AudioOptions,
+  QualityOptions,
+  HDROptions,
+  ThreeDOptions,
+  ChannelsOptions,
+  BitDepthOptions,
+  ContainerOptions,
+  LanguageOptions,
+  EditionOptions,
+  NetworkOptions,
+  RegionOptions,
+} from "@/constants/pttOptions"
 
 function CommaSeparatedInput({ value = [], onChange, placeholder }) {
   const [rawValue, setRawValue] = useState(value?.join(', ') || '')
@@ -20,221 +39,258 @@ function CommaSeparatedInput({ value = [], onChange, placeholder }) {
     />
   )
 }
-import { FormField, FormItem, FormLabel, FormControl, FormDescription, FormMessage } from "@/components/ui/form"
-import { PriorityList, MultiplierSlider } from "@/components/ui/priority-list"
-import { useFormContext } from "react-hook-form"
+
+/** Build { key, label } items from option array; optional label map */
+function toItems(options, labelMap = {}) {
+  return options.map(key => ({ key, label: labelMap[key] ?? key }))
+}
+
+const resolutionItems = toItems(ResolutionGroupOptions, resolutionGroupLabels)
+const codecItems = toItems(CodecOptions)
+const audioItems = toItems(AudioOptions)
+const qualityItems = toItems(QualityOptions)
+const visualTagItems = toItems([...HDROptions, ...ThreeDOptions])
+const channelsItems = toItems(ChannelsOptions)
+const bitDepthItems = toItems(BitDepthOptions)
+const containerItems = toItems(ContainerOptions)
+const languagesItems = toItems(LanguageOptions)
+const editionItems = toItems(EditionOptions)
+const networkItems = toItems(NetworkOptions)
+const regionItems = toItems(RegionOptions)
+const threeDItems = toItems(ThreeDOptions)
 
 export function SortingSection({ control, watch, fieldPrefix = '' }) {
-  // Use form context if control/watch not provided (for nested forms)
   let formContext = null
   try {
     formContext = useFormContext()
-  } catch (e) {
-    // Not in form context, use provided props
-  }
-  
+  } catch (e) {}
   const actualControl = control || formContext?.control
-  const actualWatch = watch || formContext?.watch
-  
   const getFieldName = (field) => {
     if (!fieldPrefix) return field
-    // Handle both "sorting.field" and just "field" formats
     if (field.startsWith('sorting.')) {
-      // If fieldPrefix is already "sorting", return the field as-is
-      // react-hook-form needs the full path "sorting.field" to access nested values
-      if (fieldPrefix === 'sorting') {
-        return field // Return "sorting.field" as-is
-      }
+      if (fieldPrefix === 'sorting') return field
       return `${fieldPrefix}.${field}`
     }
-    // If fieldPrefix is "sorting" and field doesn't start with "sorting.", prepend it
-    if (fieldPrefix === 'sorting') {
-      return `sorting.${field}`
-    }
+    if (fieldPrefix === 'sorting') return `sorting.${field}`
     return `${fieldPrefix}.sorting.${field}`
   }
-  const resolutionItems = [
-    { key: '4k', label: '4K' },
-    { key: '1080p', label: '1080p' },
-    { key: '720p', label: '720p' },
-    { key: 'sd', label: 'SD' },
-  ]
-
-  const codecItems = [
-    { key: 'HEVC', label: 'HEVC' },
-    { key: 'x265', label: 'x265' },
-    { key: 'x264', label: 'x264' },
-    { key: 'AVC', label: 'AVC' },
-  ]
-
-  const audioItems = [
-    { key: 'Atmos', label: 'Atmos' },
-    { key: 'TrueHD', label: 'TrueHD' },
-    { key: 'DTS-HD', label: 'DTS-HD' },
-    { key: 'DTS-X', label: 'DTS-X' },
-    { key: 'DTS', label: 'DTS' },
-    { key: 'DD+', label: 'DD+' },
-    { key: 'DD', label: 'DD' },
-    { key: 'AC3', label: 'AC3' },
-    { key: '5.1', label: '5.1 Channels' },
-    { key: '7.1', label: '7.1 Channels' },
-  ]
-
-  const qualityItems = [
-    { key: 'BluRay', label: 'BluRay' },
-    { key: 'Blu-ray', label: 'Blu-ray' },
-    { key: 'WEB-DL', label: 'WEB-DL' },
-    { key: 'WEBRip', label: 'WEBRip' },
-    { key: 'HDTV', label: 'HDTV' },
-  ]
-
-  const visualTagItems = [
-    { key: 'DV', label: 'DV (Dolby Vision)' },
-    { key: 'HDR10+', label: 'HDR10+' },
-    { key: 'HDR', label: 'HDR' },
-    { key: '3D', label: '3D' },
-  ]
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-lg">Sorting Priority</CardTitle>
         <CardDescription>
-          Drag items to reorder priority. Items at the top will be prioritized over items at the bottom.
+          Drag items to reorder. Top of each list = highest priority (10 pts), bottom = lowest (0 pts).
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Resolution Priority */}
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.resolution_weights")}
+          name={getFieldName("sorting.resolution_order")}
           render={({ field }) => (
             <PriorityList
               items={resolutionItems}
               value={field.value}
               onChange={field.onChange}
-              title="Resolution Priority"
-              description="Drag to set your preferred resolution order. Higher resolutions typically rank higher."
+              title="Resolution"
+              description="Preferred resolution order."
             />
           )}
         />
-
-        {/* Codec Priority */}
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.codec_weights")}
+          name={getFieldName("sorting.codec_order")}
           render={({ field }) => (
             <PriorityList
               items={codecItems}
               value={field.value}
               onChange={field.onChange}
-              title="Codec Preference"
-              description="Prioritize releases with your preferred video codecs."
+              title="Codec"
+              description="Preferred video codecs."
             />
           )}
         />
-
-        {/* Audio Priority */}
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.audio_weights")}
+          name={getFieldName("sorting.audio_order")}
           render={({ field }) => (
             <PriorityList
               items={audioItems}
               value={field.value}
               onChange={field.onChange}
-              title="Audio Format Preference"
-              description="Prioritize releases with your preferred audio formats and channel configurations."
+              title="Audio"
+              description="Preferred audio formats."
             />
           )}
         />
-
-        {/* Quality Priority */}
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.quality_weights")}
+          name={getFieldName("sorting.quality_order")}
           render={({ field }) => (
             <PriorityList
               items={qualityItems}
               value={field.value}
               onChange={field.onChange}
-              title="Source Quality Preference"
-              description="Prioritize releases from your preferred sources."
+              title="Source quality"
+              description="Preferred source types."
             />
           )}
         />
-
-        {/* Visual Tag Priority */}
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.visual_tag_weights")}
+          name={getFieldName("sorting.visual_tag_order")}
           render={({ field }) => (
             <PriorityList
               items={visualTagItems}
               value={field.value}
               onChange={field.onChange}
-              title="Visual Tag Preference"
-              description="Prioritize releases with your preferred visual tags (HDR, Dolby Vision, 3D)."
+              title="Visual tags (HDR / 3D)"
+              description="Preferred visual tags."
+            />
+          )}
+        />
+        <FormField
+          control={actualControl}
+          name={getFieldName("sorting.channels_order")}
+          render={({ field }) => (
+            <PriorityList
+              items={channelsItems}
+              value={field.value}
+              onChange={field.onChange}
+              title="Channels"
+              description="Preferred channel layout."
+            />
+          )}
+        />
+        <FormField
+          control={actualControl}
+          name={getFieldName("sorting.bit_depth_order")}
+          render={({ field }) => (
+            <PriorityList
+              items={bitDepthItems}
+              value={field.value}
+              onChange={field.onChange}
+              title="Bit depth"
+              description="Preferred bit depth."
+            />
+          )}
+        />
+        <FormField
+          control={actualControl}
+          name={getFieldName("sorting.container_order")}
+          render={({ field }) => (
+            <PriorityList
+              items={containerItems}
+              value={field.value}
+              onChange={field.onChange}
+              title="Container"
+              description="Preferred container format."
+            />
+          )}
+        />
+        <FormField
+          control={actualControl}
+          name={getFieldName("sorting.languages_order")}
+          render={({ field }) => (
+            <PrioritySubsetList
+              allItems={languagesItems}
+              value={field.value}
+              onChange={field.onChange}
+              title="Languages"
+              description="Add only the languages you care about; order = priority."
+              showScoreHint={false}
+            />
+          )}
+        />
+        <FormField
+          control={actualControl}
+          name={getFieldName("sorting.edition_order")}
+          render={({ field }) => (
+            <PrioritySubsetList
+              allItems={editionItems}
+              value={field.value}
+              onChange={field.onChange}
+              title="Edition"
+              description="Add only the edition types you care about."
+            />
+          )}
+        />
+        <FormField
+          control={actualControl}
+          name={getFieldName("sorting.network_order")}
+          render={({ field }) => (
+            <PrioritySubsetList
+              allItems={networkItems}
+              value={field.value}
+              onChange={field.onChange}
+              title="Network"
+              description="Add only the streaming/broadcast sources you care about."
+            />
+          )}
+        />
+        <FormField
+          control={actualControl}
+          name={getFieldName("sorting.region_order")}
+          render={({ field }) => (
+            <PrioritySubsetList
+              allItems={regionItems}
+              value={field.value}
+              onChange={field.onChange}
+              title="Region"
+              description="Add only the regions you care about."
+            />
+          )}
+        />
+        <FormField
+          control={actualControl}
+          name={getFieldName("sorting.three_d_order")}
+          render={({ field }) => (
+            <PrioritySubsetList
+              allItems={threeDItems}
+              value={field.value}
+              onChange={field.onChange}
+              title="3D"
+              description="Add only the 3D formats you care about."
             />
           )}
         />
 
-        {/* Multipliers */}
         <div className="space-y-4 pt-4 border-t">
-          <h4 className="font-medium">Preferred Settings</h4>
+          <h4 className="font-medium">Group & language order</h4>
           <FormField
             control={actualControl}
-            name={getFieldName("sorting.preferred_groups")}
+            name={getFieldName("sorting.group_order")}
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Preferred Release Groups</FormLabel>
+                <FormLabel>Group priority (ordered list)</FormLabel>
                 <FormControl>
                   <CommaSeparatedInput
-                    value={field.value}
+                    value={field.value || []}
                     onChange={field.onChange}
-                    placeholder="Enter groups separated by commas (e.g., FLUX, NTb, SWTYBLZ)"
+                    placeholder="e.g. FLUX, NTb, SWTYBLZ (first = highest)"
                   />
                 </FormControl>
-                <FormDescription>Boost score for releases from these groups (+1000 points)</FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={actualControl}
-            name={getFieldName("sorting.preferred_languages")}
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Preferred Languages</FormLabel>
-                <FormControl>
-                  <CommaSeparatedInput
-                    value={field.value}
-                    onChange={field.onChange}
-                    placeholder="Enter language codes separated by commas (e.g., en, multi)"
-                  />
-                </FormControl>
-                <FormDescription>Boost score for releases in these languages (future feature)</FormDescription>
+                <FormDescription>First group in list gets highest score.</FormDescription>
                 <FormMessage />
               </FormItem>
             )}
           />
         </div>
 
-        {/* Multipliers */}
         <div className="space-y-4 pt-4 border-t">
-          <h4 className="font-medium">Score Multipliers</h4>
+          <h4 className="font-medium">Score multipliers</h4>
           <FormField
             control={actualControl}
             name={getFieldName("sorting.grab_weight")}
             render={({ field }) => (
               <MultiplierSlider
-                label="Grab Weight"
-                value={field.value || 0.5}
+                label="Grab weight"
+                value={field.value ?? 0.5}
                 onChange={field.onChange}
                 min={0}
                 max={2}
                 step={0.1}
-                description="How much to prioritize popular releases (higher grabs = more popular)"
+                description="Prioritize popular releases (higher grabs = more popular)"
               />
             )}
           />
@@ -243,13 +299,13 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
             name={getFieldName("sorting.age_weight")}
             render={({ field }) => (
               <MultiplierSlider
-                label="Age Weight"
-                value={field.value || 1.0}
+                label="Age weight"
+                value={field.value ?? 1.0}
                 onChange={field.onChange}
                 min={0}
                 max={2}
                 step={0.1}
-                description="How much to prioritize newer releases (higher = prefer newer)"
+                description="Prioritize newer releases (higher = prefer newer)"
               />
             )}
           />
