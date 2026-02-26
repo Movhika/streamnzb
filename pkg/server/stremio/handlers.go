@@ -730,6 +730,8 @@ func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id strin
 				if rws == nil || rws.Release == nil || !rws.Available || rws.Release.Link == "" {
 					continue
 				}
+				// Mark as ID-based so triage scores them like indexer ID results (we fetched by IMDb/TVDB ID).
+				rws.Release.QuerySource = "id"
 				availReleases = append(availReleases, rws.Release)
 				cachedAvailable[rws.Release.DetailsURL] = true
 			}
