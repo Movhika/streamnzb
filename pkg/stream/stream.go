@@ -31,6 +31,8 @@ type Stream struct {
 	// ShowAllStream: when true, show every release (unknown or available) as a separate stream row
 	// and disable play-next-stream fallback for this stream.
 	ShowAllStream bool `json:"show_all_stream"`
+	// PriorityGridAdded lists optional category keys added to the priority grid (e.g. "quality", "codec").
+	PriorityGridAdded []string `json:"priority_grid_added,omitempty"`
 }
 
 // Manager loads and saves streams from config or state.
@@ -129,12 +131,13 @@ func (m *Manager) load() error {
 
 func streamFromEntry(e *config.StreamEntry) *Stream {
 	s := &Stream{
-		ID:             e.ID,
-		Name:           e.Name,
-		Filters:        e.Filters,
-		Sorting:        e.Sorting,
-		ShowAllStream:  e.ShowAllStream,
-		IndexerOverrides: e.IndexerOverrides,
+		ID:                e.ID,
+		Name:              e.Name,
+		Filters:           e.Filters,
+		Sorting:           e.Sorting,
+		ShowAllStream:     e.ShowAllStream,
+		IndexerOverrides:  e.IndexerOverrides,
+		PriorityGridAdded: e.PriorityGridAdded,
 	}
 	if s.IndexerOverrides == nil {
 		s.IndexerOverrides = make(map[string]config.IndexerSearchConfig)
@@ -144,12 +147,13 @@ func streamFromEntry(e *config.StreamEntry) *Stream {
 
 func entryFromStream(s *Stream) *config.StreamEntry {
 	e := &config.StreamEntry{
-		ID:               s.ID,
-		Name:             s.Name,
-		Filters:          s.Filters,
-		Sorting:          s.Sorting,
-		IndexerOverrides: s.IndexerOverrides,
-		ShowAllStream:    s.ShowAllStream,
+		ID:                  s.ID,
+		Name:                s.Name,
+		Filters:             s.Filters,
+		Sorting:             s.Sorting,
+		IndexerOverrides:    s.IndexerOverrides,
+		ShowAllStream:       s.ShowAllStream,
+		PriorityGridAdded:   s.PriorityGridAdded,
 	}
 	if e.IndexerOverrides == nil {
 		e.IndexerOverrides = make(map[string]config.IndexerSearchConfig)

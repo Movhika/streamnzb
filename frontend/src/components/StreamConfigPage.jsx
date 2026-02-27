@@ -8,21 +8,7 @@ import { FiltersSection } from "@/components/FiltersSection"
 import { SortingSection } from "@/components/SortingSection"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Loader2 } from "lucide-react"
-import {
-  DefaultResolutionOrder,
-  DefaultCodecOrder,
-  DefaultAudioOrder,
-  DefaultQualityOrder,
-  DefaultVisualTagOrder,
-  DefaultChannelsOrder,
-  DefaultBitDepthOrder,
-  DefaultContainerOrder,
-  DefaultLanguagesOrder,
-  DefaultEditionOrder,
-  DefaultNetworkOrder,
-  DefaultRegionOrder,
-  DefaultThreeDOrder,
-} from "@/constants/pttOptions"
+import { DefaultResolutionOrder, DefaultQualityOrder } from "@/constants/pttOptions"
 
 const defaultFilters = {
   quality_include: [], quality_avoid: [], resolution_include: [], resolution_avoid: [],
@@ -39,41 +25,21 @@ const defaultFilters = {
 
 const defaultSorting = {
   resolution_order: DefaultResolutionOrder,
-  codec_order: DefaultCodecOrder,
-  audio_order: DefaultAudioOrder,
   quality_order: DefaultQualityOrder,
-  visual_tag_order: DefaultVisualTagOrder,
-  channels_order: DefaultChannelsOrder,
-  bit_depth_order: DefaultBitDepthOrder,
-  container_order: DefaultContainerOrder,
-  languages_order: DefaultLanguagesOrder,
-  group_order: [],
-  edition_order: DefaultEditionOrder,
-  network_order: DefaultNetworkOrder,
-  region_order: DefaultRegionOrder,
-  three_d_order: DefaultThreeDOrder,
   grab_weight: 0.5,
   age_weight: 1.0,
-  resolution_weight: 10,
-  quality_weight: 8,
-  codec_weight: 5,
-  audio_weight: 3,
-  visual_tag_weight: 5,
-  channels_weight: 2,
-  bit_depth_weight: 2,
-  container_weight: 1,
-  languages_weight: 2,
-  group_weight: 3,
-  edition_weight: 0.5,
-  network_weight: 0.5,
-  region_weight: 0.5,
-  three_d_weight: 0.5,
-  group_order_tier1: [],
-  group_order_tier2: [],
-  group_order_tier3: [],
-  group_tier1_points: 30,
-  group_tier2_points: 15,
-  group_tier3_points: 5
+  codec_order: [],
+  audio_order: [],
+  visual_tag_order: [],
+  channels_order: [],
+  bit_depth_order: [],
+  container_order: [],
+  languages_order: [],
+  group_order: [],
+  edition_order: [],
+  network_order: [],
+  region_order: [],
+  three_d_order: []
 }
 
 function getApiUrl(path) {

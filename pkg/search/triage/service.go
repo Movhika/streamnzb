@@ -1,6 +1,7 @@
 package triage
 
 import (
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -212,30 +213,6 @@ func (s *Service) firstMatchGroup(p *parser.ParsedRelease) int {
 	return -1
 }
 
-// groupTierMatch returns 1, 2, or 3 if release group is in tier 1/2/3 (whole-word), else 0.
-func (s *Service) groupTierMatch(p *parser.ParsedRelease) int {
-	if p.Group == "" {
-		return 0
-	}
-	g := strings.ToLower(strings.TrimSpace(p.Group))
-	for _, opt := range s.SortConfig.GroupOrderTier1 {
-		if strings.ToLower(strings.TrimSpace(opt)) == g {
-			return 1
-		}
-	}
-	for _, opt := range s.SortConfig.GroupOrderTier2 {
-		if strings.ToLower(strings.TrimSpace(opt)) == g {
-			return 2
-		}
-	}
-	for _, opt := range s.SortConfig.GroupOrderTier3 {
-		if strings.ToLower(strings.TrimSpace(opt)) == g {
-			return 3
-		}
-	}
-	return 0
-}
-
 func (s *Service) firstMatchSingle(value string, order []string) int {
 	if value == "" {
 		return -1
@@ -264,14 +241,6 @@ func (s *Service) firstMatchLanguages(p *parser.ParsedRelease, rel *release.Rele
 	return -1
 }
 
-// categoryWeight returns the multiplier for a category (1.0 when weight unset/zero).
-func (s *Service) categoryWeight(w float64) float64 {
-	if w == 0 {
-		return 1.0
-	}
-	return w
-}
-
 func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) int {
 	score := 0
 	add := func(order []string, firstMatchIndex int, weight float64) {
@@ -282,35 +251,69 @@ func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) 
 		score += int(float64(pts) * weight)
 	}
 
-	add(s.SortConfig.ResolutionOrder, s.firstMatchResolution(p), s.categoryWeight(s.SortConfig.ResolutionWeight))
-	add(s.SortConfig.CodecOrder, s.firstMatchCodec(p), s.categoryWeight(s.SortConfig.CodecWeight))
-	add(s.SortConfig.AudioOrder, s.firstMatchAudio(p), s.categoryWeight(s.SortConfig.AudioWeight))
-	add(s.SortConfig.QualityOrder, s.firstMatchQuality(p), s.categoryWeight(s.SortConfig.QualityWeight))
-	add(s.SortConfig.VisualTagOrder, s.firstMatchVisualTag(p), s.categoryWeight(s.SortConfig.VisualTagWeight))
-	add(s.SortConfig.ChannelsOrder, s.firstMatchChannels(p), s.categoryWeight(s.SortConfig.ChannelsWeight))
-	add(s.SortConfig.BitDepthOrder, s.firstMatchSingle(p.BitDepth, s.SortConfig.BitDepthOrder), s.categoryWeight(s.SortConfig.BitDepthWeight))
-	add(s.SortConfig.ContainerOrder, s.firstMatchSingle(p.Container, s.SortConfig.ContainerOrder), s.categoryWeight(s.SortConfig.ContainerWeight))
-	add(s.SortConfig.LanguagesOrder, s.firstMatchLanguages(p, rel), s.categoryWeight(s.SortConfig.LanguagesWeight))
-
-	// Group: tiers (fixed points) or single ordered list
-	useGroupTiers := len(s.SortConfig.GroupOrderTier1) > 0 || len(s.SortConfig.GroupOrderTier2) > 0 || len(s.SortConfig.GroupOrderTier3) > 0
-	if useGroupTiers {
-		switch s.groupTierMatch(p) {
-		case 1:
-			score += s.SortConfig.GroupTier1Points
-		case 2:
-			score += s.SortConfig.GroupTier2Points
-		case 3:
-			score += s.SortConfig.GroupTier3Points
-		}
-	} else {
-		add(s.SortConfig.GroupOrder, s.firstMatchGroup(p), s.categoryWeight(s.SortConfig.GroupWeight))
+	// Category contributions: (order list, match index). "size" has no order list and is filter-only.
+	type catContribution struct {
+		order []string
+		idx   int
+	}
+	cats := map[string]catContribution{
+		"resolution":   {s.SortConfig.ResolutionOrder, s.firstMatchResolution(p)},
+		"quality":      {s.SortConfig.QualityOrder, s.firstMatchQuality(p)},
+		"codec":        {s.SortConfig.CodecOrder, s.firstMatchCodec(p)},
+		"visual_tag":   {s.SortConfig.VisualTagOrder, s.firstMatchVisualTag(p)},
+		"audio":        {s.SortConfig.AudioOrder, s.firstMatchAudio(p)},
+		"channels":     {s.SortConfig.ChannelsOrder, s.firstMatchChannels(p)},
+		"bit_depth":    {s.SortConfig.BitDepthOrder, s.firstMatchSingle(p.BitDepth, s.SortConfig.BitDepthOrder)},
+		"container":    {s.SortConfig.ContainerOrder, s.firstMatchSingle(p.Container, s.SortConfig.ContainerOrder)},
+		"languages":    {s.SortConfig.LanguagesOrder, s.firstMatchLanguages(p, rel)},
+		"group":        {s.SortConfig.GroupOrder, s.firstMatchGroup(p)},
+		"edition":      {s.SortConfig.EditionOrder, s.firstMatchSingle(p.Edition, s.SortConfig.EditionOrder)},
+		"network":      {s.SortConfig.NetworkOrder, s.firstMatchSingle(p.Network, s.SortConfig.NetworkOrder)},
+		"region":       {s.SortConfig.RegionOrder, s.firstMatchSingle(p.Region, s.SortConfig.RegionOrder)},
+		"three_d":      {s.SortConfig.ThreeDOrder, s.firstMatchSingle(p.ThreeD, s.SortConfig.ThreeDOrder)},
 	}
 
-	add(s.SortConfig.EditionOrder, s.firstMatchSingle(p.Edition, s.SortConfig.EditionOrder), s.categoryWeight(s.SortConfig.EditionWeight))
-	add(s.SortConfig.NetworkOrder, s.firstMatchSingle(p.Network, s.SortConfig.NetworkOrder), s.categoryWeight(s.SortConfig.NetworkWeight))
-	add(s.SortConfig.RegionOrder, s.firstMatchSingle(p.Region, s.SortConfig.RegionOrder), s.categoryWeight(s.SortConfig.RegionWeight))
-	add(s.SortConfig.ThreeDOrder, s.firstMatchSingle(p.ThreeD, s.SortConfig.ThreeDOrder), s.categoryWeight(s.SortConfig.ThreeDWeight))
+	// defaultCategoryOrder is used when SortCriteriaOrder is empty; first = highest priority.
+	defaultCategoryOrder := []string{
+		"resolution", "quality", "codec", "visual_tag", "audio", "channels",
+		"bit_depth", "container", "languages", "group", "edition", "network", "region", "three_d",
+	}
+
+	// Build list of (order, idx) for categories that contribute, in priority order.
+	type weightedCat struct {
+		order []string
+		idx   int
+	}
+	var ordered []weightedCat
+	if len(s.SortConfig.SortCriteriaOrder) > 0 {
+		for _, key := range s.SortConfig.SortCriteriaOrder {
+			key = strings.TrimSpace(strings.ToLower(key))
+			if key == "size" {
+				continue
+			}
+			c, ok := cats[key]
+			if !ok || len(c.order) == 0 {
+				continue
+			}
+			ordered = append(ordered, weightedCat{c.order, c.idx})
+		}
+	} else {
+		for _, key := range defaultCategoryOrder {
+			c, ok := cats[key]
+			if !ok || len(c.order) == 0 {
+				continue
+			}
+			ordered = append(ordered, weightedCat{c.order, c.idx})
+		}
+	}
+
+	// Lexicographic weighting: first category dominates, then second, etc.
+	// Weight = 10^(n-1-i) so that max score from category i is 10*10^(n-1-i); sum of categories i+1..n-1 is strictly less than category i's max.
+	n := len(ordered)
+	for i, wc := range ordered {
+		weight := math.Pow(10, float64(n-1-i))
+		add(wc.order, wc.idx, weight)
+	}
 
 	// Age
 	if rel.PubDate != "" {

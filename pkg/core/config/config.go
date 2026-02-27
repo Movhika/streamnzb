@@ -35,22 +35,17 @@ type Provider struct {
 func DefaultFilterConfig() FilterConfig {
 	return FilterConfig{
 		QualityAvoid: []string{"CAM", "TeleSync"},
-		DubbedAvoid:   ptrBool(true),
+		DubbedAvoid:  ptrBool(true),
 	}
 }
 
-// DefaultSortConfig returns default order lists and weights.
 func DefaultSortConfig() SortConfig {
 	return SortConfig{
-		ResolutionOrder: []string{"4k", "1080p", "720p", "sd"},
-		CodecOrder:      []string{"HEVC", "x265", "AVC", "x264"},
-		AudioOrder:      []string{"Atmos", "TrueHD", "DTS-HD", "DTS-X", "DTS", "DD+", "DD", "AC3", "5.1", "7.1"},
-		QualityOrder:    []string{"BluRay", "Blu-ray", "WEB-DL", "WEBRip", "HDTV"},
-		VisualTagOrder:  []string{"DV", "HDR10+", "HDR", "3D"},
-		ChannelsOrder:   []string{"7.1", "5.1", "stereo", "2.0", "mono"},
-		BitDepthOrder:   []string{"12bit", "10bit", "8bit"},
-		GrabWeight:      0.5,
-		AgeWeight:       1.0,
+		ResolutionOrder:   []string{"4k", "1080p", "720p", "sd"},
+		QualityOrder:      []string{"BluRay", "Blu-ray", "WEB-DL", "WEBRip", "HDTV"},
+		SortCriteriaOrder: []string{"resolution", "quality", "codec", "visual_tag", "audio", "channels"},
+		GrabWeight:        0.5,
+		AgeWeight:         1.0,
 	}
 }
 
@@ -58,7 +53,7 @@ func ptrBool(b bool) *bool { return &b }
 
 // IndexerSearchConfig holds indexer/search overrides (per-device per-indexer). Pointers = nil means use indexer's value. Used in Device.IndexerOverrides and API payloads.
 type IndexerSearchConfig struct {
-	SearchResultLimit      int     `json:"search_result_limit,omitempty"`       // 0 = use indexer/global
+	SearchResultLimit      int     `json:"search_result_limit,omitempty"` // 0 = use indexer/global
 	IncludeYearInSearch    *bool   `json:"include_year_in_search,omitempty"`
 	SearchTitleLanguage    *string `json:"search_title_language,omitempty"`
 	SearchTitleNormalize   *bool   `json:"search_title_normalize,omitempty"`
@@ -82,14 +77,14 @@ type IndexerConfig struct {
 	Username string `json:"username"` // Easynews username
 	Password string `json:"password"` // Easynews password
 	// Per-indexer search settings (all 8; empty/nil = use global default where applicable)
-	MovieCategories         string  `json:"movie_categories,omitempty"`
-	TVCategories            string  `json:"tv_categories,omitempty"`
-	ExtraSearchTerms        string  `json:"extra_search_terms,omitempty"`
-	UseSeasonEpisodeParams  *bool   `json:"use_season_episode_params,omitempty"`
-	SearchResultLimit       int     `json:"search_result_limit,omitempty"`   // 0 = use global default
-	IncludeYearInSearch     *bool   `json:"include_year_in_search,omitempty"`
-	SearchTitleLanguage     string  `json:"search_title_language,omitempty"`
-	SearchTitleNormalize    *bool   `json:"search_title_normalize,omitempty"`
+	MovieCategories        string `json:"movie_categories,omitempty"`
+	TVCategories           string `json:"tv_categories,omitempty"`
+	ExtraSearchTerms       string `json:"extra_search_terms,omitempty"`
+	UseSeasonEpisodeParams *bool  `json:"use_season_episode_params,omitempty"`
+	SearchResultLimit      int    `json:"search_result_limit,omitempty"` // 0 = use global default
+	IncludeYearInSearch    *bool  `json:"include_year_in_search,omitempty"`
+	SearchTitleLanguage    string `json:"search_title_language,omitempty"`
+	SearchTitleNormalize   *bool  `json:"search_title_normalize,omitempty"`
 }
 
 // Config holds application configuration
@@ -139,19 +134,20 @@ type Config struct {
 
 // DeviceEntry is the persisted shape of a device (auth.Device) in config.json.
 type DeviceEntry struct {
-	Username         string                           `json:"username"`
-	Token            string                           `json:"token"`
-	IndexerOverrides map[string]IndexerSearchConfig   `json:"indexer_overrides,omitempty"`
+	Username         string                         `json:"username"`
+	Token            string                         `json:"token"`
+	IndexerOverrides map[string]IndexerSearchConfig `json:"indexer_overrides,omitempty"`
 }
 
 // StreamEntry is the persisted shape of a stream in config.json (mirrors stream.Stream).
 type StreamEntry struct {
-	ID                string                           `json:"id"`
-	Name              string                           `json:"name"`
-	Filters           FilterConfig                     `json:"filters"`
-	Sorting           SortConfig                       `json:"sorting"`
-	IndexerOverrides  map[string]IndexerSearchConfig   `json:"indexer_overrides,omitempty"`
-	ShowAllStream     bool                             `json:"show_all_stream"`
+	ID                string                         `json:"id"`
+	Name              string                         `json:"name"`
+	Filters           FilterConfig                   `json:"filters"`
+	Sorting           SortConfig                     `json:"sorting"`
+	IndexerOverrides  map[string]IndexerSearchConfig `json:"indexer_overrides,omitempty"`
+	ShowAllStream     bool                           `json:"show_all_stream"`
+	PriorityGridAdded []string                       `json:"priority_grid_added,omitempty"` // optional category keys added to the grid (e.g. "quality", "codec")
 }
 
 // GetIncludeYearInSearch returns the default for including year in movie search (used when no per-indexer config).
@@ -273,8 +269,8 @@ func Load() (*Config, error) {
 	// 2. Load config.json (or create with defaults if it doesn't exist)
 	cfg := &Config{
 		// Set defaults
-		AddonPort:               7000,
-		AddonBaseURL:            "http://localhost:7000",
+		AddonPort:     7000,
+		AddonBaseURL:  "http://localhost:7000",
 		LogLevel:      "INFO",
 		AdminUsername: "admin",
 		ProxyPort:     119,

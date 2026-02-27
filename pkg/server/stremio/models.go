@@ -39,21 +39,20 @@ type Stream struct {
 
 // BehaviorHints provides hints to Stremio (and aggregators like AIOStreams) about stream behavior.
 // See Stremio SDK: https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/stream.md
-// AIOStreams custom formatter uses stream.filename, stream.folderName, stream.size; see wiki Custom-Formatter.
 type BehaviorHints struct {
 	NotWebReady      bool     `json:"notWebReady,omitempty"`
 	BingeGroup       string   `json:"bingeGroup,omitempty"`
 	CountryWhitelist []string `json:"countryWhitelist,omitempty"`
 	VideoSize        int64    `json:"videoSize,omitempty"`
 	Filename         string   `json:"filename,omitempty"`
-	// FolderName is used by AIOStreams (e.g. {stream.folderName}) when present; not in official SDK.
-	FolderName string `json:"folderName,omitempty"`
+	// Cached is true when AvailNZB reports the release as cached, false otherwise; omitted when unknown.
+	Cached *bool `json:"cached,omitempty"`
 }
 
 // SearchReleasesResponse is the response for the search releases API (indexer + AvailNZB, tagged by availability and per-stream).
 type SearchReleasesResponse struct {
-	Streams  []SearchStreamInfo  `json:"streams"`
-	Releases []SearchReleaseTag  `json:"releases"`
+	Streams  []SearchStreamInfo `json:"streams"`
+	Releases []SearchReleaseTag `json:"releases"`
 }
 
 // SearchStreamInfo is one stream for the search UI (filter/sort by stream).
@@ -64,13 +63,13 @@ type SearchStreamInfo struct {
 
 // SearchReleaseTag is one release with availability and per-stream tags.
 type SearchReleaseTag struct {
-	Title         string              `json:"title"`
-	Link          string              `json:"link"`
-	DetailsURL    string              `json:"details_url"`
-	Size          int64               `json:"size"`
-	Indexer       string              `json:"indexer"`
-	Availability  string              `json:"availability"` // "Available", "Unavailable", "Unknown"
-	StreamTags    []SearchStreamTag   `json:"stream_tags"`
+	Title        string            `json:"title"`
+	Link         string            `json:"link"`
+	DetailsURL   string            `json:"details_url"`
+	Size         int64             `json:"size"`
+	Indexer      string            `json:"indexer"`
+	Availability string            `json:"availability"` // "Available", "Unavailable", "Unknown"
+	StreamTags   []SearchStreamTag `json:"stream_tags"`
 }
 
 // SearchStreamTag is per-stream: does this release fit the stream's filters and its priority score.

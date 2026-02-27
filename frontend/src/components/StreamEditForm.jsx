@@ -5,25 +5,19 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Form, FormField, FormItem, FormLabel, FormControl, FormDescription } from "@/components/ui/form"
 import { Checkbox } from "@/components/ui/checkbox"
-import { FiltersSection } from "@/components/FiltersSection"
-import { SortingSection } from "@/components/SortingSection"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { ConfigComponent } from "@/components/ConfigComponent"
 import { Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   DefaultResolutionOrder,
-  DefaultCodecOrder,
-  DefaultAudioOrder,
   DefaultQualityOrder,
-  DefaultVisualTagOrder,
-  DefaultChannelsOrder,
-  DefaultBitDepthOrder,
-  DefaultContainerOrder,
-  DefaultLanguagesOrder,
-  DefaultEditionOrder,
-  DefaultNetworkOrder,
-  DefaultRegionOrder,
-  DefaultThreeDOrder,
+  ResolutionGroupOptions,
+  resolutionGroupLabels,
+  CodecOptions,
+  QualityOptions,
+  HDROptions,
+  ThreeDOptions,
+  AudioOptions,
 } from "@/constants/pttOptions"
 
 const defaultFilters = {
@@ -39,44 +33,40 @@ const defaultFilters = {
   min_size_gb: 0, max_size_gb: 0, min_year: 0, max_year: 0
 }
 
+const defaultSortCriteriaOrder = ['resolution', 'quality', 'codec', 'visual_tag', 'audio', 'size']
+
 const defaultSorting = {
+  sort_criteria_order: defaultSortCriteriaOrder,
   resolution_order: DefaultResolutionOrder,
-  codec_order: DefaultCodecOrder,
-  audio_order: DefaultAudioOrder,
   quality_order: DefaultQualityOrder,
-  visual_tag_order: DefaultVisualTagOrder,
-  channels_order: DefaultChannelsOrder,
-  bit_depth_order: DefaultBitDepthOrder,
-  container_order: DefaultContainerOrder,
-  languages_order: DefaultLanguagesOrder,
-  group_order: [],
-  edition_order: DefaultEditionOrder,
-  network_order: DefaultNetworkOrder,
-  region_order: DefaultRegionOrder,
-  three_d_order: DefaultThreeDOrder,
+  codec_order: [],
   grab_weight: 0.5,
   age_weight: 1.0,
-  resolution_weight: 10,
-  quality_weight: 8,
-  codec_weight: 5,
-  audio_weight: 3,
-  visual_tag_weight: 5,
-  channels_weight: 2,
-  bit_depth_weight: 2,
-  container_weight: 1,
-  languages_weight: 2,
-  group_weight: 3,
-  edition_weight: 0.5,
-  network_weight: 0.5,
-  region_weight: 0.5,
-  three_d_weight: 0.5,
-  group_order_tier1: [],
-  group_order_tier2: [],
-  group_order_tier3: [],
-  group_tier1_points: 30,
-  group_tier2_points: 15,
-  group_tier3_points: 5
+  audio_order: [],
+  visual_tag_order: [],
+  channels_order: [],
+  bit_depth_order: [],
+  container_order: [],
+  languages_order: [],
+  group_order: [],
+  edition_order: [],
+  network_order: [],
+  region_order: [],
+  three_d_order: []
 }
+
+function toItems(options, labelMap = {}) {
+  return options.map((key) => ({ key, label: labelMap[key] ?? key }))
+}
+
+const aioStyleCategories = [
+  { key: 'resolution', label: 'Resolution', orderField: 'sorting.resolution_order', avoidField: 'filters.resolution_avoid', items: toItems(ResolutionGroupOptions, resolutionGroupLabels) },
+  { key: 'quality', label: 'Source quality', orderField: 'sorting.quality_order', avoidField: 'filters.quality_avoid', items: toItems(QualityOptions) },
+  { key: 'codec', label: 'Codec', orderField: 'sorting.codec_order', avoidField: 'filters.codec_avoid', items: toItems(CodecOptions) },
+  { key: 'visual_tag', label: 'Visual tags (HDR / 3D)', orderField: 'sorting.visual_tag_order', avoidField: 'filters.hdr_avoid', items: toItems([...HDROptions, ...ThreeDOptions]) },
+  { key: 'audio', label: 'Audio', orderField: 'sorting.audio_order', avoidField: 'filters.audio_avoid', items: toItems(AudioOptions) },
+  { type: 'size', minField: 'filters.min_size_gb', maxField: 'filters.max_size_gb' },
+]
 
 function getApiUrl(path) {
   const base = window.location.pathname.split('/').filter(Boolean)[0]
@@ -100,7 +90,7 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
     }
   })
 
-  const { control, watch, reset, handleSubmit } = form
+  const { control, reset, handleSubmit } = form
 
   useEffect(() => {
     if (isCreate) {
@@ -125,11 +115,15 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
       })
       .then((data) => {
         if (data) {
+          const loadedSorting = { ...defaultSorting, ...(data.sorting || {}) }
+          if (!Array.isArray(loadedSorting.sort_criteria_order) || loadedSorting.sort_criteria_order.length === 0) {
+            loadedSorting.sort_criteria_order = defaultSortCriteriaOrder
+          }
           reset({
             name: data.name ?? data.id ?? 'Stream',
             show_all_stream: data.show_all_stream === true,
             filters: { ...defaultFilters, ...(data.filters || {}) },
-            sorting: { ...defaultSorting, ...(data.sorting || {}) }
+            sorting: loadedSorting
           })
         }
       })
@@ -228,34 +222,18 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
             </CardContent>
           </Card>
 
-          <Tabs defaultValue="filters" className="w-full">
-            <TabsList className="mb-4 grid w-full grid-cols-2">
-              <TabsTrigger value="filters">Filters</TabsTrigger>
-              <TabsTrigger value="sorting">Sorting</TabsTrigger>
-            </TabsList>
-            <TabsContent value="filters">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Filters</CardTitle>
-                  <CardDescription>Quality, resolution, codec, and other release filters.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <FiltersSection control={control} watch={watch} fieldPrefix="filters" />
-                </CardContent>
-              </Card>
-            </TabsContent>
-            <TabsContent value="sorting">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Sorting</CardTitle>
-                  <CardDescription>Weights for resolution, codec, audio, and quality.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <SortingSection control={control} watch={watch} fieldPrefix="sorting" />
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
+          <FormField
+            control={control}
+            name="sorting.sort_criteria_order"
+            render={({ field }) => (
+              <ConfigComponent
+                control={control}
+                criteriaOrderValue={field.value ?? defaultSortCriteriaOrder}
+                onCriteriaOrderChange={field.onChange}
+                categories={aioStyleCategories}
+              />
+            )}
+          />
 
           {message.text && (
             <p className={cn("text-sm", message.type === 'error' ? 'text-destructive' : 'text-primary')}>

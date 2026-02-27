@@ -72,6 +72,9 @@ type SortConfig struct {
 	GrabWeight float64 `json:"grab_weight"`
 	AgeWeight  float64 `json:"age_weight"`
 
+	// SortCriteriaOrder: order of categories for scoring (first = highest priority). Keys: resolution, quality, codec, visual_tag, audio, channels, etc. Empty = use default order.
+	SortCriteriaOrder []string `json:"sort_criteria_order,omitempty"`
+
 	// Custom scoring: when true, category weights multiply each category's 0–10 points; group can use tiers.
 	UseCustomScoring *bool `json:"use_custom_scoring,omitempty"`
 	// Category weights (default 1.0 when use_custom_scoring). Only used when UseCustomScoring is true.
@@ -275,9 +278,10 @@ type sortConfigRaw struct {
 	EditionOrder    []string       `json:"edition_order"`
 	NetworkOrder    []string       `json:"network_order"`
 	RegionOrder     []string       `json:"region_order"`
-	ThreeDOrder     []string       `json:"three_d_order"`
-	GrabWeight      float64        `json:"grab_weight"`
-	AgeWeight       float64        `json:"age_weight"`
+	ThreeDOrder      []string `json:"three_d_order"`
+	GrabWeight       float64  `json:"grab_weight"`
+	AgeWeight        float64  `json:"age_weight"`
+	SortCriteriaOrder []string `json:"sort_criteria_order,omitempty"`
 	// Custom scoring
 	UseCustomScoring *bool    `json:"use_custom_scoring,omitempty"`
 	ResolutionWeight  float64 `json:"resolution_weight,omitempty"`
@@ -361,6 +365,7 @@ func (c *SortConfig) UnmarshalJSON(data []byte) error {
 	} else {
 		c.AgeWeight = 1.0
 	}
+	c.SortCriteriaOrder = raw.SortCriteriaOrder
 	c.UseCustomScoring = raw.UseCustomScoring
 	c.ResolutionWeight = raw.ResolutionWeight
 	c.CodecWeight = raw.CodecWeight
