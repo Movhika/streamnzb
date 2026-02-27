@@ -6,19 +6,19 @@ import (
 	"strings"
 	"unicode"
 
+	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/search/parser"
 )
 
-// movieQueryTitleAndYear splits a movie text query like "The Boys 1962" into normalized title and year.
-// Returns (normalizedTitle, year). Year is 0 if not present or not a valid 4-digit year.
-func movieQueryTitleAndYear(textQuery string) (title string, year int) {
-	norm := release.NormalizeTitle(textQuery)
+// parseFilterQuery extracts normalized title and optional year from a filter query.
+// For "Title 2014" returns (normalizedTitle, 2014). For "Title" or "Show S02E03" year is 0.
+func parseFilterQuery(filterQuery string) (normTitle string, year int) {
+	norm := release.NormalizeTitle(filterQuery)
 	norm = strings.TrimSpace(norm)
 	if norm == "" {
 		return "", 0
 	}
-	// Strip trailing 4-digit year
 	for i := len(norm) - 1; i >= 0; i-- {
 		if norm[i] >= '0' && norm[i] <= '9' {
 			continue
@@ -27,9 +27,7 @@ func movieQueryTitleAndYear(textQuery string) (title string, year int) {
 			trailing := strings.TrimSpace(norm[i+1:])
 			if len(trailing) == 4 {
 				if y, err := strconv.Atoi(trailing); err == nil && y >= 1900 && y <= 2100 {
-					year = y
-					title = strings.TrimSpace(norm[:i])
-					return title, year
+					return strings.TrimSpace(norm[:i]), y
 				}
 			}
 		}
@@ -38,83 +36,52 @@ func movieQueryTitleAndYear(textQuery string) (title string, year int) {
 	return norm, 0
 }
 
-// movieTitleMatches returns true if the release's parsed title matches the search title strictly.
-// expectTitle is normalized; we require the release title to equal expectTitle or to start with
-// expectTitle followed only by space, digits (year), or end — so "the boys" matches "the boys"
-// and "the boys 1962" but not "the boys next door" or "miracle the boys of 80".
-func movieTitleMatches(expectTitle, gotTitle string) bool {
-	got := release.NormalizeTitle(gotTitle)
-	if got == "" {
+// normalizedTitleMatches returns true if got (release parsed title) matches expect (query title).
+// Both sides are normalized to letters and digits only so "Terminator: Dark Fate" matches "Terminator Dark Fate".
+// Equal or expect is prefix of got with only digits (e.g. year) after.
+func normalizedTitleMatches(expect, gotTitle string) bool {
+	expectNorm := release.NormalizeTitleForDedup(expect)
+	gotNorm := release.NormalizeTitleForDedup(gotTitle)
+	if gotNorm == "" {
 		return false
 	}
-	if expectTitle == "" {
+	if expectNorm == "" {
 		return true
 	}
-	if got == expectTitle {
+	if gotNorm == expectNorm {
 		return true
 	}
-	if !strings.HasPrefix(got, expectTitle) {
+	if !strings.HasPrefix(gotNorm, expectNorm) {
 		return false
 	}
-	// expectTitle is a prefix; next character must be end, space, or digit (year)
-	rest := got[len(expectTitle):]
-	rest = strings.TrimLeft(rest, " ")
+	rest := gotNorm[len(expectNorm):]
 	if rest == "" {
 		return true
 	}
-	// Allow only digits (year) after the title
 	for _, r := range rest {
 		if !unicode.IsDigit(r) {
 			return false
 		}
 	}
-	return len(rest) == 4 // single 4-digit year
+	return len(rest) == 4
 }
 
-// seriesShowMatches returns true if the release's parsed show title matches the expected show strictly.
-// expectShow is normalized; we require the release title to equal expectShow or to start with expectShow
-// followed only by space, digits, or end — so "secret lives" matches "secret lives" but not
-// "the secret lives of animals" or "the secret lives of mormon wives".
-func seriesShowMatches(expectShow, gotShow string) bool {
-	got := release.NormalizeTitle(gotShow)
-	if got == "" {
-		return false
-	}
-	if expectShow == "" {
-		return true
-	}
-	if got == expectShow {
-		return true
-	}
-	if !strings.HasPrefix(got, expectShow) {
-		return false
-	}
-	rest := got[len(expectShow):]
-	rest = strings.TrimLeft(rest, " ")
-	// Allow only digits (e.g. year) or end after the show name
-	for _, r := range rest {
-		if !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
-}
-
-// FilterTextResultsByContent keeps only releases where ptt-parsed title matches the content.
-// For movies, matching is strict: title must be phrase/prefix match and year must match when present.
-func FilterTextResultsByContent(releases []*release.Release, contentType, textQuery, season, episode string) []*release.Release {
+// FilterResults keeps releases that match the content: for movie normalized title, for series
+// normalized title + season + episode; for all, if the release has a parsed year and we have
+// an expected year, they must match.
+func FilterResults(releases []*release.Release, contentType, filterQuery, season, episode string) []*release.Release {
 	if contentType != "movie" && contentType != "series" {
 		return releases
 	}
 	expectSeason, _ := strconv.Atoi(season)
 	expectEpisode, _ := strconv.Atoi(episode)
-	var expectShow string
-	var expectMovieTitle string
-	var expectMovieYear int
+
+	var expectTitle string
+	var expectYear int
 	if contentType == "movie" {
-		expectMovieTitle, expectMovieYear = movieQueryTitleAndYear(textQuery)
-	} else if contentType == "series" && (expectSeason > 0 || expectEpisode > 0) {
-		expectShow = release.NormalizeTitle(strings.Split(textQuery, " S")[0])
+		expectTitle, expectYear = parseFilterQuery(filterQuery)
+	} else {
+		expectTitle = release.NormalizeTitle(strings.Split(filterQuery, " S")[0])
 	}
 
 	var out []*release.Release
@@ -123,33 +90,57 @@ func FilterTextResultsByContent(releases []*release.Release, contentType, textQu
 			continue
 		}
 		parsed := parser.ParseReleaseTitle(rel.Title)
+
 		if contentType == "movie" {
-			if !movieTitleMatches(expectMovieTitle, parsed.Title) {
-				continue
-			}
-			// When query includes a year, require release year to match (if release has a parsed year)
-			if expectMovieYear > 0 && parsed.Year > 0 && parsed.Year != expectMovieYear {
+			if !normalizedTitleMatches(expectTitle, parsed.Title) {
+				logger.Debug("FilterResults dropped: title",
+					"expect_title", expectTitle,
+					"got_title", parsed.Title,
+					"release", rel.Title,
+				)
 				continue
 			}
 		} else {
-			gotShow := release.NormalizeTitle(parsed.Title)
-			if gotShow == "" {
-				continue
-			}
-			if expectShow != "" && !seriesShowMatches(expectShow, parsed.Title) {
+			if !normalizedTitleMatches(expectTitle, parsed.Title) {
+				logger.Debug("FilterResults dropped: title",
+					"expect_title", expectTitle,
+					"got_title", parsed.Title,
+					"release", rel.Title,
+				)
 				continue
 			}
 			if expectSeason > 0 && parsed.Season != expectSeason {
+				logger.Debug("FilterResults dropped: season",
+					"expect_season", expectSeason,
+					"got_season", parsed.Season,
+					"release", rel.Title,
+				)
 				continue
 			}
 			if expectEpisode > 0 && parsed.Episode != expectEpisode {
+				logger.Debug("FilterResults dropped: episode",
+					"expect_episode", expectEpisode,
+					"got_episode", parsed.Episode,
+					"release", rel.Title,
+				)
 				continue
 			}
+		}
+
+		// For all: if release has a parsed year and we have an expected year, they must match
+		if parsed.Year > 0 && expectYear > 0 && parsed.Year != expectYear {
+			logger.Debug("FilterResults dropped: year",
+				"expect_year", expectYear,
+				"got_year", parsed.Year,
+				"release", rel.Title,
+			)
+			continue
 		}
 		out = append(out, rel)
 	}
 	return out
 }
+
 
 // MergeAndDedupeSearchResults merges ID and text results, preferring ID-based when duplicates.
 func MergeAndDedupeSearchResults(releases []*release.Release) []*release.Release {

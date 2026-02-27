@@ -26,24 +26,25 @@ type SearchConfig interface {
 	GetSearchTitleNormalize() bool
 }
 
-// RunIndexerSearches runs ID-based and text-based searches in parallel, merges and dedupes.
-// When req.PerIndexerQuery is set, text search uses per-indexer queries and effective config; otherwise uses global cfg for title resolution.
-// ID search results are filtered by content (title/year or show SxxExx) so indexer noise (e.g. wrong titles) is dropped.
+// RunIndexerSearches runs ID search and text search in parallel, merges and dedupes, then filters
+// by content (title matches, and if parsed year is present it must match).
 func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string, cfg SearchConfig) ([]*release.Release, error) {
 	idReq := req
 	idReq.Query = ""
-	idReq.PerIndexerQuery = nil // ID-only search: do not pass text query to indexers
+	idReq.PerIndexerQuery = nil
 
-	var textQuery string
-	var contentFilterQuery string // used to filter ID results by title/year so we don't show unrelated releases
+	var textReq *indexer.SearchRequest
+	var filterQuery string
+
 	usePerIndexerQuery := len(req.PerIndexerQuery) > 0
+
 	if tmdbClient != nil {
 		if contentType == "movie" && contentIDs != nil {
 			if t, y, err := tmdbClient.GetMovieTitleAndYear(contentIDs.ImdbID, req.TMDBID); err == nil && t != "" {
 				if y != "" {
-					contentFilterQuery = t + " " + y
+					filterQuery = t + " " + y
 				} else {
-					contentFilterQuery = t
+					filterQuery = t
 				}
 			}
 		} else if contentType == "series" && req.Season != "" && req.Episode != "" {
@@ -51,14 +52,25 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 				seasonNum, _ := strconv.Atoi(req.Season)
 				epNum, _ := strconv.Atoi(req.Episode)
 				if seasonNum > 0 || epNum > 0 {
-					contentFilterQuery = fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
+					filterQuery = fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
 				} else {
-					contentFilterQuery = fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
+					filterQuery = fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
 				}
 			}
 		}
 	}
-	if !usePerIndexerQuery && tmdbClient != nil && cfg != nil {
+
+	if usePerIndexerQuery {
+		textReq = &indexer.SearchRequest{
+			Cat:                req.Cat,
+			Limit:              req.Limit,
+			Season:             req.Season,
+			Episode:            req.Episode,
+			EffectiveByIndexer: req.EffectiveByIndexer,
+			PerIndexerQuery:    req.PerIndexerQuery,
+		}
+	} else if tmdbClient != nil && cfg != nil {
+		var textQuery string
 		includeYear := cfg.GetIncludeYearInSearch()
 		searchTitleLanguage := cfg.GetSearchTitleLanguage()
 		searchTitleNormalize := cfg.GetSearchTitleNormalize()
@@ -91,86 +103,62 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 				}
 			}
 		}
+		if textQuery != "" {
+			textReq = &indexer.SearchRequest{Query: textQuery, Cat: req.Cat, Limit: req.Limit, Season: req.Season, Episode: req.Episode}
+		}
 	}
 
 	var idResp *indexer.SearchResponse
 	var idErr error
 	var textReleases []*release.Release
 	var wg sync.WaitGroup
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		idResp, idErr = idx.Search(idReq)
 	}()
-	if usePerIndexerQuery {
+
+	if textReq != nil {
 		wg.Add(1)
-		textReq := indexer.SearchRequest{
-			Cat:                req.Cat,
-			Limit:              req.Limit,
-			Season:             req.Season,
-			Episode:            req.Episode,
-			EffectiveByIndexer: req.EffectiveByIndexer,
-			PerIndexerQuery:    req.PerIndexerQuery,
-		}
 		go func() {
 			defer wg.Done()
-			if resp, err := idx.Search(textReq); err == nil {
+			if resp, err := idx.Search(*textReq); err == nil {
 				indexer.NormalizeSearchResponse(resp)
-				// Collect unique query strings (per-indexer can have multiple, e.g. primary + original title)
-				seenQ := make(map[string]bool)
-				var filtered [][]*release.Release
-				for _, queries := range req.PerIndexerQuery {
-					for _, q := range queries {
-						if q != "" && !seenQ[q] {
-							seenQ[q] = true
-							filtered = append(filtered, FilterTextResultsByContent(resp.Releases, contentType, q, req.Season, req.Episode))
-						}
-					}
-				}
-				if len(filtered) > 0 {
-					for _, list := range filtered {
-						textReleases = append(textReleases, list...)
-					}
-					textReleases = MergeAndDedupeSearchResults(textReleases)
-				}
-			}
-		}()
-	} else if textQuery != "" {
-		wg.Add(1)
-		textReq := indexer.SearchRequest{Query: textQuery, Cat: req.Cat, Limit: req.Limit, Season: req.Season, Episode: req.Episode}
-		go func() {
-			defer wg.Done()
-			if resp, err := idx.Search(textReq); err == nil {
-				indexer.NormalizeSearchResponse(resp)
-				textReleases = FilterTextResultsByContent(resp.Releases, contentType, textQuery, req.Season, req.Episode)
+				textReleases = resp.Releases
 			}
 		}()
 	}
+
 	wg.Wait()
 
 	if idErr != nil {
 		return nil, fmt.Errorf("indexer search failed: %w", idErr)
 	}
 	indexer.NormalizeSearchResponse(idResp)
-	idReleases := make([]*release.Release, 0, len(idResp.Releases)+len(textReleases))
-	idCandidates := idResp.Releases
-	if contentFilterQuery != "" {
-		idCandidates = FilterTextResultsByContent(idResp.Releases, contentType, contentFilterQuery, req.Season, req.Episode)
-	}
-	for _, rel := range idCandidates {
+
+	// Merge: ID results first (tagged), then text results
+	combined := make([]*release.Release, 0, len(idResp.Releases)+len(textReleases))
+	for _, rel := range idResp.Releases {
 		if rel != nil {
 			rel.QuerySource = "id"
-			idReleases = append(idReleases, rel)
+			combined = append(combined, rel)
 		}
 	}
 	for _, rel := range textReleases {
 		if rel != nil {
 			rel.QuerySource = "text"
-			idReleases = append(idReleases, rel)
+			combined = append(combined, rel)
 		}
 	}
+
+	merged := MergeAndDedupeSearchResults(combined)
 	if len(textReleases) > 0 {
 		logger.Debug("Indexer dual search", "id", len(idResp.Releases), "text", len(textReleases))
 	}
-	return MergeAndDedupeSearchResults(idReleases), nil
+
+	if filterQuery != "" {
+		merged = FilterResults(merged, contentType, filterQuery, req.Season, req.Episode)
+	}
+	return merged, nil
 }
