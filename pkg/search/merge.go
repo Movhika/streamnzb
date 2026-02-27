@@ -93,7 +93,7 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 
 		if contentType == "movie" {
 			if !normalizedTitleMatches(expectTitle, parsed.Title) {
-				logger.Debug("FilterResults dropped: title",
+				logger.Trace("FilterResults dropped: title",
 					"expect_title", expectTitle,
 					"got_title", parsed.Title,
 					"release", rel.Title,
@@ -102,7 +102,7 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 			}
 		} else {
 			if !normalizedTitleMatches(expectTitle, parsed.Title) {
-				logger.Debug("FilterResults dropped: title",
+				logger.Trace("FilterResults dropped: title",
 					"expect_title", expectTitle,
 					"got_title", parsed.Title,
 					"release", rel.Title,
@@ -110,7 +110,7 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 				continue
 			}
 			if expectSeason > 0 && parsed.Season != expectSeason {
-				logger.Debug("FilterResults dropped: season",
+				logger.Trace("FilterResults dropped: season",
 					"expect_season", expectSeason,
 					"got_season", parsed.Season,
 					"release", rel.Title,
@@ -118,7 +118,7 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 				continue
 			}
 			if expectEpisode > 0 && parsed.Episode != expectEpisode {
-				logger.Debug("FilterResults dropped: episode",
+				logger.Trace("FilterResults dropped: episode",
 					"expect_episode", expectEpisode,
 					"got_episode", parsed.Episode,
 					"release", rel.Title,
@@ -129,7 +129,7 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 
 		// For all: if release has a parsed year and we have an expected year, they must match
 		if parsed.Year > 0 && expectYear > 0 && parsed.Year != expectYear {
-			logger.Debug("FilterResults dropped: year",
+			logger.Trace("FilterResults dropped: year",
 				"expect_year", expectYear,
 				"got_year", parsed.Year,
 				"release", rel.Title,
@@ -140,7 +140,6 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 	}
 	return out
 }
-
 
 // MergeAndDedupeSearchResults merges ID and text results, preferring ID-based when duplicates.
 func MergeAndDedupeSearchResults(releases []*release.Release) []*release.Release {

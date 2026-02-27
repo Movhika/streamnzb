@@ -30,6 +30,7 @@ func (r *Reporter) ReportGood(sess *session.Session) {
 	if _, loaded := r.reported.LoadOrStore(sess.ID, struct{}{}); loaded {
 		return // already reported for this session
 	}
+	logger.Info("Reporting good/streamable release to AvailNZB", "session", sess.ID)
 	r.report(sess, true)
 }
 

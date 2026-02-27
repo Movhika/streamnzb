@@ -170,7 +170,6 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		logger.Error("AvailNZB report request failed", "err", err, "url", releaseURL)
 		return err
 	}
 	defer resp.Body.Close()
@@ -180,7 +179,6 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 		return fmt.Errorf("availnzb report: unexpected status code: %d", resp.StatusCode)
 	}
 
-	logger.Debug("AvailNZB report success", "url", releaseURL, "status_code", resp.StatusCode)
 	return nil
 }
 

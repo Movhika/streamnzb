@@ -25,6 +25,7 @@ import (
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/media/nzb"
+	"streamnzb/pkg/media/seek"
 	"streamnzb/pkg/media/unpack"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/search"
@@ -388,7 +389,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 
 	// Debug: Log the response
 	responseJSON, _ := json.MarshalIndent(response, "", "  ")
-	logger.Debug("Sending stream response", "json", string(responseJSON))
+	logger.Trace("Sending stream response", "json", string(responseJSON))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -1364,9 +1365,31 @@ type nextReleaseState struct {
 	BoundIndex int // current play index for /next/...:0 (-1 = not bound)
 }
 
+// isSlotFailed returns true if a session exists for the given stream slot and any of its files
+// have exceeded the failure threshold (IsFailed), so that slot should be skipped when resolving "next".
+func (s *Server) isSlotFailed(streamId, contentType, id string, slotIndex int) bool {
+	slotSessionID := streamSlotPrefix + streamId + ":" + contentType + ":" + id + ":" + strconv.Itoa(slotIndex)
+	sess, err := s.sessionManager.GetSession(slotSessionID)
+	if err != nil || sess == nil {
+		return false
+	}
+	files := sess.Files
+	if len(files) == 0 && sess.File != nil {
+		files = []*loader.File{sess.File}
+	}
+	for _, f := range files {
+		if f != nil && f.IsFailed() {
+			return true
+		}
+	}
+	return false
+}
+
 // handleNextRelease redirects to the next release in the ordered play list.
 // For /next/stream[:streamId]:type:id:0 we use per-user state: first request binds to an index and all
 // subsequent requests (range, reconnect) redirect to the same index until the user re-opens the stream list.
+// When resolving the next index we skip slots that are already failed (session exists and has IsFailed()),
+// so the first redirect goes to the first working slot and avoids double redirects (:0 → :1 failed → :2).
 func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/next/")
 	if sessionID == "" {
@@ -1407,6 +1430,13 @@ func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, devic
 			state.mu.Unlock()
 		} else {
 			playIndex = state.NextIndex
+			if playIndex > maxIdx {
+				playIndex = maxIdx
+			}
+			// Skip slots that are already failed so the first redirect goes to a working slot (avoids :0 → :1 failed → :2).
+			for playIndex <= maxIdx && s.isSlotFailed(streamId, contentType, id, playIndex) {
+				playIndex++
+			}
 			if playIndex > maxIdx {
 				playIndex = maxIdx
 			}
@@ -1507,7 +1537,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 
 	if _, err = sess.GetOrDownloadNZB(s.sessionManager); err != nil {
 		logger.Error("Failed to lazy load NZB", "id", sessionID, "err", err)
-		redirectToNextStreamOrError(w, s.baseURL, sess, true)
+		redirectToNextStreamOrError(w, r, s.baseURL, sess, true)
 		return
 	}
 
@@ -1534,7 +1564,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			if sess.NZB != nil {
 				s.validator.InvalidateCache(sess.NZB.Hash())
 			}
-			redirectToNextStreamOrError(w, s.baseURL, sess, true)
+			redirectToNextStreamOrError(w, r, s.baseURL, sess, true)
 			return
 		}
 	}
@@ -1556,7 +1586,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		if sess.NZB != nil {
 			s.validator.InvalidateCache(sess.NZB.Hash())
 		}
-		redirectToNextStreamOrError(w, s.baseURL, sess, true)
+		redirectToNextStreamOrError(w, r, s.baseURL, sess, true)
 		return
 	}
 	defer stream.Close()
@@ -1564,6 +1594,15 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	// Report successful fetch/stream to AvailNZB (lazy sessions weren't reported at catalog time)
 	if s.availReporter != nil {
 		s.availReporter.ReportGood(sess)
+	}
+
+	// If client sent t= (start time in seconds) and no Range, convert to byte offset for supported containers.
+	if tStr := r.URL.Query().Get("t"); tStr != "" && r.Header.Get("Range") == "" {
+		if tSec, parseOK := seek.ParseTSeconds(tStr); parseOK {
+			if byteOffset, seekOK := seek.TimeToByteOffset(stream, size, name, tSec); seekOK {
+				r.Header.Set("Range", "bytes="+strconv.FormatInt(byteOffset, 10)+"-")
+			}
+		}
 	}
 
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
@@ -1591,7 +1630,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	defer bufW.Flush()
 
 	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
-	logger.Debug("Finished serving media", "session", sessionID)
+	logger.Trace("Finished serving media", "session", sessionID)
 }
 
 // reportBadRelease reports unstreamable releases to AvailNZB in the background.
@@ -1704,6 +1743,15 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	}
 	defer stream.Close()
 
+	// If client sent t= and no Range, convert to byte offset for supported containers (same as handlePlay).
+	if tStr := r.URL.Query().Get("t"); tStr != "" && r.Header.Get("Range") == "" {
+		if tSec, parseOK := seek.ParseTSeconds(tStr); parseOK {
+			if byteOffset, seekOK := seek.TimeToByteOffset(stream, size, name, tSec); seekOK {
+				r.Header.Set("Range", "bytes="+strconv.FormatInt(byteOffset, 10)+"-")
+			}
+		}
+	}
+
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if clientIP == "" {
 		clientIP = r.RemoteAddr
@@ -1749,10 +1797,21 @@ func streamScore(s Stream) int {
 }
 
 // redirectToNextStreamOrError redirects to the next stream in the priority list if enableFailover is true and the session has fallback URLs; otherwise redirects to the error video.
-func redirectToNextStreamOrError(w http.ResponseWriter, baseURL string, sess *session.Session, enableFailover bool) {
+func redirectToNextStreamOrError(w http.ResponseWriter, r *http.Request, baseURL string, sess *session.Session, enableFailover bool) {
 	if enableFailover {
 		if nextURL := sess.FirstFallbackStreamURL(); nextURL != "" {
-			logger.Info("Redirecting to next stream in priority list", "url", nextURL)
+			var positionLog string
+			if r != nil {
+				if t := r.URL.Query().Get("t"); t != "" {
+					nextURL = appendQueryParam(nextURL, "t", t)
+					positionLog = " with t=" + t
+				}
+			}
+			if positionLog != "" {
+				logger.Info("Redirecting to next stream"+positionLog, "url", nextURL)
+			} else {
+				logger.Info("Redirecting to next stream in priority list", "url", nextURL)
+			}
 			w.Header().Set("Connection", "close")
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			http.Redirect(w, &http.Request{Method: "GET"}, nextURL, http.StatusTemporaryRedirect)
@@ -1760,6 +1819,18 @@ func redirectToNextStreamOrError(w http.ResponseWriter, baseURL string, sess *se
 		}
 	}
 	forceDisconnect(w, baseURL)
+}
+
+// appendQueryParam appends key=value to url, using ? or & as needed.
+func appendQueryParam(u, key, value string) string {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return u
+	}
+	q := parsed.Query()
+	q.Set(key, value)
+	parsed.RawQuery = q.Encode()
+	return parsed.String()
 }
 
 // forceDisconnect redirects to the embedded failure video when streaming is unavailable.
