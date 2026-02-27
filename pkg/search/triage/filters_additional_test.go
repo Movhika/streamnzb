@@ -466,6 +466,36 @@ func TestCheckGroup(t *testing.T) {
 			},
 			shouldPass: true,
 		},
+		{
+			name: "Avoid CiNE does not match CiNEPHiLES (whole-word)",
+			cfg: &config.FilterConfig{
+				GroupAvoid: []string{"CiNE"},
+			},
+			parsed: &parser.ParsedRelease{
+				Group: "CiNEPHiLES",
+			},
+			shouldPass: true,
+		},
+		{
+			name: "Avoid E does not match EPSiLON (whole-word)",
+			cfg: &config.FilterConfig{
+				GroupAvoid: []string{"E"},
+			},
+			parsed: &parser.ParsedRelease{
+				Group: "EPSiLON",
+			},
+			shouldPass: true,
+		},
+		{
+			name: "Avoid CiNE does match CiNE (exact)",
+			cfg: &config.FilterConfig{
+				GroupAvoid: []string{"CiNE"},
+			},
+			parsed: &parser.ParsedRelease{
+				Group: "CiNE",
+			},
+			shouldPass: false,
+		},
 	}
 
 	for _, tt := range tests {

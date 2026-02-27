@@ -56,14 +56,16 @@ func matchVisualTags(p *parser.ParsedRelease, list []string) bool {
 	return matchMulti(tags, list)
 }
 
+// matchGroup returns true if the release group equals any entry in list (case-insensitive).
+// Whole-word only: "CiNE" does not match "CiNEPHiLES", "E" does not match "EPSiLON".
 func matchGroup(group string, list []string) bool {
 	if group == "" || len(list) == 0 {
 		return false
 	}
-	g := strings.ToLower(group)
+	g := strings.ToLower(strings.TrimSpace(group))
 	for _, s := range list {
 		s = strings.ToLower(strings.TrimSpace(s))
-		if s == g || strings.Contains(g, s) || strings.Contains(s, g) {
+		if s == g {
 			return true
 		}
 	}

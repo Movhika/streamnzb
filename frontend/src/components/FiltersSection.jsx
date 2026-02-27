@@ -142,7 +142,7 @@ function IncludeAvoidBlock({ title, options, includeValue, avoidValue, onInclude
   )
 }
 
-/** Group filter: free-text chips for Include / Avoid (no fixed option list) */
+/** Group filter: free-text chips for Include / Avoid (no fixed option list). Paste comma-separated list to add multiple. */
 function GroupFilterRow({ label, value = [], onChange, placeholder }) {
   const [inputValue, setInputValue] = React.useState('')
   const add = (item) => {
@@ -152,12 +152,31 @@ function GroupFilterRow({ label, value = [], onChange, placeholder }) {
       setInputValue('')
     }
   }
-  const remove = (item) => onChange(value.filter(v => v !== item))
+  const addMany = (text) => {
+    const parts = text.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean)
+    const seen = new Set(value.map((v) => v.toLowerCase()))
+    const next = [...value]
+    for (const p of parts) {
+      if (p && !seen.has(p.toLowerCase())) {
+        seen.add(p.toLowerCase())
+        next.push(p)
+      }
+    }
+    if (next.length !== value.length) onChange(next)
+  }
+  const remove = (item) => onChange(value.filter((v) => v !== item))
+  const handlePaste = (e) => {
+    const pasted = (e.clipboardData || window.clipboardData)?.getData('text')
+    if (pasted && /[\s,]/.test(pasted)) {
+      e.preventDefault()
+      addMany(pasted)
+    }
+  }
   return (
     <div className="space-y-2">
       <span className="text-sm font-medium text-muted-foreground">{label}</span>
       <div className="flex flex-wrap gap-2 min-h-[2.5rem] p-3 rounded-md border border-border bg-background">
-        {value.map(item => (
+        {value.map((item) => (
           <Badge key={item} variant="secondary" className="gap-1 pr-1">
             {item}
             <button type="button" className="rounded-full p-0.5 hover:bg-black/20" onClick={() => remove(item)} aria-label={`Remove ${item}`}>
@@ -170,9 +189,11 @@ function GroupFilterRow({ label, value = [], onChange, placeholder }) {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), add())}
+          onPaste={handlePaste}
           className="w-32 min-w-0"
         />
       </div>
+      <p className="text-xs text-muted-foreground">Paste a comma-separated list to add multiple groups.</p>
     </div>
   )
 }
