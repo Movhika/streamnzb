@@ -49,14 +49,27 @@ type ValidationResult struct {
 	Error           error
 }
 
-// GetProviderHosts returns a list of all configured provider hostnames
+// GetProviderHosts returns the NNTP server hostnames for all configured providers,
+// in priority order. Used by AvailNZB GetReleases/OurBackbones (they expect hostnames, not provider display names).
 func (c *Checker) GetProviderHosts() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	hosts := make([]string, 0, len(c.providers))
-	for host := range c.providers {
-		hosts = append(hosts, host)
+	for _, name := range c.providerOrder {
+		if pool := c.providers[name]; pool != nil {
+			if h := pool.Host(); h != "" {
+				hosts = append(hosts, h)
+			}
+		}
+	}
+	// If providerOrder was empty, fall back to iterating the map (order undefined)
+	if len(hosts) == 0 {
+		for _, pool := range c.providers {
+			if pool != nil && pool.Host() != "" {
+				hosts = append(hosts, pool.Host())
+			}
+		}
 	}
 	return hosts
 }
