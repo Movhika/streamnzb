@@ -75,6 +75,23 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
     return `${fieldPrefix}.sorting.${field}`
   }
 
+  const categoryWeights = [
+    { key: 'resolution_weight', label: 'Resolution' },
+    { key: 'quality_weight', label: 'Quality' },
+    { key: 'codec_weight', label: 'Codec' },
+    { key: 'audio_weight', label: 'Audio' },
+    { key: 'visual_tag_weight', label: 'Visual (HDR/3D)' },
+    { key: 'channels_weight', label: 'Channels' },
+    { key: 'bit_depth_weight', label: 'Bit depth' },
+    { key: 'container_weight', label: 'Container' },
+    { key: 'languages_weight', label: 'Languages' },
+    { key: 'group_weight', label: 'Group' },
+    { key: 'edition_weight', label: 'Edition' },
+    { key: 'network_weight', label: 'Network' },
+    { key: 'region_weight', label: 'Region' },
+    { key: 'three_d_weight', label: '3D' }
+  ]
+
   return (
     <Card>
       <CardHeader>
@@ -84,6 +101,40 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        <div className="space-y-4 rounded-lg border p-4">
+          <h4 className="font-medium">Category weights</h4>
+          <p className="text-sm text-muted-foreground">
+            Weight each category from 0 to 10. Higher values (e.g. resolution 10) matter more; lower (e.g. edition 0.5) matter less.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {categoryWeights.map(({ key, label }) => (
+              <FormField
+                key={key}
+                control={actualControl}
+                name={getFieldName(`sorting.${key}`)}
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs">{label}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={10}
+                        step={0.5}
+                        value={field.value ?? 1}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value);
+                          if (!Number.isFinite(v)) { field.onChange(undefined); return; }
+                          field.onChange(Math.min(10, Math.max(0, v)));
+                        }}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+            ))}
+          </div>
+        </div>
         <FormField
           control={actualControl}
           name={getFieldName("sorting.resolution_order")}

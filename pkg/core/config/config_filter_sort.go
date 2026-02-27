@@ -51,6 +51,8 @@ type FilterConfig struct {
 }
 
 // SortConfig holds ordered lists per category; points scale 10 (first) to 0 (last). Replaces legacy weight maps.
+// When UseCustomScoring is true, each category's 0–10 contribution is multiplied by its *_weight (default 1.0),
+// and release group can use three tiers with separate points instead of one ordered list.
 type SortConfig struct {
 	ResolutionOrder []string `json:"resolution_order"`
 	CodecOrder      []string `json:"codec_order"`
@@ -69,6 +71,31 @@ type SortConfig struct {
 
 	GrabWeight float64 `json:"grab_weight"`
 	AgeWeight  float64 `json:"age_weight"`
+
+	// Custom scoring: when true, category weights multiply each category's 0–10 points; group can use tiers.
+	UseCustomScoring *bool `json:"use_custom_scoring,omitempty"`
+	// Category weights (default 1.0 when use_custom_scoring). Only used when UseCustomScoring is true.
+	ResolutionWeight  float64 `json:"resolution_weight,omitempty"`
+	CodecWeight       float64 `json:"codec_weight,omitempty"`
+	AudioWeight       float64 `json:"audio_weight,omitempty"`
+	QualityWeight     float64 `json:"quality_weight,omitempty"`
+	VisualTagWeight   float64 `json:"visual_tag_weight,omitempty"`
+	ChannelsWeight    float64 `json:"channels_weight,omitempty"`
+	BitDepthWeight    float64 `json:"bit_depth_weight,omitempty"`
+	ContainerWeight   float64 `json:"container_weight,omitempty"`
+	LanguagesWeight   float64 `json:"languages_weight,omitempty"`
+	GroupWeight       float64 `json:"group_weight,omitempty"`
+	EditionWeight     float64 `json:"edition_weight,omitempty"`
+	NetworkWeight     float64 `json:"network_weight,omitempty"`
+	RegionWeight      float64 `json:"region_weight,omitempty"`
+	ThreeDWeight      float64 `json:"three_d_weight,omitempty"`
+	// Release group tiers: when any tier list is non-empty, group score = tier points (whole-word match). Else use GroupOrder.
+	GroupOrderTier1   []string `json:"group_order_tier1,omitempty"`
+	GroupOrderTier2   []string `json:"group_order_tier2,omitempty"`
+	GroupOrderTier3   []string `json:"group_order_tier3,omitempty"`
+	GroupTier1Points   int      `json:"group_tier1_points,omitempty"`
+	GroupTier2Points   int      `json:"group_tier2_points,omitempty"`
+	GroupTier3Points   int      `json:"group_tier3_points,omitempty"`
 }
 
 // filterConfigRaw is used to unmarshal both legacy and new JSON into FilterConfig.
@@ -251,14 +278,36 @@ type sortConfigRaw struct {
 	ThreeDOrder     []string       `json:"three_d_order"`
 	GrabWeight      float64        `json:"grab_weight"`
 	AgeWeight       float64        `json:"age_weight"`
+	// Custom scoring
+	UseCustomScoring *bool    `json:"use_custom_scoring,omitempty"`
+	ResolutionWeight  float64 `json:"resolution_weight,omitempty"`
+	CodecWeight       float64 `json:"codec_weight,omitempty"`
+	AudioWeight       float64 `json:"audio_weight,omitempty"`
+	QualityWeight     float64 `json:"quality_weight,omitempty"`
+	VisualTagWeight   float64 `json:"visual_tag_weight,omitempty"`
+	ChannelsWeight    float64 `json:"channels_weight,omitempty"`
+	BitDepthWeight    float64 `json:"bit_depth_weight,omitempty"`
+	ContainerWeight   float64 `json:"container_weight,omitempty"`
+	LanguagesWeight   float64 `json:"languages_weight,omitempty"`
+	GroupWeight       float64 `json:"group_weight,omitempty"`
+	EditionWeight     float64 `json:"edition_weight,omitempty"`
+	NetworkWeight     float64 `json:"network_weight,omitempty"`
+	RegionWeight      float64 `json:"region_weight,omitempty"`
+	ThreeDWeight      float64 `json:"three_d_weight,omitempty"`
+	GroupOrderTier1   []string `json:"group_order_tier1,omitempty"`
+	GroupOrderTier2   []string `json:"group_order_tier2,omitempty"`
+	GroupOrderTier3   []string `json:"group_order_tier3,omitempty"`
+	GroupTier1Points   int      `json:"group_tier1_points,omitempty"`
+	GroupTier2Points   int      `json:"group_tier2_points,omitempty"`
+	GroupTier3Points   int      `json:"group_tier3_points,omitempty"`
 	// Legacy
-	ResolutionWeights map[string]int `json:"resolution_weights"`
-	CodecWeights      map[string]int `json:"codec_weights"`
-	AudioWeights      map[string]int `json:"audio_weights"`
-	QualityWeights    map[string]int `json:"quality_weights"`
-	VisualTagWeights  map[string]int `json:"visual_tag_weights"`
-	PreferredGroups   []string       `json:"preferred_groups"`
-	PreferredLanguages []string     `json:"preferred_languages"`
+	ResolutionWeights   map[string]int `json:"resolution_weights"`
+	CodecWeights       map[string]int `json:"codec_weights"`
+	AudioWeights       map[string]int `json:"audio_weights"`
+	QualityWeights     map[string]int `json:"quality_weights"`
+	VisualTagWeights   map[string]int `json:"visual_tag_weights"`
+	PreferredGroups    []string       `json:"preferred_groups"`
+	PreferredLanguages []string       `json:"preferred_languages"`
 }
 
 // UnmarshalJSON supports both new (order slices) and legacy (weight maps) sort JSON.
@@ -311,6 +360,38 @@ func (c *SortConfig) UnmarshalJSON(data []byte) error {
 		c.AgeWeight = raw.AgeWeight
 	} else {
 		c.AgeWeight = 1.0
+	}
+	c.UseCustomScoring = raw.UseCustomScoring
+	c.ResolutionWeight = raw.ResolutionWeight
+	c.CodecWeight = raw.CodecWeight
+	c.AudioWeight = raw.AudioWeight
+	c.QualityWeight = raw.QualityWeight
+	c.VisualTagWeight = raw.VisualTagWeight
+	c.ChannelsWeight = raw.ChannelsWeight
+	c.BitDepthWeight = raw.BitDepthWeight
+	c.ContainerWeight = raw.ContainerWeight
+	c.LanguagesWeight = raw.LanguagesWeight
+	c.GroupWeight = raw.GroupWeight
+	c.EditionWeight = raw.EditionWeight
+	c.NetworkWeight = raw.NetworkWeight
+	c.RegionWeight = raw.RegionWeight
+	c.ThreeDWeight = raw.ThreeDWeight
+	c.GroupOrderTier1 = raw.GroupOrderTier1
+	c.GroupOrderTier2 = raw.GroupOrderTier2
+	c.GroupOrderTier3 = raw.GroupOrderTier3
+	if len(raw.GroupOrderTier1) > 0 || len(raw.GroupOrderTier2) > 0 || len(raw.GroupOrderTier3) > 0 {
+		c.GroupTier1Points = raw.GroupTier1Points
+		if c.GroupTier1Points == 0 {
+			c.GroupTier1Points = 30
+		}
+		c.GroupTier2Points = raw.GroupTier2Points
+		if c.GroupTier2Points == 0 {
+			c.GroupTier2Points = 15
+		}
+		c.GroupTier3Points = raw.GroupTier3Points
+		if c.GroupTier3Points == 0 {
+			c.GroupTier3Points = 5
+		}
 	}
 	return nil
 }

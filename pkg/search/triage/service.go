@@ -197,18 +197,43 @@ func (s *Service) firstMatchChannels(p *parser.ParsedRelease) int {
 	return -1
 }
 
+// firstMatchGroup returns the 0-based index in GroupOrder (whole-word match only). -1 if no match.
 func (s *Service) firstMatchGroup(p *parser.ParsedRelease) int {
 	if p.Group == "" {
 		return -1
 	}
-	g := strings.ToLower(p.Group)
+	g := strings.ToLower(strings.TrimSpace(p.Group))
 	for i, opt := range s.SortConfig.GroupOrder {
 		opt = strings.ToLower(strings.TrimSpace(opt))
-		if opt == g || strings.Contains(g, opt) {
+		if opt == g {
 			return i
 		}
 	}
 	return -1
+}
+
+// groupTierMatch returns 1, 2, or 3 if release group is in tier 1/2/3 (whole-word), else 0.
+func (s *Service) groupTierMatch(p *parser.ParsedRelease) int {
+	if p.Group == "" {
+		return 0
+	}
+	g := strings.ToLower(strings.TrimSpace(p.Group))
+	for _, opt := range s.SortConfig.GroupOrderTier1 {
+		if strings.ToLower(strings.TrimSpace(opt)) == g {
+			return 1
+		}
+	}
+	for _, opt := range s.SortConfig.GroupOrderTier2 {
+		if strings.ToLower(strings.TrimSpace(opt)) == g {
+			return 2
+		}
+	}
+	for _, opt := range s.SortConfig.GroupOrderTier3 {
+		if strings.ToLower(strings.TrimSpace(opt)) == g {
+			return 3
+		}
+	}
+	return 0
 }
 
 func (s *Service) firstMatchSingle(value string, order []string) int {
@@ -239,64 +264,53 @@ func (s *Service) firstMatchLanguages(p *parser.ParsedRelease, rel *release.Rele
 	return -1
 }
 
+// categoryWeight returns the multiplier for a category (1.0 when weight unset/zero).
+func (s *Service) categoryWeight(w float64) float64 {
+	if w == 0 {
+		return 1.0
+	}
+	return w
+}
+
 func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) int {
 	score := 0
-	order := s.SortConfig.ResolutionOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchResolution(p))
+	add := func(order []string, firstMatchIndex int, weight float64) {
+		if len(order) == 0 {
+			return
+		}
+		pts := orderListScore(len(order), firstMatchIndex)
+		score += int(float64(pts) * weight)
 	}
-	order = s.SortConfig.CodecOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchCodec(p))
+
+	add(s.SortConfig.ResolutionOrder, s.firstMatchResolution(p), s.categoryWeight(s.SortConfig.ResolutionWeight))
+	add(s.SortConfig.CodecOrder, s.firstMatchCodec(p), s.categoryWeight(s.SortConfig.CodecWeight))
+	add(s.SortConfig.AudioOrder, s.firstMatchAudio(p), s.categoryWeight(s.SortConfig.AudioWeight))
+	add(s.SortConfig.QualityOrder, s.firstMatchQuality(p), s.categoryWeight(s.SortConfig.QualityWeight))
+	add(s.SortConfig.VisualTagOrder, s.firstMatchVisualTag(p), s.categoryWeight(s.SortConfig.VisualTagWeight))
+	add(s.SortConfig.ChannelsOrder, s.firstMatchChannels(p), s.categoryWeight(s.SortConfig.ChannelsWeight))
+	add(s.SortConfig.BitDepthOrder, s.firstMatchSingle(p.BitDepth, s.SortConfig.BitDepthOrder), s.categoryWeight(s.SortConfig.BitDepthWeight))
+	add(s.SortConfig.ContainerOrder, s.firstMatchSingle(p.Container, s.SortConfig.ContainerOrder), s.categoryWeight(s.SortConfig.ContainerWeight))
+	add(s.SortConfig.LanguagesOrder, s.firstMatchLanguages(p, rel), s.categoryWeight(s.SortConfig.LanguagesWeight))
+
+	// Group: tiers (fixed points) or single ordered list
+	useGroupTiers := len(s.SortConfig.GroupOrderTier1) > 0 || len(s.SortConfig.GroupOrderTier2) > 0 || len(s.SortConfig.GroupOrderTier3) > 0
+	if useGroupTiers {
+		switch s.groupTierMatch(p) {
+		case 1:
+			score += s.SortConfig.GroupTier1Points
+		case 2:
+			score += s.SortConfig.GroupTier2Points
+		case 3:
+			score += s.SortConfig.GroupTier3Points
+		}
+	} else {
+		add(s.SortConfig.GroupOrder, s.firstMatchGroup(p), s.categoryWeight(s.SortConfig.GroupWeight))
 	}
-	order = s.SortConfig.AudioOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchAudio(p))
-	}
-	order = s.SortConfig.QualityOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchQuality(p))
-	}
-	order = s.SortConfig.VisualTagOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchVisualTag(p))
-	}
-	order = s.SortConfig.ChannelsOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchChannels(p))
-	}
-	order = s.SortConfig.BitDepthOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchSingle(p.BitDepth, order))
-	}
-	order = s.SortConfig.ContainerOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchSingle(p.Container, order))
-	}
-	order = s.SortConfig.LanguagesOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchLanguages(p, rel))
-	}
-	order = s.SortConfig.GroupOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchGroup(p))
-	}
-	order = s.SortConfig.EditionOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchSingle(p.Edition, order))
-	}
-	order = s.SortConfig.NetworkOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchSingle(p.Network, order))
-	}
-	order = s.SortConfig.RegionOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchSingle(p.Region, order))
-	}
-	order = s.SortConfig.ThreeDOrder
-	if len(order) > 0 {
-		score += orderListScore(len(order), s.firstMatchSingle(p.ThreeD, order))
-	}
+
+	add(s.SortConfig.EditionOrder, s.firstMatchSingle(p.Edition, s.SortConfig.EditionOrder), s.categoryWeight(s.SortConfig.EditionWeight))
+	add(s.SortConfig.NetworkOrder, s.firstMatchSingle(p.Network, s.SortConfig.NetworkOrder), s.categoryWeight(s.SortConfig.NetworkWeight))
+	add(s.SortConfig.RegionOrder, s.firstMatchSingle(p.Region, s.SortConfig.RegionOrder), s.categoryWeight(s.SortConfig.RegionWeight))
+	add(s.SortConfig.ThreeDOrder, s.firstMatchSingle(p.ThreeD, s.SortConfig.ThreeDOrder), s.categoryWeight(s.SortConfig.ThreeDWeight))
 
 	// Age
 	if rel.PubDate != "" {

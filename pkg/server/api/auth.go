@@ -193,7 +193,7 @@ func hasCustomFilters(filters config.FilterConfig) bool {
 		filters.MinYear > 0 || filters.MaxYear > 0
 }
 
-// hasCustomSorting checks if user has custom sorting (order lists or weights).
+// hasCustomSorting checks if user has custom sorting (order lists, weights, or custom scoring).
 func hasCustomSorting(sorting config.SortConfig) bool {
 	return len(sorting.ResolutionOrder) > 0 || len(sorting.CodecOrder) > 0 ||
 		len(sorting.AudioOrder) > 0 || len(sorting.QualityOrder) > 0 ||
@@ -202,7 +202,9 @@ func hasCustomSorting(sorting config.SortConfig) bool {
 		len(sorting.LanguagesOrder) > 0 || len(sorting.GroupOrder) > 0 ||
 		len(sorting.EditionOrder) > 0 || len(sorting.NetworkOrder) > 0 ||
 		len(sorting.RegionOrder) > 0 || len(sorting.ThreeDOrder) > 0 ||
-		sorting.GrabWeight != 0 || sorting.AgeWeight != 0
+		sorting.GrabWeight != 0 || sorting.AgeWeight != 0 ||
+		(sorting.UseCustomScoring != nil && *sorting.UseCustomScoring) ||
+		len(sorting.GroupOrderTier1) > 0 || len(sorting.GroupOrderTier2) > 0 || len(sorting.GroupOrderTier3) > 0
 }
 
 // REST endpoint removed - config saving now uses WebSocket
