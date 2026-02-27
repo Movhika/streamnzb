@@ -207,7 +207,7 @@ function SearchSettings({ control, index, watch, indexerCaps }) {
                   <FormControl>
                     <Checkbox
                       checked={field.value === true}
-                      onCheckedChange={(v) => field.onChange(v === true ? true : undefined)}
+                      onCheckedChange={(v) => field.onChange(v === true)}
                     />
                   </FormControl>
                   <FormLabel className="text-[10px]">Include year in movie search</FormLabel>
@@ -238,7 +238,7 @@ function SearchSettings({ control, index, watch, indexerCaps }) {
                 <FormControl>
                   <Checkbox
                     checked={field.value === true}
-                    onCheckedChange={(v) => field.onChange(v === true ? true : undefined)}
+                    onCheckedChange={(v) => field.onChange(v === true)}
                   />
                 </FormControl>
                 <FormLabel className="text-[10px]">Normalize title for search</FormLabel>

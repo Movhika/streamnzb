@@ -86,7 +86,10 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           api_hits_day: Number(idx.api_hits_day || 0),
           downloads_day: Number(idx.downloads_day || 0),
           username: idx.username || '',
-          password: idx.password || ''
+          password: idx.password || '',
+          use_season_episode_params: idx.use_season_episode_params,
+          include_year_in_search: idx.include_year_in_search === true,
+          search_title_normalize: idx.search_title_normalize === true
         })) || []
       }
       reset(formattedData)
