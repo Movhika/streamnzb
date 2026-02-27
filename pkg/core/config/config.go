@@ -69,7 +69,7 @@ type IndexerConfig struct {
 	URL          string `json:"url"`
 	APIKey       string `json:"api_key"`
 	APIPath      string `json:"api_path"` // API path (default: "/api"), e.g., "/api" or "/api/v1"
-	Type         string `json:"type"`     // "newznab", "easynews"
+	Type         string `json:"type"`     // "newznab", "easynews", "aggregator" (aggregator = Newznab API but host not sent to AvailNZB)
 	APIHitsDay   int    `json:"api_hits_day"`
 	DownloadsDay int    `json:"downloads_day"`
 	Enabled      *bool  `json:"enabled,omitempty"` // Whether this indexer is enabled. nil = not set (old config)

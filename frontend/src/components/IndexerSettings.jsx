@@ -12,6 +12,8 @@ import { Trash2, Plus, ChevronDown, Search, Tv, Film, Info, Check, X } from "luc
 import { cn } from "@/lib/utils"
 
 const INDEXER_PRESETS = [
+    { name: 'NZBHydra2', url: 'http://localhost:5076', api_path: '/api', type: 'aggregator' },
+    { name: 'Prowlarr', url: 'http://localhost:9696', api_path: '{indexer_id}/api', type: 'aggregator' },
     { name: 'abNZB', url: 'https://abnzb.com', api_path: '/api', type: 'newznab' },
     { name: 'altHUB', url: 'https://api.althub.co.za', api_path: '/api', type: 'newznab' },
     { name: 'AnimeTosho (Usenet)', url: 'https://feed.animetosho.org', api_path: '/api', type: 'newznab' },
@@ -260,6 +262,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
             {indexerFields.map((field, index) => {
                 const currentType = watch(`indexers.${index}.type`) || 'newznab';
                 const isEasynews = currentType === 'easynews';
+                const isAggregator = currentType === 'aggregator';
 
                 return (
                     <Card key={field.id} className="relative flex flex-col h-full">
@@ -309,13 +312,32 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                             setValue(`indexers.${index}.type`, preset.type);
                                         }
                                     }}
-                                    value={INDEXER_PRESETS.find(p => p.name === watch(`indexers.${index}.name`))?.name || (watch(`indexers.${index}.type`) === 'easynews' ? 'Easynews (Experimental)' : 'Custom Newznab')}
+                                    value={INDEXER_PRESETS.find(p => p.name === watch(`indexers.${index}.name`))?.name || (watch(`indexers.${index}.type`) === 'easynews' ? 'Easynews (Experimental)' : watch(`indexers.${index}.type`) === 'aggregator' ? 'Custom aggregator' : 'Custom Newznab')}
                                 >
                                     {INDEXER_PRESETS.map(preset => (
                                         <option key={preset.name} value={preset.name}>{preset.name}</option>
                                     ))}
                                 </select>
+                                {isAggregator && (
+                                    <p className="text-[10px] text-muted-foreground">
+                                        Aggregator (e.g. NZBHydra, Prowlarr). When adding more than one, give each a unique name below so per-indexer overrides and usage track correctly.
+                                    </p>
+                                )}
                             </div>
+                            <FormField
+                                control={control}
+                                name={`indexers.${index}.name`}
+                                render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>Name</FormLabel>
+                                        <FormControl>
+                                            <Input placeholder="e.g. Prowlarr - NZBGeek" className="h-8 text-xs" {...field} />
+                                        </FormControl>
+                                        <FormDescription className="text-[10px]">Unique label for this indexer (used for overrides and usage).</FormDescription>
+                                        <FormMessage />
+                                    </FormItem>
+                                )}
+                            />
                             
                             {!isEasynews && (
                                 <FormField

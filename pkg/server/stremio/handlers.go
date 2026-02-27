@@ -822,23 +822,50 @@ func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id strin
 	var availResult *availnzb.ReleasesResult
 	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
 		availResult, _ = s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, params.AvailIndexers, s.validator.GetProviderHosts())
-		if availResult != nil {
-			for _, rws := range availResult.Releases {
-				if rws == nil || rws.Release == nil || !rws.Available || rws.Release.Link == "" {
-					continue
-				}
-				// Mark as ID-based so triage scores them like indexer ID results (we fetched by IMDb/TVDB ID).
-				rws.Release.QuerySource = "id"
-				availReleases = append(availReleases, rws.Release)
-				cachedAvailable[rws.Release.DetailsURL] = true
-			}
-		}
 	}
 
 	indexerReleases, err := search.RunIndexerSearches(s.indexer, s.tmdbClient, *req, contentType, contentIDs, imdbForText, tmdbForText, s.config)
 	if err != nil {
 		return nil, err
 	}
+
+	// When we didn't pass an indexer filter to AvailNZB (e.g. only aggregators), filter AvailNZB results to
+	// releases that appear in our indexer results (match by DetailsURL) so we don't show availability for
+	// indexers the user doesn't have.
+	if availResult != nil && len(params.AvailIndexers) == 0 {
+		indexerDetailsURLs := make(map[string]bool)
+		for _, r := range indexerReleases {
+			if r != nil && r.DetailsURL != "" {
+				indexerDetailsURLs[r.DetailsURL] = true
+			}
+		}
+		if len(indexerDetailsURLs) > 0 {
+			filtered := availResult.Releases[:0]
+			for _, rws := range availResult.Releases {
+				if rws == nil || rws.Release == nil {
+					continue
+				}
+				if !indexerDetailsURLs[rws.Release.DetailsURL] {
+					continue
+				}
+				filtered = append(filtered, rws)
+			}
+			availResult = &availnzb.ReleasesResult{ImdbID: availResult.ImdbID, Count: availResult.Count, Releases: filtered}
+		}
+	}
+
+	if availResult != nil {
+		for _, rws := range availResult.Releases {
+			if rws == nil || rws.Release == nil || !rws.Available || rws.Release.Link == "" {
+				continue
+			}
+			// Mark as ID-based so triage scores them like indexer ID results (we fetched by IMDb/TVDB ID).
+			rws.Release.QuerySource = "id"
+			availReleases = append(availReleases, rws.Release)
+			cachedAvailable[rws.Release.DetailsURL] = true
+		}
+	}
+
 	return &rawSearchResult{
 		Params:          params,
 		AvailReleases:   availReleases,

@@ -88,6 +88,7 @@ type Item struct {
 	PubDate     string      `xml:"pubDate"`
 	Category    string      `xml:"category"`
 	Description string      `xml:"description"`
+	Comments    string      `xml:"comments"` // Underlying indexer details URL when from aggregator (NZBHydra/Prowlarr); used for DetailsURL/AvailNZB match.
 	Size        int64       `xml:"size"`
 	Enclosure   Enclosure   `xml:"enclosure"`
 	Attributes  []Attribute `xml:"attr"`
@@ -170,7 +171,18 @@ func (i *Item) ToRelease() *release.Release {
 
 // ReleaseDetailsURL returns the stable indexer details URL for this release (for AvailNZB and reporting).
 // Most indexers use GUID or details_link for the details page; Link is typically the NZB download URL.
+// When from an aggregator (NZBHydra/Prowlarr), Comments often holds the underlying indexer's details URL—
+// use it so we match AvailNZB and dedupe correctly (same DetailsURL as AvailNZB reports).
 func (i *Item) ReleaseDetailsURL() string {
+	comments := strings.TrimSpace(i.Comments)
+	if comments != "" && (strings.HasPrefix(comments, "http://") || strings.HasPrefix(comments, "https://")) {
+		if idx := strings.Index(comments, "#"); idx >= 0 {
+			comments = comments[:idx]
+		}
+		if comments != "" {
+			return comments
+		}
+	}
 	if i.ActualGUID != "" && strings.Contains(i.ActualGUID, "://") {
 		return i.ActualGUID
 	}

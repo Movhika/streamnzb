@@ -24,8 +24,8 @@ type InitializedComponents struct {
 	ProviderPools        map[string]*nntp.ClientPool
 	ProviderOrder        []string // Provider names in priority order (for single-provider validation)
 	StreamingPools       []*nntp.ClientPool
-	AvailNZBIndexerHosts []string                   // Underlying indexer hostnames for AvailNZB GetReleases filter (e.g. nzbgeek.info)
-	IndexerCaps          map[string]*indexer.Caps    // Capabilities per indexer name (from CAPS endpoint)
+	AvailNZBIndexerHosts []string                 // Underlying indexer hostnames for AvailNZB GetReleases filter (e.g. nzbgeek.info)
+	IndexerCaps          map[string]*indexer.Caps // Capabilities per indexer name (from CAPS endpoint)
 }
 
 // WaitForInputAndExit prints an error and waits for user input before exiting
@@ -91,9 +91,11 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		if indexerType == "" {
 			indexerType = "newznab" // Default
 		}
-		if indexerType == "nzbhydra" || indexerType == "prowlarr" {
-			logger.Warn("NZBHydra and Prowlarr are no longer supported; skipping indexer", "name", idxCfg.Name)
-			continue
+		// Aggregators (NZBHydra, Prowlarr, or type=aggregator) speak Newznab API; use same client but do not
+		// add their host to AvailNZB indexer filter (AvailNZB tracks underlying indexers; we match by DetailsURL/comments later).
+		isAggregator := indexerType == "aggregator" || indexerType == "nzbhydra" || indexerType == "prowlarr"
+		if indexerType == "aggregator" {
+			indexerType = "newznab"
 		}
 
 		switch indexerType {
@@ -125,7 +127,9 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 			logger.Info("Initialized Newznab indexer", "name", idxCfg.Name, "url", idxCfg.URL)
 			if h := hostFromIndexerURL(idxCfg.URL); h != "" && !seenHost[h] {
 				seenHost[h] = true
-				availNzbHosts = append(availNzbHosts, h)
+				if !isAggregator {
+					availNzbHosts = append(availNzbHosts, h)
+				}
 			}
 		}
 	}

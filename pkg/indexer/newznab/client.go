@@ -240,6 +240,9 @@ func (c *Client) Ping() error {
 // Results are cached on the client for use in Search().
 func (c *Client) GetCaps() (*indexer.Caps, error) {
 	apiURL := fmt.Sprintf("%s%s?t=caps", c.baseURL, c.apiPath)
+	if c.apiKey != "" {
+		apiURL += "&apikey=" + url.QueryEscape(c.apiKey)
+	}
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create caps request: %w", err)
@@ -259,6 +262,10 @@ func (c *Client) GetCaps() (*indexer.Caps, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read caps from %s: %w", c.Name(), err)
+	}
+
+	if err := c.checkNewznabError(body); err != nil {
+		return nil, err
 	}
 
 	caps, err := indexer.ParseCapsXML(body)
