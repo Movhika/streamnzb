@@ -293,7 +293,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	var streams []Stream
 	streamsList := s.streamConfigsForStreamRequest()
 	for _, str := range streamsList {
-		list, err := s.buildOrderedPlayList(ctx, str.ID, contentType, id)
+		list, err := s.buildOrderedPlayList(ctx, str.ID, contentType, id, isAIOStreams)
 		if err != nil {
 			logger.Error("Error building play list", "streamId", str.ID, "err", err)
 			continue
@@ -493,7 +493,7 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 	var streams []Stream
 	streamsList := s.streamConfigsForStreamRequest()
 	for _, str := range streamsList {
-		list, err := s.buildOrderedPlayList(ctx, str.ID, contentType, id)
+		list, err := s.buildOrderedPlayList(ctx, str.ID, contentType, id, false)
 		if err != nil || list == nil {
 			continue
 		}
@@ -725,21 +725,24 @@ type rawSearchCacheEntry struct {
 	until time.Time
 }
 
-func (s *Server) buildOrderedPlayList(ctx context.Context, streamId, contentType, id string) (*orderedPlayListResult, error) {
+func (s *Server) buildOrderedPlayList(ctx context.Context, streamId, contentType, id string, skipFilterSort bool) (*orderedPlayListResult, error) {
 	if streamId == "" {
 		streamId = s.getDefaultStreamID()
 	}
-	list, err := s.buildOrderedPlayListUncached(ctx, streamId, contentType, id)
+	list, err := s.buildOrderedPlayListUncached(ctx, streamId, contentType, id, skipFilterSort)
 	if err != nil || list == nil {
 		return list, err
 	}
 	// Cache so play/next resolve the same list order.
 	cacheKey := streamId + ":" + contentType + ":" + id
+	if skipFilterSort {
+		cacheKey += "|noFilter"
+	}
 	s.playListCache.Store(cacheKey, &playListCacheEntry{result: list, until: time.Now().Add(playListCacheTTL)})
 	return list, nil
 }
 
-func (s *Server) buildOrderedPlayListUncached(ctx context.Context, streamId, contentType, id string) (*orderedPlayListResult, error) {
+func (s *Server) buildOrderedPlayListUncached(ctx context.Context, streamId, contentType, id string, skipFilterSort bool) (*orderedPlayListResult, error) {
 	raw, err := s.getOrBuildRawSearchResult(ctx, contentType, id)
 	if err != nil || raw == nil {
 		return nil, err
@@ -754,7 +757,7 @@ func (s *Server) buildOrderedPlayListUncached(ctx context.Context, streamId, con
 	if str == nil {
 		str = s.getGlobalStream()
 	}
-	return s.buildOrderedPlayListFromRaw(raw, str)
+	return s.buildOrderedPlayListFromRaw(raw, str, skipFilterSort)
 }
 
 // getOrBuildRawSearchResult runs TMDB + AvailNZB + indexer search once per (contentType, id); result is shared by all streams.
@@ -1009,8 +1012,21 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 	return &SearchReleasesResponse{Streams: streamInfos, Releases: releasesOut}, nil
 }
 
+// releasesToCandidates converts releases to candidates with no stream filtering (score 0, preserve order).
+func releasesToCandidates(releases []*release.Release) []triage.Candidate {
+	var out []triage.Candidate
+	for _, rel := range releases {
+		if rel == nil {
+			continue
+		}
+		out = append(out, triage.Candidate{Release: rel, Score: 0})
+	}
+	return out
+}
+
 // buildOrderedPlayListFromRaw applies one stream's filters/sorting to raw results (triage, merge, filter, sort).
-func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.Stream) (*orderedPlayListResult, error) {
+// When skipFilterSort is true (e.g. AIOStreams), stream triage and sort are skipped; only merge, dedupe, and safety filters apply.
+func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.Stream, skipFilterSort bool) (*orderedPlayListResult, error) {
 	// Set of DetailsURLs that AvailNZB reports as unavailable — exclude these from Stremio play list.
 	unavailableDetailsURLs := make(map[string]bool)
 	if raw.AvailResult != nil {
@@ -1024,8 +1040,14 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 		}
 	}
 
-	availCandidates := s.triageCandidates(str, raw.AvailReleases)
-	indexerCandidates := s.triageCandidates(str, raw.IndexerReleases)
+	var availCandidates, indexerCandidates []triage.Candidate
+	if skipFilterSort {
+		availCandidates = releasesToCandidates(raw.AvailReleases)
+		indexerCandidates = releasesToCandidates(raw.IndexerReleases)
+	} else {
+		availCandidates = s.triageCandidates(str, raw.AvailReleases)
+		indexerCandidates = s.triageCandidates(str, raw.IndexerReleases)
+	}
 
 	seenURL := make(map[string]bool)
 	var merged []triage.Candidate
@@ -1110,11 +1132,13 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 			merged = filtered
 		}
 	}
-	// Sort by stream's score only. AvailNZB does not override the stream's priority: we only badge/serve
-	// [availNZB] when the stream's #1 choice happens to be AvailNZB-good.
-	sort.Slice(merged, func(i, j int) bool {
-		return streamScoreFromCandidate(merged[i]) > streamScoreFromCandidate(merged[j])
-	})
+	if !skipFilterSort {
+		// Sort by stream's score only. AvailNZB does not override the stream's priority: we only badge/serve
+		// [availNZB] when the stream's #1 choice happens to be AvailNZB-good.
+		sort.Slice(merged, func(i, j int) bool {
+			return streamScoreFromCandidate(merged[i]) > streamScoreFromCandidate(merged[j])
+		})
+	}
 
 	firstIsAvailGood := false
 	if len(merged) > 0 && merged[0].Release != nil && merged[0].Release.DetailsURL != "" {
@@ -1401,11 +1425,12 @@ func (s *Server) GetAvailNZBStreams(ctx context.Context, contentType, id string,
 
 // resolveStreamSlot builds the ordered play list for the given stream, creates a deferred session for the release at index, and sets fallback URLs.
 // streamId empty means default stream; it is normalized to the actual id for sessionID and URLs.
-func (s *Server) resolveStreamSlot(ctx context.Context, streamId, contentType, id string, index int, device *auth.Device) (*session.Session, error) {
+// skipFilterSort when true (e.g. AIOStreams) uses raw order without stream filtering/sorting.
+func (s *Server) resolveStreamSlot(ctx context.Context, streamId, contentType, id string, index int, device *auth.Device, skipFilterSort bool) (*session.Session, error) {
 	if streamId == "" {
 		streamId = s.getDefaultStreamID()
 	}
-	list, err := s.buildOrderedPlayList(ctx, streamId, contentType, id)
+	list, err := s.buildOrderedPlayList(ctx, streamId, contentType, id, skipFilterSort)
 	if err != nil || list == nil {
 		return nil, fmt.Errorf("build play list: %w", err)
 	}
@@ -1516,7 +1541,8 @@ func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, devic
 			}
 			return ":" + streamId + ":" + contentType + ":" + id
 		})()
-		list, err := s.buildOrderedPlayList(r.Context(), streamId, contentType, id)
+		isAIOStreams := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
+		list, err := s.buildOrderedPlayList(r.Context(), streamId, contentType, id, isAIOStreams)
 		maxIdx := 0
 		if err == nil && list != nil && len(list.Candidates) > 1 {
 			maxIdx = len(list.Candidates) - 1
@@ -1625,7 +1651,8 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	if err != nil {
 		// Phase 3: resolve stream slot to a real session (create deferred for this index, set fallbacks)
 		if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
-			sess, err = s.resolveStreamSlot(r.Context(), streamId, contentType, id, index, device)
+			isAIOStreams := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
+			sess, err = s.resolveStreamSlot(r.Context(), streamId, contentType, id, index, device, isAIOStreams)
 			if err != nil {
 				logger.Debug("Resolve stream slot failed", "slot", sessionID, "err", err)
 				http.Error(w, "Stream slot not found or invalid", http.StatusNotFound)
