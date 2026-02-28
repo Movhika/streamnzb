@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,7 +33,6 @@ import (
 	"streamnzb/pkg/services/availnzb"
 	"streamnzb/pkg/services/metadata/tmdb"
 	"streamnzb/pkg/services/metadata/tvdb"
-	"streamnzb/pkg/server/stremio/aiostreams"
 	"streamnzb/pkg/session"
 	"streamnzb/pkg/stream"
 	"streamnzb/pkg/usenet/validation"
@@ -65,6 +63,9 @@ type Server struct {
 	webHandler           http.Handler
 	apiHandler           http.Handler
 }
+
+// FailoverOrderPath is the path AIOStreams POSTs to report failover order (bingeGroup list). Stored in session manager per device. No trailing slash.
+const FailoverOrderPath = "/failover_order"
 
 // NewServer creates a new Stremio addon server.
 // availNZBIndexerHosts is used to filter AvailNZB GetReleases by indexer; pass nil to get all releases.
@@ -157,7 +158,7 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 		}
 
 		// Determine if this is a Stremio route that requires device token
-		isStremioRoute := path == "/manifest.json" || strings.HasPrefix(path, "/stream/") || strings.HasPrefix(path, "/play/") || strings.HasPrefix(path, "/next/") || strings.HasPrefix(path, "/debug/play")
+		isStremioRoute := path == "/manifest.json" || path == FailoverOrderPath || strings.HasPrefix(path, "/stream/") || strings.HasPrefix(path, "/play/") || strings.HasPrefix(path, "/next/") || strings.HasPrefix(path, "/debug/play")
 
 		// Root path "/" and web UI routes are always accessible (no token required)
 		// Only Stremio routes require device tokens in the path
@@ -208,6 +209,8 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 			s.handlePlay(w, r, authenticatedDevice)
 		} else if strings.HasPrefix(path, "/next/") {
 			s.handleNextRelease(w, r, authenticatedDevice)
+		} else if path == FailoverOrderPath {
+			s.handleFailoverOrder(w, r, authenticatedDevice)
 		} else if strings.HasPrefix(path, "/debug/play") {
 			s.handleDebugPlay(w, r, authenticatedDevice)
 		} else if path == "/health" {
@@ -279,36 +282,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		return "legacy"
 	}())
 
-	// Parse AIOStreams request-time config when present (failover order follows their preferences).
-	// When the request is from AIOStreams we also show all candidates as separate streams and hide built-in stream configs.
-	var requestConfigOverride *aiostreams.RequestStreamConfig
-	isAIOStreams := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
-	if isAIOStreams {
-		configRaw := r.URL.Query().Get("config")
-		logger.Info("AIOStreams stream request", "user_agent", r.Header.Get("User-Agent"), "config_len", len(configRaw), "query", r.URL.RawQuery)
-		if configRaw != "" {
-			const maxLogConfigBytes = 4096
-			decoded, err := base64.RawURLEncoding.DecodeString(configRaw)
-			if err != nil {
-				decoded, err = base64.StdEncoding.DecodeString(configRaw)
-			}
-			if err == nil {
-				configPreview := string(decoded)
-				if len(configPreview) > maxLogConfigBytes {
-					configPreview = configPreview[:maxLogConfigBytes] + "...(truncated)"
-				}
-				logger.Info("AIOStreams config payload", "decoded_len", len(decoded), "preview", configPreview)
-			} else {
-				preview := configRaw
-				if len(preview) > maxLogConfigBytes {
-					preview = preview[:maxLogConfigBytes] + "...(truncated)"
-				}
-				logger.Info("AIOStreams config payload (raw, decode failed)", "preview", preview)
-			}
-			requestConfigOverride = aiostreams.DecodeAndMap(configRaw)
-		}
-	}
-
 	// Allow time for indexer search plus NNTP validation across providers.
 	// 5s was too short: slow indexers + validation often exceeded it and returned 0 streams.
 	const streamRequestTimeout = 30 * time.Second
@@ -316,28 +289,36 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	defer cancel()
 
 	logger.Trace("stream request start", "type", contentType, "id", id)
-	// Build stream rows. For AIOStreams: one list with their config, show all candidates as separate streams, no built-in stream configs.
+	isAIOStreams := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
 	var streams []Stream
 	streamsList := s.streamConfigsForStreamRequest()
-	if isAIOStreams {
-		// Single play list (first stream ID + AIOStreams config override), one row per candidate, no built-in stream names.
-		streamId := s.getDefaultStreamID()
-		if len(streamsList) > 0 {
-			streamId = streamsList[0].ID
-		}
-		list, err := s.buildOrderedPlayList(ctx, streamId, contentType, id, requestConfigOverride)
+	for _, str := range streamsList {
+		list, err := s.buildOrderedPlayList(ctx, str.ID, contentType, id)
 		if err != nil {
-			logger.Error("Error building play list for AIOStreams", "streamId", streamId, "err", err)
-		} else if list != nil && len(list.Candidates) > 0 {
-			s.clearNextReleaseBound(device, streamId, contentType, id)
-			token := ""
-			if device != nil {
-				token = device.Token
-			}
-			baseURL := strings.TrimSuffix(s.baseURL, "/")
-			if token != "" {
-				baseURL += "/" + token
-			}
+			logger.Error("Error building play list", "streamId", str.ID, "err", err)
+			continue
+		}
+		if list == nil {
+			continue
+		}
+		if len(list.Candidates) == 0 {
+			continue
+		}
+		s.clearNextReleaseBound(device, str.ID, contentType, id)
+		nameLeft := str.Name
+		if nameLeft == "" {
+			nameLeft = str.ID
+		}
+		token := ""
+		if device != nil {
+			token = device.Token
+		}
+		baseURL := strings.TrimSuffix(s.baseURL, "/")
+		if token != "" {
+			baseURL += "/" + token
+		}
+		showAllCandidates := str.ShowAllStream || isAIOStreams
+		if showAllCandidates {
 			for i, cand := range list.Candidates {
 				relTitle := ""
 				if cand.Release != nil && cand.Release.Title != "" {
@@ -346,117 +327,64 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 					relTitle = fmt.Sprintf("Release %d", i+1)
 				}
 				isAvail := list.CachedAvailable != nil && cand.Release != nil && cand.Release.DetailsURL != "" && list.CachedAvailable[cand.Release.DetailsURL]
-				streamName := "StreamNZB"
+				streamName := nameLeft
 				if isAvail {
-					streamName = "⚡ StreamNZB"
+					streamName = "⚡ " + nameLeft
 				}
 				desc := "StreamNZB\n" + relTitle
-				playPath := streamSlotPrefix + streamId + ":" + contentType + ":" + id + ":" + strconv.Itoa(i)
+				playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":" + strconv.Itoa(i)
 				streamURL := baseURL + "/play/" + playPath
 				streams = append(streams, Stream{
 					Name:          streamName,
 					URL:           streamURL,
 					Description:   desc,
-					BehaviorHints: streamBehaviorHints("StreamNZB", streamId, cand.Release, &isAvail),
+					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, cand.Release, &isAvail),
 				})
 			}
-			logger.Debug("AIOStreams stream rows", "candidates", len(list.Candidates))
-		}
-	} else {
-		// Normal: one row per stream config (or per candidate if ShowAllStream).
-		for _, str := range streamsList {
-			list, err := s.buildOrderedPlayList(ctx, str.ID, contentType, id, requestConfigOverride)
-			if err != nil {
-				logger.Error("Error building play list", "streamId", str.ID, "err", err)
-				continue
+		} else {
+			branding := "StreamNZB"
+			if list.FirstIsAvailGood {
+				branding = "StreamNZB [availNZB]"
 			}
-			if list == nil {
-				continue
-			}
-			if len(list.Candidates) == 0 {
-				continue
-			}
-			s.clearNextReleaseBound(device, str.ID, contentType, id)
-			nameLeft := str.Name
-			if nameLeft == "" {
-				nameLeft = str.ID
-			}
-			token := ""
-			if device != nil {
-				token = device.Token
-			}
-			baseURL := strings.TrimSuffix(s.baseURL, "/")
-			if token != "" {
-				baseURL += "/" + token
-			}
-			if str.ShowAllStream {
-				for i, cand := range list.Candidates {
-					relTitle := ""
-					if cand.Release != nil && cand.Release.Title != "" {
-						relTitle = cand.Release.Title
-					} else {
-						relTitle = fmt.Sprintf("Release %d", i+1)
-					}
-					isAvail := list.CachedAvailable != nil && cand.Release != nil && cand.Release.DetailsURL != "" && list.CachedAvailable[cand.Release.DetailsURL]
-					streamName := nameLeft
-					if isAvail {
-						streamName = "⚡ " + nameLeft
-					}
-					desc := "StreamNZB\n" + relTitle
-					playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":" + strconv.Itoa(i)
-					streamURL := baseURL + "/play/" + playPath
-					streams = append(streams, Stream{
-						Name:          streamName,
-						URL:           streamURL,
-						Description:   desc,
-						BehaviorHints: streamBehaviorHints(nameLeft, str.ID, cand.Release, &isAvail),
-					})
-				}
-			} else {
-				branding := "StreamNZB"
-				if list.FirstIsAvailGood {
-					branding = "StreamNZB [availNZB]"
-				}
-				var line2 string
-				var firstRel *release.Release
-				if len(list.Candidates) > 0 && list.Candidates[0].Release != nil {
-					firstRel = list.Candidates[0].Release
-					if list.FirstIsAvailGood && firstRel.Title != "" {
-						line2 = firstRel.Title
-					} else {
-						line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
-					}
-				} else if len(list.Candidates) > 0 {
+			var line2 string
+			var firstRel *release.Release
+			if len(list.Candidates) > 0 && list.Candidates[0].Release != nil {
+				firstRel = list.Candidates[0].Release
+				if list.FirstIsAvailGood && firstRel.Title != "" {
+					line2 = firstRel.Title
+				} else {
 					line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
 				}
-				description := branding
-				if line2 != "" {
-					description = branding + "\n" + line2
-				}
-				playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
-				streamURL := baseURL + "/play/" + playPath
-				firstAvail := list.FirstIsAvailGood
-				streams = append(streams, Stream{
-					Name:          nameLeft,
-					URL:           streamURL,
-					Description:   description,
-					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, firstRel, &firstAvail),
-				})
-				if len(list.Candidates) >= 2 {
-					nextPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
-					nextURL := baseURL + "/next/" + nextPath
-					nextName := nameLeft + " (next release)"
-					nextDesc := "StreamNZB\nTry next release in list"
-					streams = append(streams, Stream{
-						Name:          nextName,
-						URL:           nextURL,
-						Description:   nextDesc,
-						BehaviorHints: streamBehaviorHints(nameLeft, str.ID, nil, nil),
-					})
-				}
+			} else if len(list.Candidates) > 0 {
+				line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
 			}
-			logger.Debug("Stream rows", "streamId", str.ID, "name", nameLeft, "candidates", len(list.Candidates), "showAllStream", str.ShowAllStream)
+			description := branding
+			if line2 != "" {
+				description = branding + "\n" + line2
+			}
+			playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
+			streamURL := baseURL + "/play/" + playPath
+			firstAvail := list.FirstIsAvailGood
+			streams = append(streams, Stream{
+				Name:          nameLeft,
+				URL:           streamURL,
+				Description:   description,
+				BehaviorHints: streamBehaviorHints(nameLeft, str.ID, firstRel, &firstAvail),
+			})
+			if len(list.Candidates) >= 2 {
+				nextPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
+				nextURL := baseURL + "/next/" + nextPath
+				nextName := nameLeft + " (next release)"
+				nextDesc := "StreamNZB\nTry next release in list"
+				streams = append(streams, Stream{
+					Name:          nextName,
+					URL:           nextURL,
+					Description:   nextDesc,
+					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, nil, nil),
+				})
+			}
 		}
+		logger.Debug("Stream rows", "streamId", str.ID, "name", nameLeft, "candidates", len(list.Candidates), "showAllStream", str.ShowAllStream)
 	}
 	if streams == nil {
 		streams = []Stream{}
@@ -474,6 +402,69 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	json.NewEncoder(w).Encode(response)
+}
+
+// failoverOrderRequest is the body AIOStreams POSTs to FailoverOrderPath.
+type failoverOrderRequest struct {
+	Streams []struct {
+		ID string `json:"id"`
+	} `json:"streams"`
+}
+
+// handleFailoverOrder accepts POST with body { streams: [ { id: "streamnzb-<streamId>" }, ... ] }.
+// Stores the ordered stream IDs per device so resolveStreamSlot can set fallback URLs in that order.
+func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, device *auth.Device) {
+	logger.Debug("Failover order request", "device", device.Username, "method", r.Method, "url", r.URL.Path)
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	r.Body.Close()
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+	var req failoverOrderRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if len(req.Streams) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	s.mu.RLock()
+	sm := s.streamManager
+	s.mu.RUnlock()
+	var order []string
+	for _, entry := range req.Streams {
+		streamID := strings.TrimSpace(entry.ID)
+		if streamID == "" {
+			continue
+		}
+		if after, ok := strings.CutPrefix(streamID, "streamnzb-"); ok {
+			streamID = after
+		}
+		if sm != nil {
+			if str, _ := sm.Get(streamID); str == nil {
+				continue
+			}
+		}
+		order = append(order, streamID)
+	}
+	if len(order) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	key := ""
+	if device != nil {
+		key = device.Token
+	}
+	s.sessionManager.SetDeviceFailoverOrder(key, order)
+	logger.Debug("Failover order stored", "device", key, "streams", order)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func streamBehaviorHints(streamName, streamID string, rel *release.Release, cached *bool) *BehaviorHints {
@@ -502,7 +493,7 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 	var streams []Stream
 	streamsList := s.streamConfigsForStreamRequest()
 	for _, str := range streamsList {
-		list, err := s.buildOrderedPlayList(ctx, str.ID, contentType, id, nil)
+		list, err := s.buildOrderedPlayList(ctx, str.ID, contentType, id)
 		if err != nil || list == nil {
 			continue
 		}
@@ -734,33 +725,21 @@ type rawSearchCacheEntry struct {
 	until time.Time
 }
 
-// buildOrderedPlayList builds the ordered list of releases for catalog/play (no NZB download or validation).
-// streamId empty means default stream. Discards AvailNZB-bad and recent failures; sorts by stream's prefers.
-// When requestOverride is non-nil (e.g. AIOStreams config param), it is used instead of the stream's filters/sorting and cache is skipped.
-func (s *Server) buildOrderedPlayList(ctx context.Context, streamId, contentType, id string, requestOverride *aiostreams.RequestStreamConfig) (*orderedPlayListResult, error) {
+func (s *Server) buildOrderedPlayList(ctx context.Context, streamId, contentType, id string) (*orderedPlayListResult, error) {
 	if streamId == "" {
 		streamId = s.getDefaultStreamID()
 	}
-	if requestOverride == nil {
-		cacheKey := streamId + ":" + contentType + ":" + id
-		if v, ok := s.playListCache.Load(cacheKey); ok {
-			if ent, _ := v.(*playListCacheEntry); ent != nil && time.Now().Before(ent.until) {
-				logger.Debug("Play list cache hit", "key", cacheKey, "candidates", len(ent.result.Candidates))
-				return ent.result, nil
-			}
-		}
-	}
-	list, err := s.buildOrderedPlayListUncached(ctx, streamId, contentType, id, requestOverride)
+	list, err := s.buildOrderedPlayListUncached(ctx, streamId, contentType, id)
 	if err != nil || list == nil {
 		return list, err
 	}
-	// Always cache (including when requestOverride was set, e.g. AIOStreams) so play/next resolve the same list order.
+	// Cache so play/next resolve the same list order.
 	cacheKey := streamId + ":" + contentType + ":" + id
 	s.playListCache.Store(cacheKey, &playListCacheEntry{result: list, until: time.Now().Add(playListCacheTTL)})
 	return list, nil
 }
 
-func (s *Server) buildOrderedPlayListUncached(ctx context.Context, streamId, contentType, id string, requestOverride *aiostreams.RequestStreamConfig) (*orderedPlayListResult, error) {
+func (s *Server) buildOrderedPlayListUncached(ctx context.Context, streamId, contentType, id string) (*orderedPlayListResult, error) {
 	raw, err := s.getOrBuildRawSearchResult(ctx, contentType, id)
 	if err != nil || raw == nil {
 		return nil, err
@@ -774,16 +753,6 @@ func (s *Server) buildOrderedPlayListUncached(ctx context.Context, streamId, con
 	}
 	if str == nil {
 		str = s.getGlobalStream()
-	}
-	if requestOverride != nil {
-		effectiveStr := *str
-		if requestOverride.Filters != nil {
-			effectiveStr.Filters = *requestOverride.Filters
-		}
-		if requestOverride.Sorting != nil {
-			effectiveStr.Sorting = *requestOverride.Sorting
-		}
-		return s.buildOrderedPlayListFromRaw(raw, &effectiveStr)
 	}
 	return s.buildOrderedPlayListFromRaw(raw, str)
 }
@@ -1436,7 +1405,7 @@ func (s *Server) resolveStreamSlot(ctx context.Context, streamId, contentType, i
 	if streamId == "" {
 		streamId = s.getDefaultStreamID()
 	}
-	list, err := s.buildOrderedPlayList(ctx, streamId, contentType, id, nil)
+	list, err := s.buildOrderedPlayList(ctx, streamId, contentType, id)
 	if err != nil || list == nil {
 		return nil, fmt.Errorf("build play list: %w", err)
 	}
@@ -1471,6 +1440,17 @@ func (s *Server) resolveStreamSlot(ctx context.Context, streamId, contentType, i
 	var fallbackURLs []string
 	for i := index + 1; i < len(list.Candidates); i++ {
 		fallbackURLs = append(fallbackURLs, base+"/play/"+streamSlotPrefix+streamId+":"+contentType+":"+id+":"+strconv.Itoa(i))
+	}
+	if order := s.sessionManager.GetDeviceFailoverOrder(token); len(order) > 0 {
+		for i, sid := range order {
+			if sid != streamId {
+				continue
+			}
+			for j := i + 1; j < len(order); j++ {
+				fallbackURLs = append(fallbackURLs, base+"/play/"+streamSlotPrefix+order[j]+":"+contentType+":"+id+":0")
+			}
+			break
+		}
 	}
 	s.sessionManager.SetFallbackStreams(sessionID, fallbackURLs)
 	sess, err := s.sessionManager.GetSession(sessionID)
@@ -1536,7 +1516,7 @@ func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, devic
 			}
 			return ":" + streamId + ":" + contentType + ":" + id
 		})()
-		list, err := s.buildOrderedPlayList(r.Context(), streamId, contentType, id, nil)
+		list, err := s.buildOrderedPlayList(r.Context(), streamId, contentType, id)
 		maxIdx := 0
 		if err == nil && list != nil && len(list.Candidates) > 1 {
 			maxIdx = len(list.Candidates) - 1

@@ -95,11 +95,12 @@ func (s *Session) SetFallbackStreams(urls []string) {
 
 // Manager manages active streaming sessions
 type Manager struct {
-	sessions  map[string]*Session
-	pools     []*nntp.ClientPool
-	estimator *loader.SegmentSizeEstimator
-	ttl       time.Duration
-	mu        sync.RWMutex
+	sessions       map[string]*Session
+	pools          []*nntp.ClientPool
+	estimator      *loader.SegmentSizeEstimator
+	ttl            time.Duration
+	mu             sync.RWMutex
+	failoverOrder  sync.Map // key deviceToken (string) -> []string ordered stream IDs (for AIOStreams-reported failover order)
 }
 
 // SetBlueprint caches the archive blueprint
@@ -351,6 +352,31 @@ func (m *Manager) SetFallbackStreams(sessionID string, urls []string) {
 		return
 	}
 	session.SetFallbackStreams(urls)
+}
+
+// SetDeviceFailoverOrder stores the ordered stream IDs for a device (e.g. from AIOStreams POST).
+// Used when resolving a stream slot to build fallback URLs for the next streams in this order.
+func (m *Manager) SetDeviceFailoverOrder(deviceToken string, order []string) {
+	if len(order) == 0 {
+		return
+	}
+	// Copy so caller cannot mutate after store
+	cp := make([]string, len(order))
+	copy(cp, order)
+	m.failoverOrder.Store(deviceToken, cp)
+}
+
+// GetDeviceFailoverOrder returns the ordered stream IDs for a device, or nil if none set.
+func (m *Manager) GetDeviceFailoverOrder(deviceToken string) []string {
+	val, ok := m.failoverOrder.Load(deviceToken)
+	if !ok || val == nil {
+		return nil
+	}
+	order, ok := val.([]string)
+	if !ok {
+		return nil
+	}
+	return order
 }
 
 // GetSession retrieves an existing session
