@@ -9,17 +9,11 @@ import (
 	"streamnzb/pkg/core/logger"
 )
 
-const maxConfigBytes = 32 * 1024
-
 // DecodeAndMap decodes the base64url-encoded config param and maps it to
 // RequestStreamConfig (FilterConfig + SortConfig). Returns nil on decode or
 // mapping failure (logs and continues without override).
 func DecodeAndMap(configBase64 string) *RequestStreamConfig {
 	if configBase64 == "" {
-		return nil
-	}
-	if len(configBase64) > maxConfigBytes {
-		logger.Debug("AIOStreams config too large", "len", len(configBase64), "max", maxConfigBytes)
 		return nil
 	}
 	decoded, err := decodeBase64(configBase64)
