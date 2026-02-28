@@ -95,12 +95,12 @@ func (s *Session) SetFallbackStreams(urls []string) {
 
 // Manager manages active streaming sessions
 type Manager struct {
-	sessions       map[string]*Session
-	pools          []*nntp.ClientPool
-	estimator      *loader.SegmentSizeEstimator
-	ttl            time.Duration
-	mu             sync.RWMutex
-	failoverOrder  sync.Map // key deviceToken (string) -> []string ordered stream IDs (for AIOStreams-reported failover order)
+	sessions      map[string]*Session
+	pools         []*nntp.ClientPool
+	estimator     *loader.SegmentSizeEstimator
+	ttl           time.Duration
+	mu            sync.RWMutex
+	failoverOrder sync.Map // key deviceToken (string) -> []string (slot path "stream:s:type:id:idx" or legacy stream ID)
 }
 
 // SetBlueprint caches the archive blueprint
@@ -241,6 +241,17 @@ func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *rele
 	return session, nil
 }
 
+// isAggregatorIndexer returns true if the indexer reports an aggregator type (aggregator, nzbhydra, prowlarr).
+// Uses the indexer's Type() when available (e.g. newznab client), not the indexer name.
+func isAggregatorIndexer(idx indexer.Indexer) bool {
+	t, ok := idx.(interface{ Type() string })
+	if !ok || t == nil {
+		return false
+	}
+	typ := t.Type()
+	return typ == "aggregator" || typ == "nzbhydra" || typ == "prowlarr"
+}
+
 // GetOrDownloadNZB returns the NZB, downloading it if necessary.
 // I/O is done outside the session lock so GetActiveSessions is not blocked.
 func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
@@ -258,13 +269,9 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	idx := s.indexer
 	itemTitle := ""
 	indexerName := ""
-	reportSize := int64(0)
-	reportCat := ""
 	if s.Release != nil {
 		itemTitle = s.Release.Title
 		indexerName = s.Release.Indexer
-		reportSize = s.Release.Size
-		reportCat = catFromReportMeta(s.ContentIDs)
 	}
 	ctx := s.ctx
 	s.mu.Unlock()
@@ -275,25 +282,10 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	defer cancel()
 
 	hasAPIKey := urlHasAPIKey(nzbURL)
-	if hasAPIKey {
+	// has apikey or indexer type is aggregator (Prowlarr/NZBHydra/type=aggregator) — use type, not name
+	if hasAPIKey || isAggregatorIndexer(idx) {
 		logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)
 		data, err = idx.DownloadNZB(downloadCtx, nzbURL)
-	}
-	if !hasAPIKey || err != nil {
-		if res, ok := idx.(indexer.IndexerWithResolve); ok {
-			resolved, resolveErr := res.ResolveDownloadURL(ctx, nzbURL, itemTitle, reportSize, reportCat)
-			if resolveErr != nil {
-				logger.Debug("Resolve failed for direct indexer URL", "url", nzbURL, "title", itemTitle, "err", resolveErr)
-				return nil, fmt.Errorf("no API key in URL and could not resolve: %w", resolveErr)
-			}
-			if resolved == "" {
-				return nil, fmt.Errorf("no API key in URL and resolver returned empty proxy URL")
-			}
-			logger.Debug("Resolved to proxy URL via search", "title", itemTitle)
-			data, err = idx.DownloadNZB(downloadCtx, resolved)
-		} else if !hasAPIKey {
-			return nil, fmt.Errorf("URL has no API key (indexer: %s); add indexer with API key", indexerName)
-		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
@@ -354,19 +346,18 @@ func (m *Manager) SetFallbackStreams(sessionID string, urls []string) {
 	session.SetFallbackStreams(urls)
 }
 
-// SetDeviceFailoverOrder stores the ordered stream IDs for a device (e.g. from AIOStreams POST).
-// Used when resolving a stream slot to build fallback URLs for the next streams in this order.
+// SetDeviceFailoverOrder stores the ordered failover entries for a device (e.g. from AIOStreams POST).
+// Each entry is either a full slot path "stream:streamId:contentType:id:index" or a legacy stream ID.
 func (m *Manager) SetDeviceFailoverOrder(deviceToken string, order []string) {
 	if len(order) == 0 {
 		return
 	}
-	// Copy so caller cannot mutate after store
 	cp := make([]string, len(order))
 	copy(cp, order)
 	m.failoverOrder.Store(deviceToken, cp)
 }
 
-// GetDeviceFailoverOrder returns the ordered stream IDs for a device, or nil if none set.
+// GetDeviceFailoverOrder returns the ordered failover entries for a device, or nil if none set.
 func (m *Manager) GetDeviceFailoverOrder(deviceToken string) []string {
 	val, ok := m.failoverOrder.Load(deviceToken)
 	if !ok || val == nil {

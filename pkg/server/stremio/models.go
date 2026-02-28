@@ -12,6 +12,9 @@ type StreamResponse struct {
 
 // Stream represents a single stream option
 type Stream struct {
+	// FailoverID is the unique slot path for this row; echoed back in failover order (e.g. by AIOStreams).
+	FailoverID string `json:"failoverId,omitempty"`
+
 	// URL for direct streaming (HTTP video file)
 	URL string `json:"url,omitempty"`
 

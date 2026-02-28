@@ -29,6 +29,7 @@ import (
 	"streamnzb/pkg/media/unpack"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/search"
+	"streamnzb/pkg/search/parser"
 	"streamnzb/pkg/search/triage"
 	"streamnzb/pkg/services/availnzb"
 	"streamnzb/pkg/services/metadata/tmdb"
@@ -334,11 +335,18 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 				desc := "StreamNZB\n" + relTitle
 				playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":" + strconv.Itoa(i)
 				streamURL := baseURL + "/play/" + playPath
+				failoverId := "streamnzb-" + playPath
+				bingeLabel := bingeGroupLabelFromMeta(cand.Metadata)
+				if bingeLabel == "" {
+					bingeLabel = nameLeft
+				}
+				hints := streamBehaviorHints(nameLeft, str.ID, cand.Release, &isAvail, bingeLabel)
 				streams = append(streams, Stream{
+					FailoverID:    failoverId,
 					Name:          streamName,
 					URL:           streamURL,
 					Description:   desc,
-					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, cand.Release, &isAvail),
+					BehaviorHints: hints,
 				})
 			}
 		} else {
@@ -348,15 +356,19 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 			}
 			var line2 string
 			var firstRel *release.Release
-			if len(list.Candidates) > 0 && list.Candidates[0].Release != nil {
-				firstRel = list.Candidates[0].Release
-				if list.FirstIsAvailGood && firstRel.Title != "" {
-					line2 = firstRel.Title
+			var firstMeta *parser.ParsedRelease
+			if len(list.Candidates) > 0 {
+				if list.Candidates[0].Release != nil {
+					firstRel = list.Candidates[0].Release
+					if list.FirstIsAvailGood && firstRel.Title != "" {
+						line2 = firstRel.Title
+					} else {
+						line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
+					}
 				} else {
 					line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
 				}
-			} else if len(list.Candidates) > 0 {
-				line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
+				firstMeta = list.Candidates[0].Metadata
 			}
 			description := branding
 			if line2 != "" {
@@ -365,22 +377,32 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 			playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
 			streamURL := baseURL + "/play/" + playPath
 			firstAvail := list.FirstIsAvailGood
+			failoverId := "streamnzb-" + playPath
+			bingeLabel := bingeGroupLabelFromMeta(firstMeta)
+			if bingeLabel == "" {
+				bingeLabel = nameLeft
+			}
+			hints := streamBehaviorHints(nameLeft, str.ID, firstRel, &firstAvail, bingeLabel)
 			streams = append(streams, Stream{
+				FailoverID:    failoverId,
 				Name:          nameLeft,
 				URL:           streamURL,
 				Description:   description,
-				BehaviorHints: streamBehaviorHints(nameLeft, str.ID, firstRel, &firstAvail),
+				BehaviorHints: hints,
 			})
 			if len(list.Candidates) >= 2 {
 				nextPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
 				nextURL := baseURL + "/next/" + nextPath
 				nextName := nameLeft + " (next release)"
 				nextDesc := "StreamNZB\nTry next release in list"
+				nextFailoverId := "streamnzb-" + nextPath
+				nextHints := streamBehaviorHints(nameLeft, str.ID, nil, nil, nameLeft)
 				streams = append(streams, Stream{
+					FailoverID:    nextFailoverId,
 					Name:          nextName,
 					URL:           nextURL,
 					Description:   nextDesc,
-					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, nil, nil),
+					BehaviorHints: nextHints,
 				})
 			}
 		}
@@ -405,14 +427,15 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 }
 
 // failoverOrderRequest is the body AIOStreams POSTs to FailoverOrderPath.
+// Body: { streams: [ { failoverId: "streamnzb-" + playPath }, ... ] }.
 type failoverOrderRequest struct {
 	Streams []struct {
-		ID string `json:"id"`
+		FailoverID string `json:"failoverId"`
 	} `json:"streams"`
 }
 
-// handleFailoverOrder accepts POST with body { streams: [ { id: "streamnzb-<streamId>" }, ... ] }.
-// Stores the ordered stream IDs per device so resolveStreamSlot can set fallback URLs in that order.
+// handleFailoverOrder accepts POST with body { streams: [ { failoverId: "streamnzb-<playPath>" }, ... ] }.
+// We store the order so we match by exact slot path when resolving play.
 func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	logger.Debug("Failover order request", "device", device.Username, "method", r.Method, "url", r.URL.Path)
 	if r.Method != http.MethodPost {
@@ -432,6 +455,7 @@ func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, dev
 		return
 	}
 	if len(req.Streams) == 0 {
+		logger.Debug("Failover order: empty streams array, not storing")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -440,21 +464,44 @@ func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, dev
 	s.mu.RUnlock()
 	var order []string
 	for _, entry := range req.Streams {
-		streamID := strings.TrimSpace(entry.ID)
-		if streamID == "" {
+		raw := strings.TrimSpace(entry.FailoverID)
+		if raw == "" {
 			continue
 		}
-		if after, ok := strings.CutPrefix(streamID, "streamnzb-"); ok {
-			streamID = after
+		slotOrID := raw
+		if after, ok := strings.CutPrefix(raw, "streamnzb-"); ok {
+			slotOrID = after
 		}
-		if sm != nil {
-			if str, _ := sm.Get(streamID); str == nil {
-				continue
+		// Slot path (stream:streamId:type:id:index) we keep as-is; otherwise validate stream ID exists
+		if !strings.HasPrefix(slotOrID, streamSlotPrefix) {
+			if sm != nil {
+				if str, _ := sm.Get(slotOrID); str == nil {
+					continue
+				}
 			}
 		}
-		order = append(order, streamID)
+		order = append(order, slotOrID)
 	}
 	if len(order) == 0 {
+		var firstNonEmptyRaw string
+		nonEmptyCount := 0
+		for _, e := range req.Streams {
+			trimmed := strings.TrimSpace(e.FailoverID)
+			if trimmed != "" {
+				nonEmptyCount++
+				if firstNonEmptyRaw == "" {
+					firstNonEmptyRaw = trimmed
+					if len(firstNonEmptyRaw) > 80 {
+						firstNonEmptyRaw = firstNonEmptyRaw[:80] + "..."
+					}
+				}
+			}
+		}
+		devKey := ""
+		if device != nil {
+			devKey = device.Token
+		}
+		logger.Info("Failover order: no entries stored (all skipped)", "device", devKey, "requested", len(req.Streams), "nonEmptyFailoverIds", nonEmptyCount, "firstFailoverIdSample", firstNonEmptyRaw)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -463,14 +510,39 @@ func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, dev
 		key = device.Token
 	}
 	s.sessionManager.SetDeviceFailoverOrder(key, order)
-	logger.Debug("Failover order stored", "device", key, "streams", order)
+	sample := ""
+	if len(order) > 0 {
+		sample = order[0]
+		if len(order) > 1 {
+			sample += " ... " + order[len(order)-1]
+		}
+	}
+	usingPaths := len(order) > 0 && strings.HasPrefix(order[0], streamSlotPrefix)
+	logger.Info("Failover order stored", "device", key, "slots", len(order), "usingSlotPaths", usingPaths, "sample", sample)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func streamBehaviorHints(streamName, streamID string, rel *release.Release, cached *bool) *BehaviorHints {
+func bingeGroupLabelFromMeta(meta *parser.ParsedRelease) string {
+	if meta == nil {
+		return ""
+	}
+	if g := meta.ResolutionGroup(); g != "" && g != "sd" {
+		return g
+	}
+	if meta.Resolution != "" {
+		return meta.Resolution
+	}
+	return meta.Quality
+}
+
+func streamBehaviorHints(streamName, streamID string, rel *release.Release, cached *bool, bingeGroupLabel string) *BehaviorHints {
+	bingeGroup := "streamnzb-" + streamID
+	if bingeGroupLabel != "" {
+		bingeGroup = "streamnzb-" + bingeGroupLabel
+	}
 	h := &BehaviorHints{
 		NotWebReady: true,
-		BingeGroup:  "streamnzb-" + streamID,
+		BingeGroup:  bingeGroup,
 	}
 	if rel != nil {
 		h.Filename = rel.Title
@@ -529,11 +601,18 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 				desc := "StreamNZB\n" + relTitle
 				playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":" + strconv.Itoa(i)
 				streamURL := baseURL + "/play/" + playPath
+				failoverId := "streamnzb-" + playPath
+				bingeLabel := bingeGroupLabelFromMeta(cand.Metadata)
+				if bingeLabel == "" {
+					bingeLabel = nameLeft
+				}
+				hints := streamBehaviorHints(nameLeft, str.ID, cand.Release, &isAvail, bingeLabel)
 				streams = append(streams, Stream{
+					FailoverID:    failoverId,
 					Name:          streamName,
 					URL:           streamURL,
 					Description:   desc,
-					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, cand.Release, &isAvail),
+					BehaviorHints: hints,
 				})
 			}
 		} else {
@@ -543,15 +622,19 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 			}
 			var line2 string
 			var firstRel *release.Release
-			if len(list.Candidates) > 0 && list.Candidates[0].Release != nil {
-				firstRel = list.Candidates[0].Release
-				if list.FirstIsAvailGood && firstRel.Title != "" {
-					line2 = firstRel.Title
+			var firstMeta *parser.ParsedRelease
+			if len(list.Candidates) > 0 {
+				if list.Candidates[0].Release != nil {
+					firstRel = list.Candidates[0].Release
+					if list.FirstIsAvailGood && firstRel.Title != "" {
+						line2 = firstRel.Title
+					} else {
+						line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
+					}
 				} else {
 					line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
 				}
-			} else if len(list.Candidates) > 0 {
-				line2 = fmt.Sprintf("%d possible releases", len(list.Candidates))
+				firstMeta = list.Candidates[0].Metadata
 			}
 			description := branding
 			if line2 != "" {
@@ -560,22 +643,32 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 			playPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
 			streamURL := baseURL + "/play/" + playPath
 			firstAvail := list.FirstIsAvailGood
+			failoverId := "streamnzb-" + playPath
+			bingeLabel := bingeGroupLabelFromMeta(firstMeta)
+			if bingeLabel == "" {
+				bingeLabel = nameLeft
+			}
+			hints := streamBehaviorHints(nameLeft, str.ID, firstRel, &firstAvail, bingeLabel)
 			streams = append(streams, Stream{
+				FailoverID:    failoverId,
 				Name:          nameLeft,
 				URL:           streamURL,
 				Description:   description,
-				BehaviorHints: streamBehaviorHints(nameLeft, str.ID, firstRel, &firstAvail),
+				BehaviorHints: hints,
 			})
 			if len(list.Candidates) >= 2 {
 				nextPath := streamSlotPrefix + str.ID + ":" + contentType + ":" + id + ":0"
 				nextURL := baseURL + "/next/" + nextPath
 				nextName := nameLeft + " (next release)"
 				nextDesc := "StreamNZB\nTry next release in list"
+				nextFailoverId := "streamnzb-" + nextPath
+				nextHints := streamBehaviorHints(nameLeft, str.ID, nil, nil, nameLeft)
 				streams = append(streams, Stream{
+					FailoverID:    nextFailoverId,
 					Name:          nextName,
 					URL:           nextURL,
 					Description:   nextDesc,
-					BehaviorHints: streamBehaviorHints(nameLeft, str.ID, nil, nil),
+					BehaviorHints: nextHints,
 				})
 			}
 		}
@@ -1462,20 +1555,122 @@ func (s *Server) resolveStreamSlot(ctx context.Context, streamId, contentType, i
 	if token != "" {
 		base += "/" + token
 	}
+	// AIOStreams sends back BingeGroup per row; we use playPath as BingeGroup so each id is a full slot path.
+	// Order entries are "stream:streamId:type:id:index" (exact match) or legacy stream ID (derive index by occurrence).
+	ourSlotPath := sessionID
+	order := s.sessionManager.GetDeviceFailoverOrder(token)
 	var fallbackURLs []string
-	for i := index + 1; i < len(list.Candidates); i++ {
-		fallbackURLs = append(fallbackURLs, base+"/play/"+streamSlotPrefix+streamId+":"+contentType+":"+id+":"+strconv.Itoa(i))
-	}
-	if order := s.sessionManager.GetDeviceFailoverOrder(token); len(order) > 0 {
-		for i, sid := range order {
-			if sid != streamId {
-				continue
+	var ourPosition int = -1
+	var matchedByPath bool
+	if len(order) > 0 {
+		for p, entry := range order {
+			if entry == ourSlotPath {
+				ourPosition = p
+				matchedByPath = true
+				break
 			}
-			for j := i + 1; j < len(order); j++ {
-				fallbackURLs = append(fallbackURLs, base+"/play/"+streamSlotPrefix+order[j]+":"+contentType+":"+id+":0")
+			// Legacy: entry is stream ID only — match by (streamId, index) occurrence
+			if !strings.HasPrefix(entry, streamSlotPrefix) && entry == streamId {
+				occurrence := 0
+				for k := 0; k <= p; k++ {
+					if order[k] == streamId {
+						occurrence++
+					}
+				}
+				if occurrence == index+1 {
+					ourPosition = p
+					break
+				}
 			}
-			break
 		}
+	}
+	if ourPosition >= 0 && !matchedByPath {
+		logger.Debug("Failover order: matched by legacy (stream ID + occurrence); send playPath as BingeGroup for exact order", "stream", streamId, "index", index)
+	}
+
+	if ourPosition >= 0 {
+		for j := ourPosition + 1; j < len(order); j++ {
+			entry := order[j]
+			if strings.HasPrefix(entry, streamSlotPrefix) {
+				fallbackURLs = append(fallbackURLs, base+"/play/"+entry)
+			} else {
+				// Legacy stream ID: k-th occurrence = candidate index k-1
+				count := 0
+				for k := 0; k <= j; k++ {
+					if order[k] == entry {
+						count++
+					}
+				}
+				ci := count - 1
+				fallbackURLs = append(fallbackURLs, base+"/play/"+streamSlotPrefix+entry+":"+contentType+":"+id+":"+strconv.Itoa(ci))
+			}
+		}
+	} else {
+		// No stored order (e.g. not AIOStreams): same-stream only.
+		for i := index + 1; i < len(list.Candidates); i++ {
+			fallbackURLs = append(fallbackURLs, base+"/play/"+streamSlotPrefix+streamId+":"+contentType+":"+id+":"+strconv.Itoa(i))
+		}
+	}
+
+	// Log failover order as release names (use existing list when entry is same stream to avoid N buildOrderedPlayList calls)
+	var names []string
+	if ourPosition >= 0 && len(order) > 0 {
+		for j := ourPosition; j < len(order); j++ {
+			entry := order[j]
+			if strings.HasPrefix(entry, streamSlotPrefix) {
+				sid, _, _, idx, ok := parseStreamSlotID(entry)
+				if ok && sid != "" {
+					var cand *triage.Candidate
+					if sid == streamId && idx < len(list.Candidates) {
+						cand = &list.Candidates[idx]
+					} else {
+						nextList, _ := s.buildOrderedPlayList(ctx, sid, contentType, id, skipFilterSort)
+						if nextList != nil && idx < len(nextList.Candidates) {
+							cand = &nextList.Candidates[idx]
+						}
+					}
+					if cand != nil && cand.Release != nil && cand.Release.Title != "" {
+						names = append(names, cand.Release.Title)
+					} else {
+						names = append(names, "["+entry+"]")
+					}
+				} else {
+					names = append(names, "["+entry+"]")
+				}
+			} else {
+				count := 0
+				for k := 0; k <= j; k++ {
+					if order[k] == entry {
+						count++
+					}
+				}
+				ci := count - 1
+				var cand *triage.Candidate
+				if entry == streamId && ci < len(list.Candidates) {
+					cand = &list.Candidates[ci]
+				} else {
+					nextList, _ := s.buildOrderedPlayList(ctx, entry, contentType, id, skipFilterSort)
+					if nextList != nil && ci < len(nextList.Candidates) {
+						cand = &nextList.Candidates[ci]
+					}
+				}
+				if cand != nil && cand.Release != nil && cand.Release.Title != "" {
+					names = append(names, cand.Release.Title)
+				} else {
+					names = append(names, "["+entry+":"+strconv.Itoa(ci)+"]")
+				}
+			}
+		}
+		logger.Info("Failover order (release names)", "stream", streamId, "contentType", contentType, "id", id, "ourPosition", ourPosition, "matchedBySlotPath", matchedByPath, "names", names)
+	} else {
+		for i := index; i < len(list.Candidates); i++ {
+			if r := list.Candidates[i].Release; r != nil && r.Title != "" {
+				names = append(names, r.Title)
+			} else {
+				names = append(names, fmt.Sprintf("[%d]", i))
+			}
+		}
+		logger.Info("Failover order (release names)", "stream", streamId, "contentType", contentType, "id", id, "names", names)
 	}
 	s.sessionManager.SetFallbackStreams(sessionID, fallbackURLs)
 	sess, err := s.sessionManager.GetSession(sessionID)
@@ -1651,8 +1846,15 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	if err != nil {
 		// Phase 3: resolve stream slot to a real session (create deferred for this index, set fallbacks)
 		if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
-			isAIOStreams := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
-			sess, err = s.resolveStreamSlot(r.Context(), streamId, contentType, id, index, device, isAIOStreams)
+			// Use unfiltered list when device has stored failover order (slot paths), so slot indices match the list we sent to AIOStreams.
+			skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
+			if !skipFilterSort && device != nil {
+				order := s.sessionManager.GetDeviceFailoverOrder(device.Token)
+				if len(order) > 0 && strings.HasPrefix(order[0], streamSlotPrefix) {
+					skipFilterSort = true
+				}
+			}
+			sess, err = s.resolveStreamSlot(r.Context(), streamId, contentType, id, index, device, skipFilterSort)
 			if err != nil {
 				logger.Debug("Resolve stream slot failed", "slot", sessionID, "err", err)
 				http.Error(w, "Stream slot not found or invalid", http.StatusNotFound)

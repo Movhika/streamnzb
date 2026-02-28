@@ -58,6 +58,14 @@ func (c *Client) Name() string {
 	return "Newznab"
 }
 
+// Type returns the config type of this indexer ("newznab", "aggregator", "nzbhydra", "prowlarr", etc.).
+func (c *Client) Type() string {
+	if c.cfg.Type != "" {
+		return c.cfg.Type
+	}
+	return "newznab"
+}
+
 // GetUsage returns the current usage stats
 func (c *Client) GetUsage() indexer.Usage {
 	c.mu.RLock()
