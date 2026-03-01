@@ -84,20 +84,21 @@ func CreateSevenZipBlueprint(files []*loader.File, firstVolName string, password
 }
 
 // Open7zStreamFromBlueprint creates a stream from a cached blueprint.
+// files must be the fresh file references for the current session, not the cached ones.
 // password is used when the archive is password-protected (from NZB head).
-func Open7zStreamFromBlueprint(ctx context.Context, bp *SevenZipBlueprint, password string) (ReadSeekCloser, string, int64, error) {
-	if bp == nil || len(bp.Files) == 0 {
-		return nil, "", 0, errors.New("invalid 7z blueprint")
+func Open7zStreamFromBlueprint(ctx context.Context, files []*loader.File, bp *SevenZipBlueprint, password string) (ReadSeekCloser, string, int64, error) {
+	if bp == nil || len(files) == 0 {
+		return nil, "", 0, errors.New("invalid 7z blueprint or empty files")
 	}
 
 	if bp.Encrypted {
 		if password == "" {
 			return nil, "", 0, fmt.Errorf("password-protected 7z (file: %s) -- password required from NZB head", bp.MainFileName)
 		}
-		return openEncrypted7zStream(ctx, bp, password)
+		return openEncrypted7zStream(ctx, files, bp, password)
 	}
 
-	parts := filesToParts(bp.Files)
+	parts := filesToParts(filter7zFiles(files))
 	streamParts, err := mapOffsetToParts(parts, bp.FileOffset, bp.TotalSize)
 	if err != nil {
 		return nil, "", 0, err
@@ -109,8 +110,8 @@ func Open7zStreamFromBlueprint(ctx context.Context, bp *SevenZipBlueprint, passw
 
 // openEncrypted7zStream opens the 7z with password and returns a stream of the main file.
 // Seek is implemented by re-opening the archive and skipping to the target offset.
-func openEncrypted7zStream(ctx context.Context, bp *SevenZipBlueprint, password string) (ReadSeekCloser, string, int64, error) {
-	parts := filesToParts(bp.Files)
+func openEncrypted7zStream(ctx context.Context, files []*loader.File, bp *SevenZipBlueprint, password string) (ReadSeekCloser, string, int64, error) {
+	parts := filesToParts(filter7zFiles(files))
 	mr := NewConcatenatedReaderAt(parts)
 	r, err := sevenzip.NewReaderWithPassword(mr, mr.Size(), password)
 	if err != nil {
@@ -141,6 +142,7 @@ func openEncrypted7zStream(ctx context.Context, bp *SevenZipBlueprint, password 
 		rc:       rc,
 		size:     bp.TotalSize,
 		read:     0,
+		files:    filter7zFiles(files),
 		bp:       bp,
 		password: password,
 	}
@@ -152,6 +154,7 @@ type encrypted7zStream struct {
 	rc       io.ReadCloser
 	size     int64
 	read     int64
+	files    []*loader.File
 	bp       *SevenZipBlueprint
 	password string
 	mu       sync.Mutex
@@ -196,7 +199,7 @@ func (e *encrypted7zStream) Seek(offset int64, whence int) (int64, error) {
 	}
 	// Re-open and skip to target position
 	_ = e.rc.Close()
-	parts := filesToParts(e.bp.Files)
+	parts := filesToParts(e.files)
 	mr := NewConcatenatedReaderAt(parts)
 	r, err := sevenzip.NewReaderWithPassword(mr, mr.Size(), e.password)
 	if err != nil {

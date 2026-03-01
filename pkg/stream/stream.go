@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
-	"streamnzb/pkg/core/persistence"
-	"strings"
 	"sync"
 )
 
@@ -35,25 +33,12 @@ type Stream struct {
 	PriorityGridAdded []string `json:"priority_grid_added,omitempty"`
 }
 
-// Manager loads and saves streams from config or state.
+// Manager loads and saves streams from config.
 type Manager struct {
 	mu      sync.RWMutex
 	streams map[string]*Stream
-	manager *persistence.StateManager // nil when using config
-	cfg     *config.Config            // nil when using state
+	cfg     *config.Config
 	saveFn  func() error
-}
-
-// GetManager returns a stream manager using state.json.
-func GetManager(sm *persistence.StateManager) (*Manager, error) {
-	m := &Manager{
-		streams: make(map[string]*Stream),
-		manager: sm,
-	}
-	if err := m.load(); err != nil {
-		return nil, fmt.Errorf("load streams: %w", err)
-	}
-	return m, nil
 }
 
 // NewManagerFromConfig creates a stream manager backed by config (streams in config.json).
@@ -76,42 +61,12 @@ func (m *Manager) load() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.cfg != nil {
-		m.streams = make(map[string]*Stream)
-		for _, e := range m.cfg.Streams {
-			if e == nil || e.ID == "" {
-				continue
-			}
-			m.streams[e.ID] = streamFromEntry(e)
+	m.streams = make(map[string]*Stream)
+	for _, e := range m.cfg.Streams {
+		if e == nil || e.ID == "" {
+			continue
 		}
-		if len(m.streams) == 0 {
-			global := &Stream{
-				ID:      GlobalStreamID,
-				Name:    GlobalStreamName,
-				Filters: config.DefaultFilterConfig(),
-				Sorting: config.DefaultSortConfig(),
-			}
-			m.streams[GlobalStreamID] = global
-			if err := m.saveLocked(); err != nil {
-				return err
-			}
-			logger.Info("Bootstrapped global stream", "name", GlobalStreamName)
-		}
-		return nil
-	}
-
-	var list []*Stream
-	found, err := m.manager.Get("streams", &list)
-	if err != nil {
-		return err
-	}
-	if found && len(list) > 0 {
-		m.streams = make(map[string]*Stream, len(list))
-		for _, s := range list {
-			if s != nil && s.ID != "" {
-				m.streams[s.ID] = s
-			}
-		}
+		m.streams[e.ID] = streamFromEntry(e)
 	}
 	if len(m.streams) == 0 {
 		global := &Stream{
@@ -162,21 +117,14 @@ func entryFromStream(s *Stream) *config.StreamEntry {
 }
 
 func (m *Manager) saveLocked() error {
-	if m.cfg != nil {
-		m.cfg.Streams = make([]*config.StreamEntry, 0, len(m.streams))
-		for _, s := range m.streams {
-			m.cfg.Streams = append(m.cfg.Streams, entryFromStream(s))
-		}
-		if m.saveFn != nil {
-			return m.saveFn()
-		}
-		return nil
-	}
-	list := make([]*Stream, 0, len(m.streams))
+	m.cfg.Streams = make([]*config.StreamEntry, 0, len(m.streams))
 	for _, s := range m.streams {
-		list = append(list, s)
+		m.cfg.Streams = append(m.cfg.Streams, entryFromStream(s))
 	}
-	return m.manager.Set("streams", list)
+	if m.saveFn != nil {
+		return m.saveFn()
+	}
+	return nil
 }
 
 // GetGlobal returns the default stream used for catalog/play when no stream is specified.
@@ -301,13 +249,4 @@ func (m *Manager) Delete(id string) error {
 	}
 	delete(m.streams, id)
 	return m.saveLocked()
-}
-
-// NormalizeID returns id for use in URLs (no slashes). Empty or invalid returns empty.
-func NormalizeID(id string) string {
-	s := strings.TrimSpace(id)
-	if s == "" || strings.Contains(s, "/") {
-		return ""
-	}
-	return s
 }

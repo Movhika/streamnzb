@@ -9,7 +9,7 @@ import (
 	"streamnzb/pkg/search/parser"
 )
 
-// Test Quality Filtering
+// Test Quality Filtering (3-tier: required / excluded)
 func TestCheckQuality(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -18,58 +18,52 @@ func TestCheckQuality(t *testing.T) {
 		shouldPass bool
 	}{
 		{
-			name: "WEB-DL passes when allowed",
+			name: "WEB-DL passes when required",
 			cfg: &config.FilterConfig{
-				QualityInclude: []string{"WEB-DL", "BluRay"},
+				QualityRequired: []string{"WEB-DL", "BluRay"},
 			},
-			parsed: &parser.ParsedRelease{
-				Quality: "WEB-DL",
-			},
+			parsed:     &parser.ParsedRelease{Quality: "WEB-DL"},
 			shouldPass: true,
 		},
 		{
-			name: "CAM rejected when not allowed",
+			name: "CAM rejected when not required",
 			cfg: &config.FilterConfig{
-				QualityInclude: []string{"WEB-DL", "BluRay"},
+				QualityRequired: []string{"WEB-DL", "BluRay"},
 			},
-			parsed: &parser.ParsedRelease{
-				Quality: "CAM",
-			},
+			parsed:     &parser.ParsedRelease{Quality: "CAM"},
 			shouldPass: false,
 		},
 		{
-			name: "Blocked quality rejected",
+			name: "Excluded quality rejected",
 			cfg: &config.FilterConfig{
-				QualityAvoid: []string{"CAM", "TS"},
+				QualityExcluded: []string{"CAM", "TS"},
 			},
-			parsed: &parser.ParsedRelease{
-				Quality: "CAM",
-			},
+			parsed:     &parser.ParsedRelease{Quality: "CAM"},
 			shouldPass: false,
 		},
 		{
-			name: "Non-blocked quality passes",
+			name: "Non-excluded quality passes",
 			cfg: &config.FilterConfig{
-				QualityAvoid: []string{"CAM"},
+				QualityExcluded: []string{"CAM"},
 			},
-			parsed: &parser.ParsedRelease{
-				Quality: "WEB-DL",
-			},
+			parsed:     &parser.ParsedRelease{Quality: "WEB-DL"},
 			shouldPass: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := checkQuality(tt.cfg, tt.parsed)
+			excluded := checkQualityExcluded(tt.cfg, tt.parsed)
+			required := checkQualityRequired(tt.cfg, tt.parsed)
+			result := !excluded && !required
 			if result != tt.shouldPass {
-				t.Errorf("checkQuality() = %v, want %v", result, tt.shouldPass)
+				t.Errorf("quality filter = %v, want %v", result, tt.shouldPass)
 			}
 		})
 	}
 }
 
-// Test Audio Filtering
+// Test Audio Filtering (3-tier: required / excluded)
 func TestCheckAudio(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -80,61 +74,49 @@ func TestCheckAudio(t *testing.T) {
 		{
 			name: "Required audio present passes",
 			cfg: &config.FilterConfig{
-				AudioInclude: []string{"Atmos"},
+				AudioRequired: []string{"Atmos"},
 			},
-			parsed: &parser.ParsedRelease{
-				Audio: []string{"DDP5.1", "Atmos"},
-			},
+			parsed:     &parser.ParsedRelease{Audio: []string{"DDP5.1", "Atmos"}},
 			shouldPass: true,
 		},
 		{
 			name: "Required audio missing rejected",
 			cfg: &config.FilterConfig{
-				AudioInclude: []string{"Atmos"},
+				AudioRequired: []string{"Atmos"},
 			},
-			parsed: &parser.ParsedRelease{
-				Audio: []string{"DDP5.1"},
-			},
+			parsed:     &parser.ParsedRelease{Audio: []string{"DDP5.1"}},
 			shouldPass: false,
 		},
 		{
 			name: "Allowed audio passes",
 			cfg: &config.FilterConfig{
-				AudioInclude: []string{"DDP", "TrueHD"},
+				AudioRequired: []string{"DDP", "TrueHD"},
 			},
-			parsed: &parser.ParsedRelease{
-				Audio: []string{"DDP5.1"},
-			},
+			parsed:     &parser.ParsedRelease{Audio: []string{"DDP5.1"}},
 			shouldPass: true,
 		},
 		{
 			name: "Non-allowed audio rejected",
 			cfg: &config.FilterConfig{
-				AudioInclude: []string{"DDP", "TrueHD"},
+				AudioRequired: []string{"DDP", "TrueHD"},
 			},
-			parsed: &parser.ParsedRelease{
-				Audio: []string{"AAC"},
-			},
+			parsed:     &parser.ParsedRelease{Audio: []string{"AAC"}},
 			shouldPass: false,
 		},
 		{
 			name: "Min channels 5.1 passes",
 			cfg: &config.FilterConfig{
-				ChannelsInclude: []string{"5.1", "7.1"},
+				ChannelsRequired: []string{"5.1", "7.1"},
 			},
-			parsed: &parser.ParsedRelease{
-				Channels: []string{"7.1"},
-			},
+			parsed:     &parser.ParsedRelease{Channels: []string{"7.1"}},
 			shouldPass: true,
 		},
 		{
 			name: "Below min channels rejected",
 			cfg: &config.FilterConfig{
-				ChannelsInclude: []string{"5.1", "7.1"},
+				ChannelsRequired: []string{"5.1", "7.1"},
 			},
-			parsed: &parser.ParsedRelease{
-				Channels: []string{"2.0"},
-			},
+			parsed:     &parser.ParsedRelease{Channels: []string{"2.0"}},
 			shouldPass: false,
 		},
 	}
@@ -143,9 +125,13 @@ func TestCheckAudio(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var result bool
 			if strings.Contains(tt.name, "channel") {
-				result = checkChannels(tt.cfg, tt.parsed)
+				excluded := checkChannelsExcluded(tt.cfg, tt.parsed)
+				required := checkChannelsRequired(tt.cfg, tt.parsed)
+				result = !excluded && !required
 			} else {
-				result = checkAudio(tt.cfg, tt.parsed)
+				excluded := checkAudioExcluded(tt.cfg, tt.parsed)
+				required := checkAudioRequired(tt.cfg, tt.parsed)
+				result = !excluded && !required
 			}
 			if result != tt.shouldPass {
 				t.Errorf("check = %v, want %v", result, tt.shouldPass)
@@ -154,7 +140,7 @@ func TestCheckAudio(t *testing.T) {
 	}
 }
 
-// Test HDR Filtering
+// Test HDR Filtering (3-tier: required / excluded)
 func TestCheckHDR(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -165,76 +151,66 @@ func TestCheckHDR(t *testing.T) {
 		{
 			name: "HDR required and present passes",
 			cfg: &config.FilterConfig{
-				HDRInclude: []string{"HDR", "HDR10", "HDR10+", "DV", "3D"},
+				HDRRequired: []string{"HDR", "HDR10", "HDR10+", "DV", "3D"},
 			},
-			parsed: &parser.ParsedRelease{
-				HDR: []string{"HDR10"},
-			},
+			parsed:     &parser.ParsedRelease{HDR: []string{"HDR10"}},
 			shouldPass: true,
 		},
 		{
 			name: "HDR required but missing rejected",
 			cfg: &config.FilterConfig{
-				HDRInclude: []string{"HDR", "HDR10", "HDR10+", "DV", "3D"},
+				HDRRequired: []string{"HDR", "HDR10", "HDR10+", "DV", "3D"},
 			},
-			parsed: &parser.ParsedRelease{
-				HDR: []string{},
-			},
+			parsed:     &parser.ParsedRelease{HDR: []string{}},
 			shouldPass: false,
 		},
 		{
-			name: "Blocked HDR type rejected",
+			name: "Excluded HDR type rejected",
 			cfg: &config.FilterConfig{
-				HDRAvoid: []string{"DV"},
+				HDRExcluded: []string{"DV"},
 			},
-			parsed: &parser.ParsedRelease{
-				HDR: []string{"DV", "HDR10"},
-			},
+			parsed:     &parser.ParsedRelease{HDR: []string{"DV", "HDR10"}},
 			shouldPass: false,
 		},
 		{
-			name: "SDR blocked and present rejected",
+			name: "SDR excluded and present rejected",
 			cfg: &config.FilterConfig{
-				HDRAvoid: []string{"SDR"},
+				HDRExcluded: []string{"SDR"},
 			},
-			parsed: &parser.ParsedRelease{
-				HDR: []string{"SDR"},
-			},
+			parsed:     &parser.ParsedRelease{HDR: []string{"SDR"}},
 			shouldPass: false,
 		},
 		{
-			name: "Allowed HDR type passes",
+			name: "Required HDR type passes",
 			cfg: &config.FilterConfig{
-				HDRInclude: []string{"HDR10", "HDR10+"},
+				HDRRequired: []string{"HDR10", "HDR10+"},
 			},
-			parsed: &parser.ParsedRelease{
-				HDR: []string{"HDR10"},
-			},
+			parsed:     &parser.ParsedRelease{HDR: []string{"HDR10"}},
 			shouldPass: true,
 		},
 		{
-			name: "Non-allowed HDR type rejected",
+			name: "Non-required HDR type rejected",
 			cfg: &config.FilterConfig{
-				HDRInclude: []string{"HDR10"},
+				HDRRequired: []string{"HDR10"},
 			},
-			parsed: &parser.ParsedRelease{
-				HDR: []string{"DV"},
-			},
+			parsed:     &parser.ParsedRelease{HDR: []string{"DV"}},
 			shouldPass: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := checkHDR(tt.cfg, tt.parsed)
+			excluded := checkHDRExcluded(tt.cfg, tt.parsed)
+			required := checkHDRRequired(tt.cfg, tt.parsed)
+			result := !excluded && !required
 			if result != tt.shouldPass {
-				t.Errorf("checkHDR() = %v, want %v", result, tt.shouldPass)
+				t.Errorf("HDR filter = %v, want %v", result, tt.shouldPass)
 			}
 		})
 	}
 }
 
-// Test Language Filtering
+// Test Language Filtering (3-tier: required / excluded)
 func TestCheckLanguages(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -246,92 +222,74 @@ func TestCheckLanguages(t *testing.T) {
 		{
 			name: "Required language present passes",
 			cfg: &config.FilterConfig{
-				LanguagesInclude: []string{"English"},
+				LanguagesRequired: []string{"English"},
 			},
-			parsed: &parser.ParsedRelease{
-				Languages: []string{"English"},
-			},
+			parsed:     &parser.ParsedRelease{Languages: []string{"English"}},
 			shouldPass: true,
 		},
 		{
 			name: "Required language missing rejected",
 			cfg: &config.FilterConfig{
-				LanguagesInclude: []string{"English"},
+				LanguagesRequired: []string{"English"},
 			},
-			parsed: &parser.ParsedRelease{
-				Languages: []string{"German"},
-			},
+			parsed:     &parser.ParsedRelease{Languages: []string{"German"}},
 			shouldPass: false,
 		},
 		{
 			name: "Allowed language passes",
 			cfg: &config.FilterConfig{
-				LanguagesInclude: []string{"English", "German"},
+				LanguagesRequired: []string{"English", "German"},
 			},
-			parsed: &parser.ParsedRelease{
-				Languages: []string{"English"},
-			},
+			parsed:     &parser.ParsedRelease{Languages: []string{"English"}},
 			shouldPass: true,
 		},
 		{
 			name: "Non-allowed language rejected",
 			cfg: &config.FilterConfig{
-				LanguagesInclude: []string{"English"},
+				LanguagesRequired: []string{"English"},
 			},
-			parsed: &parser.ParsedRelease{
-				Languages: []string{"French"},
-			},
+			parsed:     &parser.ParsedRelease{Languages: []string{"French"}},
 			shouldPass: false,
 		},
 		{
 			name: "Config 'en' matches parser 'en'",
 			cfg: &config.FilterConfig{
-				LanguagesInclude: []string{"en"},
+				LanguagesRequired: []string{"en"},
 			},
-			parsed: &parser.ParsedRelease{
-				Languages: []string{"en"},
-			},
+			parsed:     &parser.ParsedRelease{Languages: []string{"en"}},
 			shouldPass: true,
 		},
 		{
 			name: "Config 'en' matches parser 'English' via normalization",
 			cfg: &config.FilterConfig{
-				LanguagesInclude: []string{"en"},
+				LanguagesRequired: []string{"en"},
 			},
-			parsed: &parser.ParsedRelease{
-				Languages: []string{"English"},
-			},
+			parsed:     &parser.ParsedRelease{Languages: []string{"English"}},
 			shouldPass: true,
 		},
 		{
 			name: "Config 'multi' matches 'multi subs'",
 			cfg: &config.FilterConfig{
-				LanguagesInclude: []string{"multi"},
+				LanguagesRequired: []string{"multi"},
 			},
-			parsed: &parser.ParsedRelease{
-				Languages: []string{"multi subs"},
-			},
+			parsed:     &parser.ParsedRelease{Languages: []string{"multi subs"}},
 			shouldPass: true,
 		},
 		{
 			name: "Indexer language (English) used when parser has none",
 			cfg: &config.FilterConfig{
-				LanguagesInclude: []string{"en"},
+				LanguagesRequired: []string{"en"},
 			},
-			parsed: &parser.ParsedRelease{
-				Languages: []string{},
-			},
+			parsed:     &parser.ParsedRelease{Languages: []string{}},
 			rel:        &release.Release{Languages: []string{"English"}},
 			shouldPass: true,
 		},
 		{
-			name: "Release with no language rejected when allowed list is set",
+			name: "Release with no language rejected when required list is set",
 			cfg: &config.FilterConfig{
-				LanguagesInclude: []string{"fi", "fin"},
+				LanguagesRequired: []string{"fi", "fin"},
 			},
-			parsed: &parser.ParsedRelease{
-				Languages: []string{},
-			},
+			parsed:     &parser.ParsedRelease{Languages: []string{}},
 			rel:        nil,
 			shouldPass: false,
 		},
@@ -339,9 +297,11 @@ func TestCheckLanguages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := checkLanguages(tt.cfg, tt.parsed, tt.rel)
+			excluded := checkLanguagesExcluded(tt.cfg, tt.parsed, tt.rel)
+			required := checkLanguagesRequired(tt.cfg, tt.parsed, tt.rel)
+			result := !excluded && !required
 			if result != tt.shouldPass {
-				t.Errorf("checkLanguages() = %v, want %v", result, tt.shouldPass)
+				t.Errorf("languages filter = %v, want %v", result, tt.shouldPass)
 			}
 		})
 	}
@@ -357,78 +317,69 @@ func TestCheckOther(t *testing.T) {
 		shouldPass bool
 	}{
 		{
-			name: "CAM blocked and present rejected",
+			name: "CAM excluded and present rejected",
 			cfg: &config.FilterConfig{
-				QualityAvoid: []string{"CAM", "TeleSync", "TeleCine", "SCR"},
+				QualityExcluded: []string{"CAM", "TeleSync", "TeleCine", "SCR"},
 			},
-			parsed: &parser.ParsedRelease{
-				Quality: "CAM",
-			},
+			parsed:     &parser.ParsedRelease{Quality: "CAM"},
 			shouldPass: false,
 		},
 		{
-			name: "TS blocked and present rejected",
+			name: "TS excluded and present rejected",
 			cfg: &config.FilterConfig{
-				QualityAvoid: []string{"CAM", "TeleSync", "TeleCine", "SCR"},
+				QualityExcluded: []string{"CAM", "TeleSync", "TeleCine", "SCR"},
 			},
-			parsed: &parser.ParsedRelease{
-				Quality: "TeleSync",
-			},
+			parsed:     &parser.ParsedRelease{Quality: "TeleSync"},
 			shouldPass: false,
 		},
 		{
 			name: "Proper required and present passes",
 			cfg: &config.FilterConfig{
-				ProperInclude: ptrBool(true),
+				ProperRequired: ptrBool(true),
 			},
-			parsed: &parser.ParsedRelease{
-				Proper: true,
-			},
+			parsed:     &parser.ParsedRelease{Proper: true},
 			shouldPass: true,
 		},
 		{
 			name: "Proper required but missing rejected",
 			cfg: &config.FilterConfig{
-				ProperInclude: ptrBool(true),
+				ProperRequired: ptrBool(true),
 			},
-			parsed: &parser.ParsedRelease{
-				Proper: false,
-			},
+			parsed:     &parser.ParsedRelease{Proper: false},
 			shouldPass: false,
 		},
 		{
-			name: "Repack not allowed and present rejected",
+			name: "Repack excluded and present rejected",
 			cfg: &config.FilterConfig{
-				RepackAvoid: ptrBool(true),
+				RepackExcluded: ptrBool(true),
 			},
-			parsed: &parser.ParsedRelease{
-				Repack: true,
-			},
+			parsed:     &parser.ParsedRelease{Repack: true},
 			shouldPass: false,
 		},
 		{
-			name: "Repack allowed and present passes",
+			name: "Repack required and present passes",
 			cfg: &config.FilterConfig{
-				RepackInclude: ptrBool(true),
+				RepackRequired: ptrBool(true),
 			},
-			parsed: &parser.ParsedRelease{
-				Repack: true,
-			},
+			parsed:     &parser.ParsedRelease{Repack: true},
 			shouldPass: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := checkBooleans(tt.cfg, tt.parsed) && checkQuality(tt.cfg, tt.parsed)
+			qualityExcluded := checkQualityExcluded(tt.cfg, tt.parsed)
+			qualityRequired := checkQualityRequired(tt.cfg, tt.parsed)
+			booleans := checkBooleans(tt.cfg, tt.parsed)
+			result := !qualityExcluded && !qualityRequired && booleans
 			if result != tt.shouldPass {
-				t.Errorf("checkBooleans+checkQuality = %v, want %v", result, tt.shouldPass)
+				t.Errorf("checkBooleans+quality filter = %v, want %v", result, tt.shouldPass)
 			}
 		})
 	}
 }
 
-// Test Group Filtering
+// Test Group Filtering (3-tier: required / excluded)
 func TestCheckGroup(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -437,72 +388,62 @@ func TestCheckGroup(t *testing.T) {
 		shouldPass bool
 	}{
 		{
-			name: "Blocked group rejected",
+			name: "Excluded group rejected",
 			cfg: &config.FilterConfig{
-				GroupAvoid: []string{"YIFY", "RARBG"},
+				GroupExcluded: []string{"YIFY", "RARBG"},
 			},
-			parsed: &parser.ParsedRelease{
-				Group: "YIFY",
-			},
+			parsed:     &parser.ParsedRelease{Group: "YIFY"},
 			shouldPass: false,
 		},
 		{
-			name: "Non-blocked group passes",
+			name: "Non-excluded group passes",
 			cfg: &config.FilterConfig{
-				GroupAvoid: []string{"YIFY"},
+				GroupExcluded: []string{"YIFY"},
 			},
-			parsed: &parser.ParsedRelease{
-				Group: "FLUX",
-			},
+			parsed:     &parser.ParsedRelease{Group: "FLUX"},
 			shouldPass: true,
 		},
 		{
 			name: "Empty group passes",
 			cfg: &config.FilterConfig{
-				GroupAvoid: []string{"YIFY"},
+				GroupExcluded: []string{"YIFY"},
 			},
-			parsed: &parser.ParsedRelease{
-				Group: "",
-			},
+			parsed:     &parser.ParsedRelease{Group: ""},
 			shouldPass: true,
 		},
 		{
-			name: "Avoid CiNE does not match CiNEPHiLES (whole-word)",
+			name: "Exclude CiNE does not match CiNEPHiLES (whole-word)",
 			cfg: &config.FilterConfig{
-				GroupAvoid: []string{"CiNE"},
+				GroupExcluded: []string{"CiNE"},
 			},
-			parsed: &parser.ParsedRelease{
-				Group: "CiNEPHiLES",
-			},
+			parsed:     &parser.ParsedRelease{Group: "CiNEPHiLES"},
 			shouldPass: true,
 		},
 		{
-			name: "Avoid E does not match EPSiLON (whole-word)",
+			name: "Exclude E does not match EPSiLON (whole-word)",
 			cfg: &config.FilterConfig{
-				GroupAvoid: []string{"E"},
+				GroupExcluded: []string{"E"},
 			},
-			parsed: &parser.ParsedRelease{
-				Group: "EPSiLON",
-			},
+			parsed:     &parser.ParsedRelease{Group: "EPSiLON"},
 			shouldPass: true,
 		},
 		{
-			name: "Avoid CiNE does match CiNE (exact)",
+			name: "Exclude CiNE does match CiNE (exact)",
 			cfg: &config.FilterConfig{
-				GroupAvoid: []string{"CiNE"},
+				GroupExcluded: []string{"CiNE"},
 			},
-			parsed: &parser.ParsedRelease{
-				Group: "CiNE",
-			},
+			parsed:     &parser.ParsedRelease{Group: "CiNE"},
 			shouldPass: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := checkGroup(tt.cfg, tt.parsed)
+			excluded := checkGroupExcluded(tt.cfg, tt.parsed)
+			required := checkGroupRequired(tt.cfg, tt.parsed)
+			result := !excluded && !required
 			if result != tt.shouldPass {
-				t.Errorf("checkGroup() = %v, want %v", result, tt.shouldPass)
+				t.Errorf("group filter = %v, want %v", result, tt.shouldPass)
 			}
 		})
 	}

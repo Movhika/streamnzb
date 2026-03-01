@@ -8,7 +8,7 @@ import (
 	"streamnzb/pkg/search/parser"
 )
 
-// Test Resolution Filtering
+// Test Resolution Filtering (3-tier: required / excluded)
 func TestCheckResolution(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -17,86 +17,74 @@ func TestCheckResolution(t *testing.T) {
 		shouldPass bool
 	}{
 		{
-			name: "1080p passes with include 1080p",
+			name: "1080p passes with required 1080p",
 			cfg: &config.FilterConfig{
-				ResolutionInclude: []string{"1080p", "4k"},
+				ResolutionRequired: []string{"1080p", "4k"},
 			},
-			parsed: &parser.ParsedRelease{
-				Resolution: "1080p",
-			},
+			parsed:     &parser.ParsedRelease{Resolution: "1080p"},
 			shouldPass: true,
 		},
 		{
-			name: "720p rejected with include only 1080p/4k",
+			name: "720p rejected with required only 1080p/4k",
 			cfg: &config.FilterConfig{
-				ResolutionInclude: []string{"1080p", "4k"},
+				ResolutionRequired: []string{"1080p", "4k"},
 			},
-			parsed: &parser.ParsedRelease{
-				Resolution: "720p",
-			},
+			parsed:     &parser.ParsedRelease{Resolution: "720p"},
 			shouldPass: false,
 		},
 		{
-			name: "SD/480p rejected with include only 1080p/4k",
+			name: "SD/480p rejected with required only 1080p/4k",
 			cfg: &config.FilterConfig{
-				ResolutionInclude: []string{"1080p", "4k"},
+				ResolutionRequired: []string{"1080p", "4k"},
 			},
-			parsed: &parser.ParsedRelease{
-				Resolution: "480p",
-			},
+			parsed:     &parser.ParsedRelease{Resolution: "480p"},
 			shouldPass: false,
 		},
 		{
-			name: "Empty resolution rejected when include set",
+			name: "Empty resolution rejected when required set",
 			cfg: &config.FilterConfig{
-				ResolutionInclude: []string{"1080p"},
+				ResolutionRequired: []string{"1080p"},
 			},
-			parsed: &parser.ParsedRelease{
-				Resolution: "",
-			},
+			parsed:     &parser.ParsedRelease{Resolution: ""},
 			shouldPass: false,
 		},
 		{
-			name: "Empty resolution allowed when no filter set",
-			cfg:  &config.FilterConfig{},
-			parsed: &parser.ParsedRelease{
-				Resolution: "",
-			},
+			name:       "Empty resolution allowed when no filter set",
+			cfg:        &config.FilterConfig{},
+			parsed:     &parser.ParsedRelease{Resolution: ""},
 			shouldPass: true,
 		},
 		{
-			name: "4K passes with include 4k",
+			name: "4K passes with required 4k",
 			cfg: &config.FilterConfig{
-				ResolutionInclude: []string{"4k", "1080p"},
+				ResolutionRequired: []string{"4k", "1080p"},
 			},
-			parsed: &parser.ParsedRelease{
-				Resolution: "2160p",
-			},
+			parsed:     &parser.ParsedRelease{Resolution: "2160p"},
 			shouldPass: true,
 		},
 		{
-			name: "4K rejected with avoid 4k",
+			name: "4K rejected with excluded 4k",
 			cfg: &config.FilterConfig{
-				ResolutionAvoid: []string{"4k"},
+				ResolutionExcluded: []string{"4k"},
 			},
-			parsed: &parser.ParsedRelease{
-				Resolution: "2160p",
-			},
+			parsed:     &parser.ParsedRelease{Resolution: "2160p"},
 			shouldPass: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := checkResolution(tt.cfg, tt.parsed)
+			excluded := checkResolutionExcluded(tt.cfg, tt.parsed)
+			required := checkResolutionRequired(tt.cfg, tt.parsed)
+			result := !excluded && !required
 			if result != tt.shouldPass {
-				t.Errorf("checkResolution() = %v, want %v", result, tt.shouldPass)
+				t.Errorf("resolution filter = %v, want %v", result, tt.shouldPass)
 			}
 		})
 	}
 }
 
-// Test Codec Filtering
+// Test Codec Filtering (3-tier: required / excluded)
 func TestCheckCodec(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -105,80 +93,68 @@ func TestCheckCodec(t *testing.T) {
 		shouldPass bool
 	}{
 		{
-			name: "H264 passes when allowed",
+			name: "H264 passes when required",
 			cfg: &config.FilterConfig{
-				CodecInclude: []string{"H264", "HEVC"},
+				CodecRequired: []string{"H264", "HEVC"},
 			},
-			parsed: &parser.ParsedRelease{
-				Codec: "H264",
-			},
+			parsed:     &parser.ParsedRelease{Codec: "H264"},
 			shouldPass: true,
 		},
 		{
-			name: "HEVC passes when allowed",
+			name: "HEVC passes when required",
 			cfg: &config.FilterConfig{
-				CodecInclude: []string{"H264", "HEVC"},
+				CodecRequired: []string{"H264", "HEVC"},
 			},
-			parsed: &parser.ParsedRelease{
-				Codec: "HEVC",
-			},
+			parsed:     &parser.ParsedRelease{Codec: "HEVC"},
 			shouldPass: true,
 		},
 		{
-			name: "AV1 rejected when only H264/HEVC allowed",
+			name: "AV1 rejected when only H264/HEVC required",
 			cfg: &config.FilterConfig{
-				CodecInclude: []string{"H264", "HEVC"},
+				CodecRequired: []string{"H264", "HEVC"},
 			},
-			parsed: &parser.ParsedRelease{
-				Codec: "AV1",
-			},
+			parsed:     &parser.ParsedRelease{Codec: "AV1"},
 			shouldPass: false,
 		},
 		{
-			name: "Empty codec rejected when allowed list set",
+			name: "Empty codec rejected when required list set",
 			cfg: &config.FilterConfig{
-				CodecInclude: []string{"H264", "HEVC"},
+				CodecRequired: []string{"H264", "HEVC"},
 			},
-			parsed: &parser.ParsedRelease{
-				Codec: "",
-			},
+			parsed:     &parser.ParsedRelease{Codec: ""},
 			shouldPass: false,
 		},
 		{
-			name: "Empty codec allowed when no filter set",
-			cfg:  &config.FilterConfig{},
-			parsed: &parser.ParsedRelease{
-				Codec: "",
-			},
+			name:       "Empty codec allowed when no filter set",
+			cfg:        &config.FilterConfig{},
+			parsed:     &parser.ParsedRelease{Codec: ""},
 			shouldPass: true,
 		},
 		{
-			name: "Blocked codec rejected",
+			name: "Excluded codec rejected",
 			cfg: &config.FilterConfig{
-				CodecAvoid: []string{"AV1"},
+				CodecExcluded: []string{"AV1"},
 			},
-			parsed: &parser.ParsedRelease{
-				Codec: "AV1",
-			},
+			parsed:     &parser.ParsedRelease{Codec: "AV1"},
 			shouldPass: false,
 		},
 		{
-			name: "Non-blocked codec passes",
+			name: "Non-excluded codec passes",
 			cfg: &config.FilterConfig{
-				CodecAvoid: []string{"AV1"},
+				CodecExcluded: []string{"AV1"},
 			},
-			parsed: &parser.ParsedRelease{
-				Codec: "H264",
-			},
+			parsed:     &parser.ParsedRelease{Codec: "H264"},
 			shouldPass: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := checkCodec(tt.cfg, tt.parsed)
+			excluded := checkCodecExcluded(tt.cfg, tt.parsed)
+			required := checkCodecRequired(tt.cfg, tt.parsed)
+			result := !excluded && !required
 			if result != tt.shouldPass {
-				t.Errorf("checkCodec() = %v, want %v", result, tt.shouldPass)
+				t.Errorf("codec filter = %v, want %v", result, tt.shouldPass)
 			}
 		})
 	}

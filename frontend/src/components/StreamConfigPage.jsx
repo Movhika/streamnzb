@@ -11,35 +11,42 @@ import { Loader2 } from "lucide-react"
 import { DefaultResolutionOrder, DefaultQualityOrder } from "@/constants/pttOptions"
 
 const defaultFilters = {
-  quality_include: [], quality_avoid: [], resolution_include: [], resolution_avoid: [],
-  codec_include: [], codec_avoid: [], audio_include: [], audio_avoid: [],
-  channels_include: [], channels_avoid: [], hdr_include: [], hdr_avoid: [],
-  three_d_include: [], three_d_avoid: [], bit_depth_include: [], bit_depth_avoid: [],
-  container_include: [], container_avoid: [], languages_include: [], languages_avoid: [],
-  edition_include: [], edition_avoid: [], network_include: [], network_avoid: [],
-  region_include: [], region_avoid: [], group_include: [], group_avoid: [],
-  dubbed_avoid: undefined, hardcoded_avoid: undefined, proper_include: undefined,
-  repack_include: undefined, repack_avoid: undefined, extended_include: undefined, unrated_include: undefined,
+  quality_included: [], quality_required: [], quality_excluded: [],
+  resolution_included: [], resolution_required: [], resolution_excluded: [],
+  codec_included: [], codec_required: [], codec_excluded: [],
+  audio_included: [], audio_required: [], audio_excluded: [],
+  channels_included: [], channels_required: [], channels_excluded: [],
+  hdr_included: [], hdr_required: [], hdr_excluded: [],
+  three_d_included: [], three_d_required: [], three_d_excluded: [],
+  bit_depth_included: [], bit_depth_required: [], bit_depth_excluded: [],
+  container_included: [], container_required: [], container_excluded: [],
+  languages_included: [], languages_required: [], languages_excluded: [],
+  edition_included: [], edition_required: [], edition_excluded: [],
+  network_included: [], network_required: [], network_excluded: [],
+  region_included: [], region_required: [], region_excluded: [],
+  group_included: [], group_required: [], group_excluded: [],
+  dubbed_excluded: undefined, hardcoded_excluded: undefined, proper_required: undefined,
+  repack_required: undefined, repack_excluded: undefined, extended_required: undefined, unrated_required: undefined,
   min_size_gb: 0, max_size_gb: 0, min_year: 0, max_year: 0
 }
 
 const defaultSorting = {
-  resolution_order: DefaultResolutionOrder,
-  quality_order: DefaultQualityOrder,
+  preferred_resolution: DefaultResolutionOrder,
+  preferred_quality: DefaultQualityOrder,
   grab_weight: 0.5,
   age_weight: 1.0,
-  codec_order: [],
-  audio_order: [],
-  visual_tag_order: [],
-  channels_order: [],
-  bit_depth_order: [],
-  container_order: [],
-  languages_order: [],
-  group_order: [],
-  edition_order: [],
-  network_order: [],
-  region_order: [],
-  three_d_order: []
+  preferred_codec: [],
+  preferred_audio: [],
+  preferred_visual_tag: [],
+  preferred_channels: [],
+  preferred_bit_depth: [],
+  preferred_container: [],
+  preferred_languages: [],
+  preferred_group: [],
+  preferred_edition: [],
+  preferred_network: [],
+  preferred_region: [],
+  preferred_three_d: []
 }
 
 function getApiUrl(path) {

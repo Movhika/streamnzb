@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,6 +13,7 @@ import (
 	"golang.org/x/net/html/charset"
 
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/media/fileutil"
 )
 
 type NZB struct {
@@ -65,15 +65,6 @@ func Parse(r io.Reader) (*NZB, error) {
 		return nil, err
 	}
 	return &nzb, nil
-}
-
-func ParseFile(path string) (*NZB, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return Parse(f)
 }
 
 // Password returns the archive password from the NZB head, if present.
@@ -401,7 +392,7 @@ func analyzeFile(file *File) *FileInfo {
 	if subject == "" {
 		subject = file.Poster
 	}
-	filename := ExtractFilename(subject)
+	filename := fileutil.ExtractFilename(subject)
 
 	// Calculate total size
 	var size int64
@@ -424,56 +415,15 @@ func analyzeFile(file *File) *FileInfo {
 	}
 
 	// Determine file type
-	info.IsVideo = isVideoExtension(ext)
+	info.IsVideo = fileutil.IsVideoOrArchiveExtension(ext)
 	info.IsSample = isSampleFile(filename)
 	info.IsExtra = isExtraFile(filename, ext)
 
 	return info
 }
 
-// ExtractFilename extracts the filename from an NZB subject line
-func ExtractFilename(subject string) string {
-	// Common patterns:
-	// "filename.mkv" yEnc (1/50)
-	// filename.mkv (1/50)
-	// [1/50] - "filename.mkv" yEnc
-
-	// Try to find quoted filename
-	if start := strings.Index(subject, "\""); start != -1 {
-		if end := strings.Index(subject[start+1:], "\""); end != -1 {
-			return subject[start+1 : start+1+end]
-		}
-	}
-
-	// Try to extract before yEnc or (1/50) pattern
-	subject = strings.TrimSpace(subject)
-
-	if idx := strings.Index(subject, " yEnc"); idx != -1 {
-		subject = subject[:idx]
-	}
-
-	if idx := strings.Index(subject, " ("); idx != -1 {
-		subject = subject[:idx]
-	}
-
-	return strings.Trim(subject, "\"' ")
-}
-
-// isVideoExtension checks if the extension is a video format
-func isVideoExtension(ext string) bool {
-	videoExts := map[string]bool{
-		".mkv": true, ".mp4": true, ".avi": true, ".m4v": true,
-		".mov": true, ".wmv": true, ".flv": true, ".webm": true,
-		".mpg": true, ".mpeg": true, ".m2ts": true, ".ts": true,
-		".iso": true, ".vob": true,
-		// Archives that likely contain video
-		".rar": true, ".7z": true,
-	}
-	return videoExts[ext] || isArchivePart(ext)
-}
-
+// isArchivePart returns true for .r00, .r01, .r99 (RAR volume naming).
 func isArchivePart(ext string) bool {
-	// Check for .r00, .r01, .r99 (RAR volume naming)
 	if len(ext) == 4 && strings.HasPrefix(ext, ".r") {
 		for _, c := range ext[2:] {
 			if c < '0' || c > '9' {

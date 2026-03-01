@@ -6,6 +6,8 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  useDraggable,
+  useDroppable,
 } from '@dnd-kit/core'
 import {
   arrayMove,
@@ -34,11 +36,60 @@ const SORT_CRITERIA_OPTIONS = [
   { key: 'codec', label: 'Codec' },
   { key: 'visual_tag', label: 'Visual tags' },
   { key: 'audio', label: 'Audio' },
+  { key: 'channels', label: 'Channels' },
+  { key: 'bit_depth', label: 'Bit depth' },
+  { key: 'container', label: 'Container' },
+  { key: 'languages', label: 'Languages' },
+  { key: 'group', label: 'Release group' },
+  { key: 'edition', label: 'Edition' },
+  { key: 'network', label: 'Network' },
+  { key: 'region', label: 'Region' },
+  { key: 'three_d', label: '3D' },
   { key: 'size', label: 'Size' },
+  { key: 'keywords', label: 'Keywords' },
+  { key: 'regex', label: 'Regex patterns' },
+  { key: 'availnzb', label: 'AvailNZB status' },
 ]
 
-/** Draggable pill for priority / preferred list */
-function SortablePill({ id, label, onRemove }) {
+const COL_SEP = '\u001f' // unit separator: columnId + COL_SEP + key (key can contain dashes)
+
+function parseDragId(dragId) {
+  const i = dragId.indexOf(COL_SEP)
+  if (i < 0) return { column: null, key: dragId }
+  return { column: dragId.slice(0, i), key: dragId.slice(i + 1) }
+}
+
+function makeDragId(column, key) {
+  return `${column}${COL_SEP}${key}`
+}
+
+/** Draggable chip for Included or Excluded column (no internal reorder). */
+function DraggableChip({ column, itemKey, label, onRemove, className, buttonClass }) {
+  const id = makeDragId(column, itemKey)
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id, data: { column, key: itemKey } })
+  const handleRemove = (e) => { e.stopPropagation(); onRemove(itemKey) }
+  return (
+    <span
+      ref={setNodeRef}
+      className={cn('inline-flex items-center gap-1 px-2 py-1 rounded text-xs border shrink-0 cursor-grab active:cursor-grabbing', className, isDragging && 'opacity-60')}
+      {...attributes}
+      {...listeners}
+    >
+      {label}
+      <button
+        type="button"
+        className={cn('rounded p-0.5 hover:opacity-80', buttonClass)}
+        onClick={handleRemove}
+        aria-label={`Remove ${label}`}
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </span>
+  )
+}
+
+/** Draggable + sortable pill for Preferred list; id must be makeDragId('preferred', key). */
+function SortablePill({ id, itemKey, label, onRemove }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -49,9 +100,9 @@ function SortablePill({ id, label, onRemove }) {
     <div
       ref={setNodeRef}
       style={style}
-      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border bg-muted/60 hover:bg-muted text-sm shrink-0"
+      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border bg-muted/60 hover:bg-muted text-sm shrink-0 cursor-grab active:cursor-grabbing"
     >
-      <span {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-muted-foreground">
+      <span {...attributes} {...listeners} className="text-muted-foreground flex">
         <GripVertical className="h-3.5 w-3.5" />
       </span>
       <span>{label}</span>
@@ -59,7 +110,7 @@ function SortablePill({ id, label, onRemove }) {
         <button
           type="button"
           className="rounded p-0.5 hover:bg-muted-foreground/20 text-muted-foreground hover:text-foreground"
-          onClick={() => onRemove(id)}
+          onClick={(e) => { e.stopPropagation(); onRemove(itemKey) }}
           aria-label={`Remove ${label}`}
         >
           <X className="h-3 w-3" />
@@ -69,21 +120,50 @@ function SortablePill({ id, label, onRemove }) {
   )
 }
 
-/** One category block: Preferred (order) + Excluded. Options shared, no duplicates. */
+function AddDropdown({ available, onAdd, align = "start", variant = "ghost", className }) {
+  if (available.length === 0) return null
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant={variant} size="sm" className={cn("h-7 gap-1", className)}>
+          <Plus className="h-3 w-3" />
+          Add
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align={align} className="max-h-[12rem] overflow-y-auto">
+        {available.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className="w-full cursor-pointer rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+            onClick={() => onAdd(item.key)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** Category block: Included (bypass) + Preferred (order) + Excluded. Drag between columns or reorder within Preferred. */
 function CategoryBlock({
   title,
+  includedValue,
+  onIncludedChange,
   orderValue,
   onOrderChange,
-  avoidValue,
-  onAvoidChange,
+  excludedValue,
+  onExcludedChange,
   items,
 }) {
+  const includedList = Array.isArray(includedValue) ? includedValue : []
   const orderList = Array.isArray(orderValue) ? orderValue : []
-  const avoidList = Array.isArray(avoidValue) ? avoidValue : []
-  const usedSet = new Set([...orderList, ...avoidList])
+  const excludedList = Array.isArray(excludedValue) ? excludedValue : []
+  const usedSet = new Set([...includedList, ...orderList, ...excludedList])
   const available = items.filter((i) => !usedSet.has(i.key))
   const orderWithLabels = orderList
-    .map((key) => ({ id: key, label: items.find((i) => i.key === key)?.label ?? key }))
+    .map((key) => ({ key, label: items.find((i) => i.key === key)?.label ?? key }))
     .filter((i) => i.label)
 
   const sensors = useSensors(
@@ -91,117 +171,141 @@ function CategoryBlock({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
-  const handleOrderDragEnd = (event) => {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
-    const oldIdx = orderList.indexOf(active.id)
-    const newIdx = orderList.indexOf(over.id)
-    if (oldIdx === -1 || newIdx === -1) return
-    onOrderChange(arrayMove([...orderList], oldIdx, newIdx))
+  const removeFromAll = (key) => {
+    if (includedList.includes(key)) onIncludedChange(includedList.filter((k) => k !== key))
+    if (orderList.includes(key)) onOrderChange(orderList.filter((k) => k !== key))
+    if (excludedList.includes(key)) onExcludedChange(excludedList.filter((k) => k !== key))
   }
 
-  const addToPreferred = (key) => {
-    if (!key || orderList.includes(key)) return
-    onOrderChange([...orderList, key])
-    if (avoidList.includes(key)) onAvoidChange(avoidList.filter((k) => k !== key))
+  const addToIncluded = (key) => {
+    if (!key || includedList.includes(key)) return
+    removeFromAll(key)
+    onIncludedChange([...includedList.filter((k) => k !== key), key])
+  }
+  const removeFromIncluded = (key) => onIncludedChange(includedList.filter((k) => k !== key))
+
+  const addToPreferred = (key, beforeKey = null) => {
+    removeFromAll(key)
+    if (beforeKey != null && orderList.includes(beforeKey)) {
+      const without = orderList.filter((k) => k !== key)
+      const idx = without.indexOf(beforeKey)
+      const insertIdx = idx < 0 ? without.length : idx
+      const next = [...without.slice(0, insertIdx), key, ...without.slice(insertIdx)]
+      onOrderChange(next)
+    } else {
+      onOrderChange([...orderList.filter((k) => k !== key), key])
+    }
   }
   const removeFromPreferred = (key) => onOrderChange(orderList.filter((k) => k !== key))
+
   const addToExcluded = (key) => {
-    if (!key || avoidList.includes(key)) return
-    onAvoidChange([...avoidList, key])
-    if (orderList.includes(key)) onOrderChange(orderList.filter((k) => k !== key))
+    if (!key || excludedList.includes(key)) return
+    removeFromAll(key)
+    onExcludedChange([...excludedList.filter((k) => k !== key), key])
   }
-  const removeFromExcluded = (key) => onAvoidChange(avoidList.filter((k) => k !== key))
+  const removeFromExcluded = (key) => onExcludedChange(excludedList.filter((k) => k !== key))
+  const preferredIds = orderList.map((k) => makeDragId('preferred', k))
+
+  const handleDragEnd = (event) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const activeStr = String(active.id)
+    const overStr = String(over.id)
+    const { column: sourceCol, key } = parseDragId(activeStr)
+    if (!key) return
+
+    if (overStr.startsWith('zone' + COL_SEP)) {
+      const targetCol = overStr.slice(5) // 'zone\x1f' -> rest is column name
+      if (targetCol === 'included') addToIncluded(key)
+      else if (targetCol === 'excluded') addToExcluded(key)
+      else if (targetCol === 'preferred') addToPreferred(key)
+      return
+    }
+
+    const overParsed = parseDragId(overStr)
+    if (overParsed.column === 'preferred' && overParsed.key) {
+      if (sourceCol === 'preferred') {
+        const oldIdx = orderList.indexOf(key)
+        const newIdx = orderList.indexOf(overParsed.key)
+        if (oldIdx !== -1 && newIdx !== -1) onOrderChange(arrayMove([...orderList], oldIdx, newIdx))
+      } else {
+        addToPreferred(key, overParsed.key)
+      }
+    }
+  }
 
   return (
     <div className="space-y-3 py-3 border-b border-border last:border-b-0">
       <h4 className="text-sm font-medium text-foreground">{title}</h4>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div>
-          <p className="text-xs text-muted-foreground mb-1.5">Preferred (left = first)</p>
-          <div className="flex flex-wrap gap-2 items-center min-h-[2.5rem] p-2 rounded-md border bg-background">
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleOrderDragEnd}>
-              <SortableContext items={orderList} strategy={horizontalListSortingStrategy}>
-                {orderWithLabels.map((item) => (
-                  <SortablePill
-                    key={item.id}
-                    id={item.id}
-                    label={item.label}
-                    onRemove={removeFromPreferred}
-                  />
-                ))}
-              </SortableContext>
-            </DndContext>
-            {available.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 text-muted-foreground">
-                    <Plus className="h-3.5 w-3.5" />
-                    Add
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="max-h-[12rem] overflow-y-auto">
-                  {available.map((item) => (
-                    <button
-                      key={item.key}
-                      type="button"
-                      className="w-full cursor-pointer rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => addToPreferred(item.key)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={preferredIds} strategy={horizontalListSortingStrategy}>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {/* Included (bypass) */}
+            <DroppableZone column="included" className="flex flex-wrap gap-1.5 min-h-[2.5rem] p-2 rounded-md border border-blue-500/30 bg-blue-500/5">
+              {includedList.map((k) => (
+                <DraggableChip
+                  key={k}
+                  column="included"
+                  itemKey={k}
+                  label={items.find((i) => i.key === k)?.label ?? k}
+                  onRemove={removeFromIncluded}
+                  className="bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-500/30"
+                  buttonClass="hover:bg-blue-500/30"
+                />
+              ))}
+              <AddDropdown available={available} onAdd={addToIncluded} className="text-blue-500/80 hover:text-blue-500" />
+            </DroppableZone>
+            {/* Preferred (sort order) */}
+            <DroppableZone column="preferred" className="flex flex-wrap gap-2 items-center min-h-[2.5rem] p-2 rounded-md border bg-background">
+              {orderWithLabels.map((item) => (
+                <SortablePill
+                  key={item.key}
+                  id={makeDragId('preferred', item.key)}
+                  itemKey={item.key}
+                  label={item.label}
+                  onRemove={removeFromPreferred}
+                />
+              ))}
+              <AddDropdown available={available} onAdd={addToPreferred} className="text-muted-foreground" />
+            </DroppableZone>
+            {/* Excluded */}
+            <DroppableZone column="excluded" className="flex flex-wrap gap-1.5 min-h-[2.5rem] p-2 rounded-md border border-destructive/30 bg-destructive/5">
+              {excludedList.map((k) => (
+                <DraggableChip
+                  key={k}
+                  column="excluded"
+                  itemKey={k}
+                  label={items.find((i) => i.key === k)?.label ?? k}
+                  onRemove={removeFromExcluded}
+                  className="bg-destructive/20 text-destructive border-destructive/30"
+                  buttonClass="hover:bg-destructive/30"
+                />
+              ))}
+              <AddDropdown available={available} onAdd={addToExcluded} align="end" className="text-destructive/80 hover:text-destructive" />
+            </DroppableZone>
           </div>
-        </div>
-        <div>
-          <p className="text-xs text-muted-foreground mb-1.5">Excluded</p>
-          <div className="flex flex-wrap gap-1.5 min-h-[2.5rem] p-2 rounded-md border border-destructive/30 bg-destructive/5">
-            {avoidList.map((key) => {
-              const label = items.find((i) => i.key === key)?.label ?? key
-              return (
-                <span
-                  key={key}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-destructive/20 text-destructive border border-destructive/30"
-                >
-                  {label}
-                  <button
-                    type="button"
-                    className="rounded p-0.5 hover:bg-destructive/30"
-                    onClick={() => removeFromExcluded(key)}
-                    aria-label={`Remove ${label} from excluded`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              )
-            })}
-            {available.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="ghost" size="sm" className="h-7 gap-1 text-destructive/80 hover:text-destructive">
-                    <Plus className="h-3 w-3" />
-                    Add
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="max-h-[12rem] overflow-y-auto">
-                  {available.map((item) => (
-                    <button
-                      key={item.key}
-                      type="button"
-                      className="w-full cursor-pointer rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
-                      onClick={() => addToExcluded(item.key)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
-        </div>
+        </SortableContext>
+      </DndContext>
+    </div>
+  )
+}
+
+function DroppableZone({ column, className, children }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `zone${COL_SEP}${column}` })
+  const zoneStyles = {
+    included: 'border border-blue-500/30 bg-blue-500/5',
+    preferred: 'border bg-background',
+    excluded: 'border border-destructive/30 bg-destructive/5',
+  }
+  return (
+    <div>
+      <p className={cn('text-xs mb-1.5', column === 'included' && 'text-blue-500', column === 'preferred' && 'text-muted-foreground', column === 'excluded' && 'text-destructive')}>
+        {column === 'included' && 'Included (bypass)'}
+        {column === 'preferred' && 'Preferred (left = first)'}
+        {column === 'excluded' && 'Excluded'}
+      </p>
+      <div ref={setNodeRef} className={cn(className, zoneStyles[column], isOver && 'ring-2 ring-primary ring-offset-2')}>
+        {children}
       </div>
     </div>
   )
@@ -299,7 +403,10 @@ export function ConfigComponent({ control, fieldPrefix = '', criteriaOrderValue,
       <CardHeader>
         <CardTitle className="text-lg">Filters &amp; sorting</CardTitle>
         <CardDescription>
-          Sort by: drag to set which category matters most (first = highest priority). Per category: set Preferred order and Excluded; each option can only be in one place.
+          Sort by: drag to set which category matters most (first = highest priority). Per category: set{' '}
+          <span className="text-blue-500 font-medium">Included</span> (bypass all filters),{' '}
+          <span className="font-medium">Preferred</span> order, and{' '}
+          <span className="text-destructive font-medium">Excluded</span>; each option can only be in one place.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -353,26 +460,34 @@ export function ConfigComponent({ control, fieldPrefix = '', criteriaOrderValue,
               <FormField
                 key={cat.key}
                 control={control}
-                name={getFieldName(cat.orderField)}
-                render={({ field: orderField }) => (
+                name={getFieldName(cat.includedField)}
+                render={({ field: includedField }) => (
                   <FormField
                     control={control}
-                    name={getFieldName(cat.avoidField)}
-                    render={({ field: avoidField }) => (
-                      <FormItem className="border-0 p-0 m-0">
-                        <FormControl>
-                          <div className="px-4">
-                            <CategoryBlock
-                              title={cat.label}
-                              orderValue={orderField.value}
-                              onOrderChange={orderField.onChange}
-                              avoidValue={avoidField.value}
-                              onAvoidChange={avoidField.onChange}
-                              items={cat.items}
-                            />
-                          </div>
-                        </FormControl>
-                      </FormItem>
+                    name={getFieldName(cat.orderField)}
+                    render={({ field: orderField }) => (
+                      <FormField
+                        control={control}
+                        name={getFieldName(cat.excludedField)}
+                        render={({ field: excludedField }) => (
+                          <FormItem className="border-0 p-0 m-0">
+                            <FormControl>
+                              <div className="px-4">
+                                <CategoryBlock
+                                  title={cat.label}
+                                  includedValue={includedField.value}
+                                  onIncludedChange={includedField.onChange}
+                                  orderValue={orderField.value}
+                                  onOrderChange={orderField.onChange}
+                                  excludedValue={excludedField.value}
+                                  onExcludedChange={excludedField.onChange}
+                                  items={cat.items}
+                                />
+                              </div>
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
                     )}
                   />
                 )}

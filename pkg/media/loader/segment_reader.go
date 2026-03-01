@@ -160,7 +160,7 @@ func (r *SegmentReader) startPrefetch() {
 			}()
 			_, err := r.file.DownloadSegment(r.ctx, segIdx)
 			if err != nil && !isContextErr(err) {
-				logger.Error("Prefetch failed", "seg", segIdx, "err", err)
+				logger.Trace("Prefetch failed", "seg", segIdx, "err", err)
 			}
 		}(idx)
 	}

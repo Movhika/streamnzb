@@ -51,10 +51,58 @@ var ResolutionGroupOptions = []string{"4k", "1080p", "720p", "sd"}
 // ThreeD options
 var ThreeDOptions = []string{"3D", "3D HSBS", "3D SBS", "3D HOU", "3D OU"}
 
-// LanguageOptions: special + ISO 639-1 (subset used in PTT)
+// LanguageOptions: special + ISO 639-1 (subset used in PTT). Stored in config; indexers often return full names (e.g. "English").
 var LanguageOptions = []string{
 	"multi subs", "multi audio", "dual audio",
 	"en", "ja", "ko", "zh", "zh-tw", "fr", "es", "es-419", "pt", "it", "de", "ru", "uk", "nl", "da", "fi", "sv", "no", "el", "lt", "lv", "et", "pl", "cs", "sk", "hu", "ro", "bg", "sr", "hr", "sl", "hi", "te", "ta", "ml", "kn", "mr", "gu", "pa", "bn", "vi", "id", "th", "ms", "ar", "tr", "he", "fa",
+}
+
+// languageFullNameToCode maps full language names (lowercase) to config/short code. Used to normalize UI or legacy config to codes.
+var languageFullNameToCode = map[string]string{
+	"multi subs": "multi subs", "multi audio": "multi audio", "dual audio": "dual audio",
+	"english": "en", "japanese": "ja", "korean": "ko", "chinese": "zh", "french": "fr", "spanish": "es",
+	"portuguese": "pt", "italian": "it", "german": "de", "russian": "ru", "ukrainian": "uk", "dutch": "nl",
+	"danish": "da", "finnish": "fi", "swedish": "sv", "norwegian": "no", "greek": "el", "lithuanian": "lt",
+	"latvian": "lv", "estonian": "et", "polish": "pl", "czech": "cs", "slovak": "sk", "hungarian": "hu",
+	"romanian": "ro", "bulgarian": "bg", "serbian": "sr", "croatian": "hr", "slovenian": "sl", "hindi": "hi",
+	"telugu": "te", "tamil": "ta", "malayalam": "ml", "kannada": "kn", "marathi": "mr", "gujarati": "gu",
+	"punjabi": "pa", "bengali": "bn", "vietnamese": "vi", "indonesian": "id", "thai": "th", "malay": "ms",
+	"arabic": "ar", "turkish": "tr", "hebrew": "he", "persian": "fa",
+}
+
+// NormalizeLanguageToCode returns the short code for the given value (full name or already a code). Unknown values are returned as-is.
+func NormalizeLanguageToCode(value string) string {
+	v := strings.TrimSpace(strings.ToLower(value))
+	if v == "" {
+		return value
+	}
+	if code, ok := languageFullNameToCode[v]; ok {
+		return code
+	}
+	// Already a known code (e.g. "en", "zh-tw")
+	for _, code := range LanguageOptions {
+		if strings.EqualFold(code, value) {
+			return code
+		}
+	}
+	return value
+}
+
+// NormalizeLanguageSlice converts full names to short codes so config stores canonical codes.
+func NormalizeLanguageSlice(s []string) []string {
+	if len(s) == 0 {
+		return s
+	}
+	out := make([]string, 0, len(s))
+	seen := make(map[string]bool)
+	for _, v := range s {
+		code := NormalizeLanguageToCode(v)
+		if code != "" && !seen[code] {
+			seen[code] = true
+			out = append(out, code)
+		}
+	}
+	return out
 }
 
 // Network options (streaming / broadcast)

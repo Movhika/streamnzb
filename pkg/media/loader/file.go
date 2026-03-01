@@ -357,7 +357,7 @@ func (f *File) doDownloadSegment(ctx context.Context, index int) ([]byte, error)
 	f.zeroFillCount++
 	f.zeroFillMu.Unlock()
 
-	logger.Debug("Segment failed on all providers, zero-filling", "index", index, "count", count+1, "max", MaxZeroFills, "err", lastErr)
+	logger.Trace("Segment failed on all providers, zero-filling", "index", index, "count", count+1, "max", MaxZeroFills, "err", lastErr)
 	size := int(seg.EndOffset - seg.StartOffset)
 	if size < 0 {
 		size = 0

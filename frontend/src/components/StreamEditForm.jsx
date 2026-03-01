@@ -18,41 +18,67 @@ import {
   HDROptions,
   ThreeDOptions,
   AudioOptions,
+  ChannelsOptions,
+  BitDepthOptions,
+  ContainerOptions,
+  EditionOptions,
+  NetworkOptions,
+  RegionOptions,
+  LanguageOptions,
+  languageCodeToName,
 } from "@/constants/pttOptions"
 
 const defaultFilters = {
-  quality_include: [], quality_avoid: [], resolution_include: [], resolution_avoid: [],
-  codec_include: [], codec_avoid: [], audio_include: [], audio_avoid: [],
-  channels_include: [], channels_avoid: [], hdr_include: [], hdr_avoid: [],
-  three_d_include: [], three_d_avoid: [], bit_depth_include: [], bit_depth_avoid: [],
-  container_include: [], container_avoid: [], languages_include: [], languages_avoid: [],
-  edition_include: [], edition_avoid: [], network_include: [], network_avoid: [],
-  region_include: [], region_avoid: [], group_include: [], group_avoid: [],
-  dubbed_avoid: undefined, hardcoded_avoid: undefined, proper_include: undefined,
-  repack_include: undefined, repack_avoid: undefined, extended_include: undefined, unrated_include: undefined,
-  min_size_gb: 0, max_size_gb: 0, min_year: 0, max_year: 0
+  quality_included: [], quality_required: [], quality_excluded: [],
+  resolution_included: [], resolution_required: [], resolution_excluded: [],
+  codec_included: [], codec_required: [], codec_excluded: [],
+  audio_included: [], audio_required: [], audio_excluded: [],
+  channels_included: [], channels_required: [], channels_excluded: [],
+  hdr_included: [], hdr_required: [], hdr_excluded: [],
+  three_d_included: [], three_d_required: [], three_d_excluded: [],
+  bit_depth_included: [], bit_depth_required: [], bit_depth_excluded: [],
+  container_included: [], container_required: [], container_excluded: [],
+  languages_included: [], languages_required: [], languages_excluded: [],
+  edition_included: [], edition_required: [], edition_excluded: [],
+  network_included: [], network_required: [], network_excluded: [],
+  region_included: [], region_required: [], region_excluded: [],
+  group_included: [], group_required: [], group_excluded: [],
+  dubbed_excluded: undefined, hardcoded_excluded: undefined, proper_required: undefined,
+  repack_required: undefined, repack_excluded: undefined, extended_required: undefined, unrated_required: undefined,
+  min_size_gb: 0, max_size_gb: 0, min_year: 0, max_year: 0,
+  min_age_hours: 0, max_age_hours: 0,
+  keywords_excluded: [], keywords_required: [],
+  regex_excluded: [], regex_required: [],
+  availnzb_required: undefined,
+  size_per_resolution: {},
+  min_bitrate_kbps: 0, max_bitrate_kbps: 0
 }
 
-const defaultSortCriteriaOrder = ['resolution', 'quality', 'codec', 'visual_tag', 'audio', 'size']
+const defaultSortCriteriaOrder = ['resolution', 'quality', 'codec', 'visual_tag', 'audio', 'channels', 'bit_depth', 'container', 'languages', 'group', 'edition', 'network', 'region', 'three_d', 'size', 'keywords', 'regex', 'availnzb']
 
 const defaultSorting = {
   sort_criteria_order: defaultSortCriteriaOrder,
-  resolution_order: DefaultResolutionOrder,
-  quality_order: DefaultQualityOrder,
-  codec_order: [],
+  preferred_resolution: DefaultResolutionOrder,
+  preferred_quality: DefaultQualityOrder,
+  preferred_codec: [],
   grab_weight: 0.5,
   age_weight: 1.0,
-  audio_order: [],
-  visual_tag_order: [],
-  channels_order: [],
-  bit_depth_order: [],
-  container_order: [],
-  languages_order: [],
-  group_order: [],
-  edition_order: [],
-  network_order: [],
-  region_order: [],
-  three_d_order: []
+  keywords_preferred: [],
+  keywords_weight: 0,
+  regex_preferred: [],
+  regex_weight: 0,
+  availnzb_weight: 0,
+  preferred_audio: [],
+  preferred_visual_tag: [],
+  preferred_channels: [],
+  preferred_bit_depth: [],
+  preferred_container: [],
+  preferred_languages: [],
+  preferred_group: [],
+  preferred_edition: [],
+  preferred_network: [],
+  preferred_region: [],
+  preferred_three_d: []
 }
 
 function toItems(options, labelMap = {}) {
@@ -60,11 +86,19 @@ function toItems(options, labelMap = {}) {
 }
 
 const aioStyleCategories = [
-  { key: 'resolution', label: 'Resolution', orderField: 'sorting.resolution_order', avoidField: 'filters.resolution_avoid', items: toItems(ResolutionGroupOptions, resolutionGroupLabels) },
-  { key: 'quality', label: 'Source quality', orderField: 'sorting.quality_order', avoidField: 'filters.quality_avoid', items: toItems(QualityOptions) },
-  { key: 'codec', label: 'Codec', orderField: 'sorting.codec_order', avoidField: 'filters.codec_avoid', items: toItems(CodecOptions) },
-  { key: 'visual_tag', label: 'Visual tags (HDR / 3D)', orderField: 'sorting.visual_tag_order', avoidField: 'filters.hdr_avoid', items: toItems([...HDROptions, ...ThreeDOptions]) },
-  { key: 'audio', label: 'Audio', orderField: 'sorting.audio_order', avoidField: 'filters.audio_avoid', items: toItems(AudioOptions) },
+  { key: 'resolution', label: 'Resolution', includedField: 'filters.resolution_included', orderField: 'sorting.preferred_resolution', excludedField: 'filters.resolution_excluded', items: toItems(ResolutionGroupOptions, resolutionGroupLabels) },
+  { key: 'quality', label: 'Source quality', includedField: 'filters.quality_included', orderField: 'sorting.preferred_quality', excludedField: 'filters.quality_excluded', items: toItems(QualityOptions) },
+  { key: 'codec', label: 'Codec', includedField: 'filters.codec_included', orderField: 'sorting.preferred_codec', excludedField: 'filters.codec_excluded', items: toItems(CodecOptions) },
+  { key: 'audio', label: 'Audio', includedField: 'filters.audio_included', orderField: 'sorting.preferred_audio', excludedField: 'filters.audio_excluded', items: toItems(AudioOptions) },
+  { key: 'channels', label: 'Channels', includedField: 'filters.channels_included', orderField: 'sorting.preferred_channels', excludedField: 'filters.channels_excluded', items: toItems(ChannelsOptions) },
+  { key: 'visual_tag', label: 'Visual tags (HDR / SDR)', includedField: 'filters.hdr_included', orderField: 'sorting.preferred_visual_tag', excludedField: 'filters.hdr_excluded', items: toItems(HDROptions) },
+  { key: 'three_d', label: '3D', includedField: 'filters.three_d_included', orderField: 'sorting.preferred_three_d', excludedField: 'filters.three_d_excluded', items: toItems(ThreeDOptions) },
+  { key: 'bit_depth', label: 'Bit depth', includedField: 'filters.bit_depth_included', orderField: 'sorting.preferred_bit_depth', excludedField: 'filters.bit_depth_excluded', items: toItems(BitDepthOptions) },
+  { key: 'container', label: 'Container', includedField: 'filters.container_included', orderField: 'sorting.preferred_container', excludedField: 'filters.container_excluded', items: toItems(ContainerOptions) },
+  { key: 'languages', label: 'Languages', includedField: 'filters.languages_included', orderField: 'sorting.preferred_languages', excludedField: 'filters.languages_excluded', items: toItems(LanguageOptions, languageCodeToName) },
+  { key: 'edition', label: 'Edition', includedField: 'filters.edition_included', orderField: 'sorting.preferred_edition', excludedField: 'filters.edition_excluded', items: toItems(EditionOptions) },
+  { key: 'network', label: 'Network', includedField: 'filters.network_included', orderField: 'sorting.preferred_network', excludedField: 'filters.network_excluded', items: toItems(NetworkOptions) },
+  { key: 'region', label: 'Region', includedField: 'filters.region_included', orderField: 'sorting.preferred_region', excludedField: 'filters.region_excluded', items: toItems(RegionOptions) },
   { type: 'size', minField: 'filters.min_size_gb', maxField: 'filters.max_size_gb' },
 ]
 
@@ -116,8 +150,17 @@ export function StreamEditForm({ streamId, onSaved, onCancel }) {
       .then((data) => {
         if (data) {
           const loadedSorting = { ...defaultSorting, ...(data.sorting || {}) }
-          if (!Array.isArray(loadedSorting.sort_criteria_order) || loadedSorting.sort_criteria_order.length === 0) {
+          const savedOrder = Array.isArray(loadedSorting.sort_criteria_order) ? loadedSorting.sort_criteria_order : []
+          if (savedOrder.length === 0) {
             loadedSorting.sort_criteria_order = defaultSortCriteriaOrder
+          } else {
+            // Merge in any categories from the full default list that are missing (e.g. after adding new sort criteria).
+            const fullSet = new Set(defaultSortCriteriaOrder)
+            const seen = new Set(savedOrder)
+            const appended = defaultSortCriteriaOrder.filter((k) => !seen.has(k))
+            if (appended.length > 0) {
+              loadedSorting.sort_criteria_order = [...savedOrder, ...appended]
+            }
           }
           reset({
             name: data.name ?? data.id ?? 'Stream',

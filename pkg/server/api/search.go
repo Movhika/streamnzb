@@ -198,24 +198,33 @@ func (s *Server) handleTMDBTV(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-func (s *Server) handleStreams(w http.ResponseWriter, r *http.Request) {
+// parseStreamRequest validates GET, auth, and type/id query params. On failure writes the response and returns ok false.
+func (s *Server) parseStreamRequest(w http.ResponseWriter, r *http.Request) (contentType, id string, device *auth.Device, ok bool) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+		return "", "", nil, false
 	}
-	device, ok := auth.DeviceFromContext(r)
-	if !ok {
+	device, authOk := auth.DeviceFromContext(r)
+	if !authOk {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+		return "", "", nil, false
 	}
-	contentType := r.URL.Query().Get("type")
-	id := r.URL.Query().Get("id")
+	contentType = r.URL.Query().Get("type")
+	id = r.URL.Query().Get("id")
 	if contentType == "" || id == "" {
 		http.Error(w, "type and id are required", http.StatusBadRequest)
-		return
+		return "", "", nil, false
 	}
 	if contentType != "movie" && contentType != "series" {
 		http.Error(w, "type must be movie or series", http.StatusBadRequest)
+		return "", "", nil, false
+	}
+	return contentType, id, device, true
+}
+
+func (s *Server) handleStreams(w http.ResponseWriter, r *http.Request) {
+	contentType, id, device, ok := s.parseStreamRequest(w, r)
+	if !ok {
 		return
 	}
 	streams, err := s.strmServer.GetStreams(r.Context(), contentType, id, device)
@@ -229,23 +238,8 @@ func (s *Server) handleStreams(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStreamsAvail(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	device, ok := auth.DeviceFromContext(r)
+	contentType, id, device, ok := s.parseStreamRequest(w, r)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	contentType := r.URL.Query().Get("type")
-	id := r.URL.Query().Get("id")
-	if contentType == "" || id == "" {
-		http.Error(w, "type and id are required", http.StatusBadRequest)
-		return
-	}
-	if contentType != "movie" && contentType != "series" {
-		http.Error(w, "type must be movie or series", http.StatusBadRequest)
 		return
 	}
 	streams, err := s.strmServer.GetAvailNZBStreams(r.Context(), contentType, id, device)
@@ -260,22 +254,8 @@ func (s *Server) handleStreamsAvail(w http.ResponseWriter, r *http.Request) {
 
 // handleSearchReleases returns all releases (indexer + AvailNZB) for a title with availability and per-stream tags.
 func (s *Server) handleSearchReleases(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if _, ok := auth.DeviceFromContext(r); !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	contentType := r.URL.Query().Get("type")
-	id := r.URL.Query().Get("id")
-	if contentType == "" || id == "" {
-		http.Error(w, "type and id are required", http.StatusBadRequest)
-		return
-	}
-	if contentType != "movie" && contentType != "series" {
-		http.Error(w, "type must be movie or series", http.StatusBadRequest)
+	contentType, id, _, ok := s.parseStreamRequest(w, r)
+	if !ok {
 		return
 	}
 	result, err := s.strmServer.GetSearchReleases(r.Context(), contentType, id)

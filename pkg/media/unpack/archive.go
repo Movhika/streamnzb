@@ -43,7 +43,7 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 			return s, name, size, bp, err
 		case *SevenZipBlueprint:
 			logger.Debug("Using cached 7z blueprint", "file", bp.MainFileName)
-			s, n, sz, err := Open7zStreamFromBlueprint(ctx, bp, password)
+			s, n, sz, err := Open7zStreamFromBlueprint(ctx, files, bp, password)
 			return s, n, sz, bp, err
 		case *DirectBlueprint:
 			if bp.FileIndex < len(files) {
@@ -74,7 +74,7 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 	}
 
 	if len(rarFiles) > 0 {
-		logger.Info("Detected RAR archive", "volumes", len(rarFiles))
+		logger.Trace("Detected RAR archive", "volumes", len(rarFiles))
 		unpackables := make([]UnpackableFile, len(files))
 		for i, f := range files {
 			unpackables[i] = f
@@ -100,7 +100,7 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 			if err != nil {
 				return nil, "", 0, nil, err
 			}
-			s, n, sz, err := Open7zStreamFromBlueprint(ctx, newBp, password)
+			s, n, sz, err := Open7zStreamFromBlueprint(ctx, files, newBp, password)
 			return s, n, sz, newBp, err
 		}
 	}

@@ -105,6 +105,9 @@ type Item struct {
 
 	// QuerySource is "id" or "text" when using ForceQuery dual search. Used to prioritize ID-based results.
 	QuerySource string `xml:"-"`
+
+	// Duration in seconds (0 = unknown). Populated by Easynews; Newznab does not provide this.
+	Duration float64 `xml:"-"`
 }
 
 // Attribute represents Newznab attributes
@@ -166,6 +169,7 @@ func (i *Item) ToRelease() *release.Release {
 		QuerySource:   i.QuerySource,
 		Grabs:         grabs,
 		Languages:     languages,
+		Duration:      i.Duration,
 	}
 }
 

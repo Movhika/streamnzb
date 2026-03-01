@@ -29,23 +29,23 @@ type Provider struct {
 	Enabled     *bool  `json:"enabled,omitempty"`  // Whether this provider is enabled. nil = not set (old config)
 }
 
-// FilterConfig and SortConfig are defined in config_filter_sort.go (Include/Avoid and Order lists with legacy JSON migration).
+// FilterConfig and SortConfig are defined in config_filter_sort.go (Included/Required/Excluded and Preferred lists with legacy JSON migration).
 
-// DefaultFilterConfig returns built-in filter defaults (Avoid CAM/TeleSync).
+// DefaultFilterConfig returns built-in filter defaults (Exclude CAM/TeleSync, exclude dubbed).
 func DefaultFilterConfig() FilterConfig {
 	return FilterConfig{
-		QualityAvoid: []string{"CAM", "TeleSync"},
-		DubbedAvoid:  ptrBool(true),
+		QualityExcluded: []string{"CAM", "TeleSync"},
+		DubbedExcluded:  ptrBool(true),
 	}
 }
 
 func DefaultSortConfig() SortConfig {
 	return SortConfig{
-		ResolutionOrder:   []string{"4k", "1080p", "720p", "sd"},
-		QualityOrder:      []string{"BluRay", "Blu-ray", "WEB-DL", "WEBRip", "HDTV"},
-		SortCriteriaOrder: []string{"resolution", "quality", "codec", "visual_tag", "audio", "channels"},
-		GrabWeight:        0.5,
-		AgeWeight:         1.0,
+		PreferredResolution: []string{"4k", "1080p", "720p", "sd"},
+		PreferredQuality:    []string{"BluRay", "Blu-ray", "WEB-DL", "WEBRip", "HDTV"},
+		SortCriteriaOrder:   []string{"resolution", "quality", "codec", "visual_tag", "audio", "channels"},
+		GrabWeight:           0.5,
+		AgeWeight:            1.0,
 	}
 }
 

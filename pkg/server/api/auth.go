@@ -170,39 +170,48 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// hasCustomFilters checks if user has custom filter configuration (Include/Avoid).
+// hasCustomFilters checks if user has custom filter configuration (Included/Required/Excluded).
 func hasCustomFilters(filters config.FilterConfig) bool {
-	return len(filters.AudioInclude) > 0 || len(filters.AudioAvoid) > 0 ||
-		len(filters.BitDepthInclude) > 0 || len(filters.BitDepthAvoid) > 0 ||
-		len(filters.ChannelsInclude) > 0 || len(filters.ChannelsAvoid) > 0 ||
-		len(filters.CodecInclude) > 0 || len(filters.CodecAvoid) > 0 ||
-		len(filters.ContainerInclude) > 0 || len(filters.ContainerAvoid) > 0 ||
-		len(filters.EditionInclude) > 0 || len(filters.EditionAvoid) > 0 ||
-		len(filters.HDRInclude) > 0 || len(filters.HDRAvoid) > 0 ||
-		len(filters.LanguagesInclude) > 0 || len(filters.LanguagesAvoid) > 0 ||
-		len(filters.NetworkInclude) > 0 || len(filters.NetworkAvoid) > 0 ||
-		len(filters.QualityInclude) > 0 || len(filters.QualityAvoid) > 0 ||
-		len(filters.RegionInclude) > 0 || len(filters.RegionAvoid) > 0 ||
-		len(filters.ResolutionInclude) > 0 || len(filters.ResolutionAvoid) > 0 ||
-		len(filters.ThreeDInclude) > 0 || len(filters.ThreeDAvoid) > 0 ||
-		len(filters.GroupInclude) > 0 || len(filters.GroupAvoid) > 0 ||
-		filters.DubbedAvoid != nil || filters.HardcodedAvoid != nil ||
-		filters.ProperInclude != nil || filters.RepackInclude != nil || filters.RepackAvoid != nil ||
-		filters.ExtendedInclude != nil || filters.UnratedInclude != nil ||
+	return len(filters.AudioIncluded) > 0 || len(filters.AudioRequired) > 0 || len(filters.AudioExcluded) > 0 ||
+		len(filters.BitDepthIncluded) > 0 || len(filters.BitDepthRequired) > 0 || len(filters.BitDepthExcluded) > 0 ||
+		len(filters.ChannelsIncluded) > 0 || len(filters.ChannelsRequired) > 0 || len(filters.ChannelsExcluded) > 0 ||
+		len(filters.CodecIncluded) > 0 || len(filters.CodecRequired) > 0 || len(filters.CodecExcluded) > 0 ||
+		len(filters.ContainerIncluded) > 0 || len(filters.ContainerRequired) > 0 || len(filters.ContainerExcluded) > 0 ||
+		len(filters.EditionIncluded) > 0 || len(filters.EditionRequired) > 0 || len(filters.EditionExcluded) > 0 ||
+		len(filters.HDRIncluded) > 0 || len(filters.HDRRequired) > 0 || len(filters.HDRExcluded) > 0 ||
+		len(filters.LanguagesIncluded) > 0 || len(filters.LanguagesRequired) > 0 || len(filters.LanguagesExcluded) > 0 ||
+		len(filters.NetworkIncluded) > 0 || len(filters.NetworkRequired) > 0 || len(filters.NetworkExcluded) > 0 ||
+		len(filters.QualityIncluded) > 0 || len(filters.QualityRequired) > 0 || len(filters.QualityExcluded) > 0 ||
+		len(filters.RegionIncluded) > 0 || len(filters.RegionRequired) > 0 || len(filters.RegionExcluded) > 0 ||
+		len(filters.ResolutionIncluded) > 0 || len(filters.ResolutionRequired) > 0 || len(filters.ResolutionExcluded) > 0 ||
+		len(filters.ThreeDIncluded) > 0 || len(filters.ThreeDRequired) > 0 || len(filters.ThreeDExcluded) > 0 ||
+		len(filters.GroupIncluded) > 0 || len(filters.GroupRequired) > 0 || len(filters.GroupExcluded) > 0 ||
+		filters.DubbedExcluded != nil || filters.HardcodedExcluded != nil ||
+		filters.ProperRequired != nil || filters.RepackRequired != nil || filters.RepackExcluded != nil ||
+		filters.ExtendedRequired != nil || filters.UnratedRequired != nil ||
 		filters.MinSizeGB > 0 || filters.MaxSizeGB > 0 ||
-		filters.MinYear > 0 || filters.MaxYear > 0
+		filters.MinYear > 0 || filters.MaxYear > 0 ||
+		filters.MinAgeHours > 0 || filters.MaxAgeHours > 0 ||
+		len(filters.KeywordsExcluded) > 0 || len(filters.KeywordsRequired) > 0 ||
+		len(filters.RegexExcluded) > 0 || len(filters.RegexRequired) > 0 ||
+		filters.AvailNZBRequired != nil ||
+		len(filters.SizePerResolution) > 0 ||
+		filters.MinBitrateKbps > 0 || filters.MaxBitrateKbps > 0
 }
 
-// hasCustomSorting checks if user has custom sorting (order lists, weights, or custom scoring).
+// hasCustomSorting checks if user has custom sorting (preferred lists, weights, or custom scoring).
 func hasCustomSorting(sorting config.SortConfig) bool {
-	return len(sorting.ResolutionOrder) > 0 || len(sorting.CodecOrder) > 0 ||
-		len(sorting.AudioOrder) > 0 || len(sorting.QualityOrder) > 0 ||
-		len(sorting.VisualTagOrder) > 0 || len(sorting.ChannelsOrder) > 0 ||
-		len(sorting.BitDepthOrder) > 0 || len(sorting.ContainerOrder) > 0 ||
-		len(sorting.LanguagesOrder) > 0 || len(sorting.GroupOrder) > 0 ||
-		len(sorting.EditionOrder) > 0 || len(sorting.NetworkOrder) > 0 ||
-		len(sorting.RegionOrder) > 0 || len(sorting.ThreeDOrder) > 0 ||
+	return len(sorting.PreferredResolution) > 0 || len(sorting.PreferredCodec) > 0 ||
+		len(sorting.PreferredAudio) > 0 || len(sorting.PreferredQuality) > 0 ||
+		len(sorting.PreferredVisualTag) > 0 || len(sorting.PreferredChannels) > 0 ||
+		len(sorting.PreferredBitDepth) > 0 || len(sorting.PreferredContainer) > 0 ||
+		len(sorting.PreferredLanguages) > 0 || len(sorting.PreferredGroup) > 0 ||
+		len(sorting.PreferredEdition) > 0 || len(sorting.PreferredNetwork) > 0 ||
+		len(sorting.PreferredRegion) > 0 || len(sorting.PreferredThreeD) > 0 ||
 		sorting.GrabWeight != 0 || sorting.AgeWeight != 0 ||
+		len(sorting.KeywordsPreferred) > 0 || sorting.KeywordsWeight != 0 ||
+		len(sorting.RegexPreferred) > 0 || sorting.RegexWeight != 0 ||
+		sorting.AvailNZBWeight != 0 ||
 		(sorting.UseCustomScoring != nil && *sorting.UseCustomScoring) ||
 		len(sorting.GroupOrderTier1) > 0 || len(sorting.GroupOrderTier2) > 0 || len(sorting.GroupOrderTier3) > 0
 }

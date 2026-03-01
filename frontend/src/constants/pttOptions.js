@@ -33,10 +33,66 @@ export const HDROptions = ['DV', 'HDR10+', 'HDR', 'SDR']
 
 export const ThreeDOptions = ['3D', '3D HSBS', '3D SBS', '3D HOU', '3D OU']
 
+/** Language option values stored in config and sent to backend (short codes / special tokens). */
 export const LanguageOptions = [
   'multi subs', 'multi audio', 'dual audio',
   'en', 'ja', 'ko', 'zh', 'zh-tw', 'fr', 'es', 'es-419', 'pt', 'it', 'de', 'ru', 'uk', 'nl', 'da', 'fi', 'sv', 'no', 'el', 'lt', 'lv', 'et', 'pl', 'cs', 'sk', 'hu', 'ro', 'bg', 'sr', 'hr', 'sl', 'hi', 'te', 'ta', 'ml', 'kn', 'mr', 'gu', 'pa', 'bn', 'vi', 'id', 'th', 'ms', 'ar', 'tr', 'he', 'fa'
 ]
+
+/** Map language code (or special token) → full name for UI display. Backend stores codes. */
+export const languageCodeToName = {
+  'multi subs': 'Multi subs',
+  'multi audio': 'Multi audio',
+  'dual audio': 'Dual audio',
+  en: 'English',
+  ja: 'Japanese',
+  ko: 'Korean',
+  zh: 'Chinese',
+  'zh-tw': 'Chinese (Taiwan)',
+  fr: 'French',
+  es: 'Spanish',
+  'es-419': 'Spanish (Latin America)',
+  pt: 'Portuguese',
+  it: 'Italian',
+  de: 'German',
+  ru: 'Russian',
+  uk: 'Ukrainian',
+  nl: 'Dutch',
+  da: 'Danish',
+  fi: 'Finnish',
+  sv: 'Swedish',
+  no: 'Norwegian',
+  el: 'Greek',
+  lt: 'Lithuanian',
+  lv: 'Latvian',
+  et: 'Estonian',
+  pl: 'Polish',
+  cs: 'Czech',
+  sk: 'Slovak',
+  hu: 'Hungarian',
+  ro: 'Romanian',
+  bg: 'Bulgarian',
+  sr: 'Serbian',
+  hr: 'Croatian',
+  sl: 'Slovenian',
+  hi: 'Hindi',
+  te: 'Telugu',
+  ta: 'Tamil',
+  ml: 'Malayalam',
+  kn: 'Kannada',
+  mr: 'Marathi',
+  gu: 'Gujarati',
+  pa: 'Punjabi',
+  bn: 'Bengali',
+  vi: 'Vietnamese',
+  id: 'Indonesian',
+  th: 'Thai',
+  ms: 'Malay',
+  ar: 'Arabic',
+  tr: 'Turkish',
+  he: 'Hebrew',
+  fa: 'Persian'
+}
 
 export const EditionOptions = [
   "Anniversary Edition", "Ultimate Edition", "Director's Cut", "Extended Edition",

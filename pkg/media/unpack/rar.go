@@ -860,13 +860,13 @@ func filterRarFiles(files []UnpackableFile) []UnpackableFile {
 		name := ExtractFilename(f.Name())
 		lower := strings.ToLower(name)
 		if strings.HasSuffix(lower, ExtPar2) {
-			logger.Debug("filterRarFiles: skip par2", "name", name)
+			logger.Trace("filterRarFiles: skip par2", "name", name)
 			continue
 		}
 		if strings.HasSuffix(lower, ExtRar) || strings.Contains(lower, ".part") || IsRarPart(lower) || IsSplitArchivePart(lower) {
 			result = append(result, f)
 		} else {
-			logger.Debug("filterRarFiles: skip non-rar", "name", name)
+			logger.Trace("filterRarFiles: skip non-rar", "name", name)
 		}
 	}
 	return result
@@ -877,15 +877,15 @@ func filterFirstVolumes(files []UnpackableFile) []UnpackableFile {
 	for _, f := range files {
 		name := strings.ToLower(ExtractFilename(f.Name()))
 		if strings.HasSuffix(name, ExtRar) && !strings.Contains(name, ".part") && !strings.Contains(name, ".r0") {
-			logger.Debug("filterFirstVolumes: accept .rar first vol", "name", name)
+			logger.Trace("filterFirstVolumes: accept .rar first vol", "name", name)
 			result = append(result, f)
 			continue
 		}
 		if IsMiddleRarVolume(name) {
-			logger.Debug("filterFirstVolumes: skip middle vol", "name", name)
+			logger.Trace("filterFirstVolumes: skip middle vol", "name", name)
 			continue
 		}
-		logger.Debug("filterFirstVolumes: accept fallthrough", "name", name)
+		logger.Trace("filterFirstVolumes: accept fallthrough", "name", name)
 		result = append(result, f)
 	}
 	return result

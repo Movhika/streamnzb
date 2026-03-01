@@ -200,8 +200,22 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize stream manager: %v", err))
 	}
 
-	stremioServer, err := stremio.NewServer(comp.Config, comp.Config.AddonBaseURL, comp.Config.AddonPort, comp.Indexer, comp.Validator,
-		sessionManager, comp.Triage, comp.AvailClient, comp.AvailNZBIndexerHosts, comp.TMDBClient, comp.TVDBClient, deviceManager, streamManager, Version)
+	stremioServer, err := stremio.NewServer(&stremio.ServerOptions{
+		Config:               comp.Config,
+		BaseURL:              comp.Config.AddonBaseURL,
+		Port:                 comp.Config.AddonPort,
+		Indexer:              comp.Indexer,
+		Validator:            comp.Validator,
+		SessionManager:       sessionManager,
+		TriageService:        comp.Triage,
+		AvailClient:          comp.AvailClient,
+		AvailNZBIndexerHosts: comp.AvailNZBIndexerHosts,
+		TMDBClient:           comp.TMDBClient,
+		TVDBClient:            comp.TVDBClient,
+		DeviceManager:        deviceManager,
+		StreamManager:        streamManager,
+		Version:              Version,
+	})
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize Stremio server: %v", err))
 	}

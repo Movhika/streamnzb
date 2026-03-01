@@ -16,6 +16,7 @@ import {
   BitDepthOptions,
   ContainerOptions,
   LanguageOptions,
+  languageCodeToName,
   EditionOptions,
   NetworkOptions,
   RegionOptions,
@@ -53,7 +54,7 @@ const visualTagItems = toItems([...HDROptions, ...ThreeDOptions])
 const channelsItems = toItems(ChannelsOptions)
 const bitDepthItems = toItems(BitDepthOptions)
 const containerItems = toItems(ContainerOptions)
-const languagesItems = toItems(LanguageOptions)
+const languagesItems = toItems(LanguageOptions, languageCodeToName)
 const editionItems = toItems(EditionOptions)
 const networkItems = toItems(NetworkOptions)
 const regionItems = toItems(RegionOptions)
@@ -86,7 +87,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
       <CardContent className="space-y-6">
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.resolution_order")}
+          name={getFieldName("sorting.preferred_resolution")}
           render={({ field }) => (
             <PriorityList
               items={resolutionItems}
@@ -99,7 +100,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.codec_order")}
+          name={getFieldName("sorting.preferred_codec")}
           render={({ field }) => (
             <PriorityList
               items={codecItems}
@@ -112,7 +113,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.audio_order")}
+          name={getFieldName("sorting.preferred_audio")}
           render={({ field }) => (
             <PriorityList
               items={audioItems}
@@ -125,7 +126,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.quality_order")}
+          name={getFieldName("sorting.preferred_quality")}
           render={({ field }) => (
             <PriorityList
               items={qualityItems}
@@ -138,7 +139,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.visual_tag_order")}
+          name={getFieldName("sorting.preferred_visual_tag")}
           render={({ field }) => (
             <PriorityList
               items={visualTagItems}
@@ -151,7 +152,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.channels_order")}
+          name={getFieldName("sorting.preferred_channels")}
           render={({ field }) => (
             <PriorityList
               items={channelsItems}
@@ -164,7 +165,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.bit_depth_order")}
+          name={getFieldName("sorting.preferred_bit_depth")}
           render={({ field }) => (
             <PriorityList
               items={bitDepthItems}
@@ -177,7 +178,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.container_order")}
+          name={getFieldName("sorting.preferred_container")}
           render={({ field }) => (
             <PriorityList
               items={containerItems}
@@ -190,7 +191,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.languages_order")}
+          name={getFieldName("sorting.preferred_languages")}
           render={({ field }) => (
             <PrioritySubsetList
               allItems={languagesItems}
@@ -204,7 +205,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.edition_order")}
+          name={getFieldName("sorting.preferred_edition")}
           render={({ field }) => (
             <PrioritySubsetList
               allItems={editionItems}
@@ -217,7 +218,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.network_order")}
+          name={getFieldName("sorting.preferred_network")}
           render={({ field }) => (
             <PrioritySubsetList
               allItems={networkItems}
@@ -230,7 +231,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.region_order")}
+          name={getFieldName("sorting.preferred_region")}
           render={({ field }) => (
             <PrioritySubsetList
               allItems={regionItems}
@@ -243,7 +244,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
         />
         <FormField
           control={actualControl}
-          name={getFieldName("sorting.three_d_order")}
+          name={getFieldName("sorting.preferred_three_d")}
           render={({ field }) => (
             <PrioritySubsetList
               allItems={threeDItems}
@@ -259,7 +260,7 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
           <h4 className="font-medium">Group & language order</h4>
           <FormField
             control={actualControl}
-            name={getFieldName("sorting.group_order")}
+            name={getFieldName("sorting.preferred_group")}
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Group priority (ordered list)</FormLabel>
@@ -271,6 +272,46 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
                   />
                 </FormControl>
                 <FormDescription>First group in list gets highest score.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
+        <div className="space-y-4 pt-4 border-t">
+          <h4 className="font-medium">Keywords & regex preferred</h4>
+          <FormField
+            control={actualControl}
+            name={getFieldName("sorting.keywords_preferred")}
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Preferred keywords</FormLabel>
+                <FormControl>
+                  <CommaSeparatedInput
+                    value={field.value || []}
+                    onChange={field.onChange}
+                    placeholder="e.g. REMUX, BluRay (first = highest)"
+                  />
+                </FormControl>
+                <FormDescription>Releases matching a keyword get a score boost.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={actualControl}
+            name={getFieldName("sorting.regex_preferred")}
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Preferred regex patterns</FormLabel>
+                <FormControl>
+                  <CommaSeparatedInput
+                    value={field.value || []}
+                    onChange={field.onChange}
+                    placeholder="e.g. REMUX.*1080p, DTS-HD"
+                  />
+                </FormControl>
+                <FormDescription>Releases matching a pattern get a score boost (case-insensitive).</FormDescription>
                 <FormMessage />
               </FormItem>
             )}
@@ -306,6 +347,51 @@ export function SortingSection({ control, watch, fieldPrefix = '' }) {
                 max={2}
                 step={0.1}
                 description="Prioritize newer releases (higher = prefer newer)"
+              />
+            )}
+          />
+          <FormField
+            control={actualControl}
+            name={getFieldName("sorting.keywords_weight")}
+            render={({ field }) => (
+              <MultiplierSlider
+                label="Keywords weight"
+                value={field.value ?? 0}
+                onChange={field.onChange}
+                min={0}
+                max={5}
+                step={0.5}
+                description="Score boost for preferred keywords match"
+              />
+            )}
+          />
+          <FormField
+            control={actualControl}
+            name={getFieldName("sorting.regex_weight")}
+            render={({ field }) => (
+              <MultiplierSlider
+                label="Regex weight"
+                value={field.value ?? 0}
+                onChange={field.onChange}
+                min={0}
+                max={5}
+                step={0.5}
+                description="Score boost for preferred regex pattern match"
+              />
+            )}
+          />
+          <FormField
+            control={actualControl}
+            name={getFieldName("sorting.availnzb_weight")}
+            render={({ field }) => (
+              <MultiplierSlider
+                label="AvailNZB weight"
+                value={field.value ?? 0}
+                onChange={field.onChange}
+                min={0}
+                max={5}
+                step={0.5}
+                description="Score boost for releases confirmed available by AvailNZB"
               />
             )}
           />

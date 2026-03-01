@@ -22,6 +22,7 @@ import {
   BitDepthOptions,
   HDROptions,
   LanguageOptions,
+  languageCodeToName,
   EditionOptions,
   NetworkOptions,
   RegionOptions,
@@ -29,39 +30,38 @@ import {
   ContainerOptions,
 } from "@/constants/pttOptions"
 
-/** One row: label + chips + Add dropdown (options not yet in value) */
-function ChipRow({ label, value = [], onChange, options, variant = "include" }) {
+const tierStyles = {
+  included: { border: "border-blue-500/30 bg-blue-500/5", badge: "bg-blue-500/20 hover:bg-blue-500/30" },
+  required: { border: "border-green-500/30 bg-green-500/5", badge: "bg-green-500/20 hover:bg-green-500/30" },
+  excluded: { border: "border-red-500/30 bg-red-500/5", badge: "bg-red-500/20 hover:bg-red-500/30" },
+}
+
+/** One row: label + chips + Add dropdown (options not yet in value).
+ * getOptionLabel(opt) optionally maps option value to display label (e.g. "en" -> "English"). */
+function ChipRow({ label, value = [], onChange, options, variant = "required", getOptionLabel }) {
+  const display = (opt) => (getOptionLabel ? getOptionLabel(opt) : opt) ?? opt
   const available = options.filter(opt => !value.includes(opt))
   const add = (opt) => {
     if (opt && !value.includes(opt)) onChange([...value, opt])
   }
   const remove = (opt) => onChange(value.filter(v => v !== opt))
+  const styles = tierStyles[variant] || tierStyles.required
   return (
     <div className="space-y-2">
       <span className="text-sm font-medium text-muted-foreground">{label}</span>
-      <div
-        className={cn(
-          "flex flex-wrap gap-2 min-h-[2.5rem] p-3 rounded-md border",
-          variant === "include" && "border-green-500/30 bg-green-500/5",
-          variant === "avoid" && "border-red-500/30 bg-red-500/5"
-        )}
-      >
+      <div className={cn("flex flex-wrap gap-2 min-h-[2.5rem] p-3 rounded-md border", styles.border)}>
         {value.map(item => (
           <Badge
             key={item}
             variant="secondary"
-            className={cn(
-              "gap-1 pr-1",
-              variant === "include" && "bg-green-500/20 hover:bg-green-500/30",
-              variant === "avoid" && "bg-red-500/20 hover:bg-red-500/30"
-            )}
+            className={cn("gap-1 pr-1", styles.badge)}
           >
-            {item}
+            {display(item)}
             <button
               type="button"
               className="rounded-full p-0.5 hover:bg-black/20"
               onClick={() => remove(item)}
-              aria-label={`Remove ${item}`}
+              aria-label={`Remove ${display(item)}`}
             >
               <X className="h-3 w-3" />
             </button>
@@ -83,7 +83,7 @@ function ChipRow({ label, value = [], onChange, options, variant = "include" }) 
                   className="w-full cursor-pointer rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
                   onClick={() => add(opt)}
                 >
-                  {opt}
+                  {display(opt)}
                 </button>
               ))}
             </DropdownMenuContent>
@@ -94,24 +94,45 @@ function ChipRow({ label, value = [], onChange, options, variant = "include" }) 
   )
 }
 
-/** Include (only allow) + Avoid (exclude) block for a category with typed options */
-function IncludeAvoidBlock({ title, options, includeValue, avoidValue, onIncludeChange, onAvoidChange, getFieldName, control, includeField, avoidField }) {
+/** 3-tier filter block: Included (bypass) + Required + Excluded. optionLabel: map or fn for display (e.g. language code -> full name). */
+function FilterBlock({ title, options, control, getFieldName, includedField, requiredField, excludedField, optionLabel }) {
+  const getOptionLabel = typeof optionLabel === 'function' ? optionLabel : (opt) => optionLabel?.[opt] ?? opt
   return (
     <div className="space-y-4">
       <h4 className="font-medium">{title}</h4>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-3">
         <FormField
           control={control}
-          name={getFieldName(includeField)}
+          name={getFieldName(includedField)}
           render={({ field }) => (
             <FormItem>
               <FormControl>
                 <ChipRow
-                  label="Include (only allow these)"
+                  label="Included (bypass all filters)"
                   value={field.value || []}
                   onChange={field.onChange}
                   options={options}
-                  variant="include"
+                  variant="included"
+                  getOptionLabel={getOptionLabel}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={control}
+          name={getFieldName(requiredField)}
+          render={({ field }) => (
+            <FormItem>
+              <FormControl>
+                <ChipRow
+                  label="Required (must match one)"
+                  value={field.value || []}
+                  onChange={field.onChange}
+                  options={options}
+                  variant="required"
+                  getOptionLabel={getOptionLabel}
                 />
               </FormControl>
               <FormDescription className="sr-only">Leave empty to allow all</FormDescription>
@@ -121,16 +142,17 @@ function IncludeAvoidBlock({ title, options, includeValue, avoidValue, onInclude
         />
         <FormField
           control={control}
-          name={getFieldName(avoidField)}
+          name={getFieldName(excludedField)}
           render={({ field }) => (
             <FormItem>
               <FormControl>
                 <ChipRow
-                  label="Avoid (exclude these)"
+                  label="Excluded (reject if matches)"
                   value={field.value || []}
                   onChange={field.onChange}
                   options={options}
-                  variant="avoid"
+                  variant="excluded"
+                  getOptionLabel={getOptionLabel}
                 />
               </FormControl>
               <FormMessage />
@@ -142,8 +164,8 @@ function IncludeAvoidBlock({ title, options, includeValue, avoidValue, onInclude
   )
 }
 
-/** Group filter: free-text chips for Include / Avoid (no fixed option list). Paste comma-separated list to add multiple. */
-function GroupFilterRow({ label, value = [], onChange, placeholder }) {
+/** Group filter: free-text chips for Included / Required / Excluded. Paste comma-separated list to add multiple. */
+function GroupFilterRow({ label, value = [], onChange, placeholder, variant = "required" }) {
   const [inputValue, setInputValue] = React.useState('')
   const add = (item) => {
     const v = (item || inputValue).trim()
@@ -172,12 +194,13 @@ function GroupFilterRow({ label, value = [], onChange, placeholder }) {
       addMany(pasted)
     }
   }
+  const styles = tierStyles[variant] || tierStyles.required
   return (
     <div className="space-y-2">
       <span className="text-sm font-medium text-muted-foreground">{label}</span>
-      <div className="flex flex-wrap gap-2 min-h-[2.5rem] p-3 rounded-md border border-border bg-background">
+      <div className={cn("flex flex-wrap gap-2 min-h-[2.5rem] p-3 rounded-md border", styles.border)}>
         {value.map((item) => (
-          <Badge key={item} variant="secondary" className="gap-1 pr-1">
+          <Badge key={item} variant="secondary" className={cn("gap-1 pr-1", styles.badge)}>
             {item}
             <button type="button" className="rounded-full p-0.5 hover:bg-black/20" onClick={() => remove(item)} aria-label={`Remove ${item}`}>
               <X className="h-3 w-3" />
@@ -194,6 +217,59 @@ function GroupFilterRow({ label, value = [], onChange, placeholder }) {
         />
       </div>
       <p className="text-xs text-muted-foreground">Paste a comma-separated list to add multiple groups.</p>
+    </div>
+  )
+}
+
+const RESOLUTION_GROUPS = ['4k', '1080p', '720p', 'sd']
+const RESOLUTION_GROUP_LABELS = { '4k': '4K / 2160p', '1080p': '1080p', '720p': '720p', 'sd': 'SD (480p and below)' }
+
+function PerResolutionSizeInputs({ control, getFieldName }) {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {RESOLUTION_GROUPS.map((group) => (
+        <div key={group} className="space-y-2">
+          <span className="text-sm font-medium">{RESOLUTION_GROUP_LABELS[group]}</span>
+          <div className="flex gap-2">
+            <FormField
+              control={control}
+              name={getFieldName(`filters.size_per_resolution.${group}.min_gb`)}
+              render={({ field }) => (
+                <FormItem className="flex-1">
+                  <FormControl>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      min={0}
+                      placeholder="Min GB"
+                      value={field.value === 0 || field.value == null ? '' : field.value}
+                      onChange={e => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={control}
+              name={getFieldName(`filters.size_per_resolution.${group}.max_gb`)}
+              render={({ field }) => (
+                <FormItem className="flex-1">
+                  <FormControl>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      min={0}
+                      placeholder="Max GB"
+                      value={field.value === 0 || field.value == null ? '' : field.value}
+                      onChange={e => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -219,130 +295,148 @@ export function FiltersSection({ control, watch, fieldPrefix = '' }) {
       <CardHeader>
         <CardTitle className="text-lg">Release Filters</CardTitle>
         <CardDescription>
-          Filter by Include (only allow these) or Avoid (exclude these). Leave both empty to allow all.
+          <span className="font-medium text-blue-500">Included</span> = bypass all filters (whitelist).{' '}
+          <span className="font-medium text-green-500">Required</span> = must match one.{' '}
+          <span className="font-medium text-red-500">Excluded</span> = reject if matches.{' '}
+          Leave all empty to allow everything.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Quality"
           options={QualityOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.quality_include"
-          avoidField="filters.quality_avoid"
+          includedField="filters.quality_included"
+          requiredField="filters.quality_required"
+          excludedField="filters.quality_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Resolution"
           options={ResolutionOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.resolution_include"
-          avoidField="filters.resolution_avoid"
+          includedField="filters.resolution_included"
+          requiredField="filters.resolution_required"
+          excludedField="filters.resolution_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Codec"
           options={CodecOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.codec_include"
-          avoidField="filters.codec_avoid"
+          includedField="filters.codec_included"
+          requiredField="filters.codec_required"
+          excludedField="filters.codec_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Audio"
           options={AudioOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.audio_include"
-          avoidField="filters.audio_avoid"
+          includedField="filters.audio_included"
+          requiredField="filters.audio_required"
+          excludedField="filters.audio_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Channels"
           options={ChannelsOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.channels_include"
-          avoidField="filters.channels_avoid"
+          includedField="filters.channels_included"
+          requiredField="filters.channels_required"
+          excludedField="filters.channels_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Visual tags (HDR / SDR)"
           options={HDROptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.hdr_include"
-          avoidField="filters.hdr_avoid"
+          includedField="filters.hdr_included"
+          requiredField="filters.hdr_required"
+          excludedField="filters.hdr_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="3D"
           options={ThreeDOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.three_d_include"
-          avoidField="filters.three_d_avoid"
+          includedField="filters.three_d_included"
+          requiredField="filters.three_d_required"
+          excludedField="filters.three_d_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Bit depth"
           options={BitDepthOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.bit_depth_include"
-          avoidField="filters.bit_depth_avoid"
+          includedField="filters.bit_depth_included"
+          requiredField="filters.bit_depth_required"
+          excludedField="filters.bit_depth_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Container"
           options={ContainerOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.container_include"
-          avoidField="filters.container_avoid"
+          includedField="filters.container_included"
+          requiredField="filters.container_required"
+          excludedField="filters.container_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Languages"
           options={LanguageOptions}
+          optionLabel={languageCodeToName}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.languages_include"
-          avoidField="filters.languages_avoid"
+          includedField="filters.languages_included"
+          requiredField="filters.languages_required"
+          excludedField="filters.languages_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Edition"
           options={EditionOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.edition_include"
-          avoidField="filters.edition_avoid"
+          includedField="filters.edition_included"
+          requiredField="filters.edition_required"
+          excludedField="filters.edition_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Network"
           options={NetworkOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.network_include"
-          avoidField="filters.network_avoid"
+          includedField="filters.network_included"
+          requiredField="filters.network_required"
+          excludedField="filters.network_excluded"
         />
-        <IncludeAvoidBlock
+        <FilterBlock
           title="Region"
           options={RegionOptions}
           getFieldName={getFieldName}
           control={actualControl}
-          includeField="filters.region_include"
-          avoidField="filters.region_avoid"
+          includedField="filters.region_included"
+          requiredField="filters.region_required"
+          excludedField="filters.region_excluded"
         />
 
-        {/* Release groups: free-text Include / Avoid */}
+        {/* Release groups: free-text Included / Required / Excluded */}
         <div className="space-y-4">
           <h4 className="font-medium">Release groups</h4>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
             <FormField
               control={actualControl}
-              name={getFieldName("filters.group_include")}
+              name={getFieldName("filters.group_included")}
               render={({ field }) => (
                 <FormItem>
                   <FormControl>
                     <GroupFilterRow
-                      label="Include (only these groups)"
+                      label="Included (bypass)"
                       value={field.value || []}
                       onChange={field.onChange}
                       placeholder="Type group name..."
+                      variant="included"
                     />
                   </FormControl>
                   <FormMessage />
@@ -351,15 +445,34 @@ export function FiltersSection({ control, watch, fieldPrefix = '' }) {
             />
             <FormField
               control={actualControl}
-              name={getFieldName("filters.group_avoid")}
+              name={getFieldName("filters.group_required")}
               render={({ field }) => (
                 <FormItem>
                   <FormControl>
                     <GroupFilterRow
-                      label="Avoid (exclude these groups)"
+                      label="Required (only these groups)"
                       value={field.value || []}
                       onChange={field.onChange}
                       placeholder="Type group name..."
+                      variant="required"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={actualControl}
+              name={getFieldName("filters.group_excluded")}
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <GroupFilterRow
+                      label="Excluded (reject these groups)"
+                      value={field.value || []}
+                      onChange={field.onChange}
+                      placeholder="Type group name..."
+                      variant="excluded"
                     />
                   </FormControl>
                   <FormMessage />
@@ -375,85 +488,85 @@ export function FiltersSection({ control, watch, fieldPrefix = '' }) {
           <div className="flex flex-wrap gap-6">
             <FormField
               control={actualControl}
-              name={getFieldName("filters.dubbed_avoid")}
+              name={getFieldName("filters.dubbed_excluded")}
               render={({ field }) => (
                 <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                   <FormControl>
                     <Checkbox checked={!!field.value} onCheckedChange={field.onChange} />
                   </FormControl>
-                  <FormLabel className="font-normal">Avoid dubbed</FormLabel>
+                  <FormLabel className="font-normal">Exclude dubbed</FormLabel>
                 </FormItem>
               )}
             />
             <FormField
               control={actualControl}
-              name={getFieldName("filters.hardcoded_avoid")}
+              name={getFieldName("filters.hardcoded_excluded")}
               render={({ field }) => (
                 <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                   <FormControl>
                     <Checkbox checked={!!field.value} onCheckedChange={field.onChange} />
                   </FormControl>
-                  <FormLabel className="font-normal">Avoid hardcoded subs</FormLabel>
+                  <FormLabel className="font-normal">Exclude hardcoded subs</FormLabel>
                 </FormItem>
               )}
             />
             <FormField
               control={actualControl}
-              name={getFieldName("filters.proper_include")}
+              name={getFieldName("filters.proper_required")}
               render={({ field }) => (
                 <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                   <FormControl>
                     <Checkbox checked={!!field.value} onCheckedChange={field.onChange} />
                   </FormControl>
-                  <FormLabel className="font-normal">Prefer Proper</FormLabel>
+                  <FormLabel className="font-normal">Require Proper</FormLabel>
                 </FormItem>
               )}
             />
             <FormField
               control={actualControl}
-              name={getFieldName("filters.repack_include")}
+              name={getFieldName("filters.repack_required")}
               render={({ field }) => (
                 <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                   <FormControl>
                     <Checkbox checked={!!field.value} onCheckedChange={field.onChange} />
                   </FormControl>
-                  <FormLabel className="font-normal">Prefer Repack</FormLabel>
+                  <FormLabel className="font-normal">Require Repack</FormLabel>
                 </FormItem>
               )}
             />
             <FormField
               control={actualControl}
-              name={getFieldName("filters.repack_avoid")}
+              name={getFieldName("filters.repack_excluded")}
               render={({ field }) => (
                 <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                   <FormControl>
                     <Checkbox checked={!!field.value} onCheckedChange={field.onChange} />
                   </FormControl>
-                  <FormLabel className="font-normal">Avoid Repack</FormLabel>
+                  <FormLabel className="font-normal">Exclude Repack</FormLabel>
                 </FormItem>
               )}
             />
             <FormField
               control={actualControl}
-              name={getFieldName("filters.extended_include")}
+              name={getFieldName("filters.extended_required")}
               render={({ field }) => (
                 <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                   <FormControl>
                     <Checkbox checked={!!field.value} onCheckedChange={field.onChange} />
                   </FormControl>
-                  <FormLabel className="font-normal">Prefer Extended</FormLabel>
+                  <FormLabel className="font-normal">Require Extended</FormLabel>
                 </FormItem>
               )}
             />
             <FormField
               control={actualControl}
-              name={getFieldName("filters.unrated_include")}
+              name={getFieldName("filters.unrated_required")}
               render={({ field }) => (
                 <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                   <FormControl>
                     <Checkbox checked={!!field.value} onCheckedChange={field.onChange} />
                   </FormControl>
-                  <FormLabel className="font-normal">Prefer Unrated</FormLabel>
+                  <FormLabel className="font-normal">Require Unrated</FormLabel>
                 </FormItem>
               )}
             />
@@ -538,6 +651,213 @@ export function FiltersSection({ control, watch, fieldPrefix = '' }) {
                     />
                   </FormControl>
                   <FormDescription className="sr-only">0 = no maximum</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </div>
+
+        {/* Per-resolution size ranges */}
+        <div className="space-y-4 pt-2 border-t">
+          <h4 className="font-medium">Per-resolution size limits</h4>
+          <p className="text-xs text-muted-foreground">Override global min/max size for specific resolution groups. Leave empty to use global limits.</p>
+          <PerResolutionSizeInputs control={actualControl} getFieldName={getFieldName} />
+        </div>
+
+        {/* Age range */}
+        <div className="space-y-4 pt-2 border-t">
+          <h4 className="font-medium">Release age</h4>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <FormField
+              control={actualControl}
+              name={getFieldName("filters.min_age_hours")}
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Min age (hours)</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      step="1"
+                      min={0}
+                      placeholder="0 = any"
+                      value={field.value === 0 ? '' : (field.value ?? '')}
+                      onChange={e => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={actualControl}
+              name={getFieldName("filters.max_age_hours")}
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Max age (hours)</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      step="1"
+                      min={0}
+                      placeholder="0 = any"
+                      value={field.value === 0 ? '' : (field.value ?? '')}
+                      onChange={e => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </div>
+
+        {/* Keywords */}
+        <div className="space-y-4 pt-2 border-t">
+          <h4 className="font-medium">Keywords</h4>
+          <p className="text-xs text-muted-foreground">Case-insensitive keyword matching against the full release title.</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField
+              control={actualControl}
+              name={getFieldName("filters.keywords_required")}
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <GroupFilterRow
+                      label="Required (must contain one)"
+                      value={field.value || []}
+                      onChange={field.onChange}
+                      placeholder="Type keyword..."
+                      variant="required"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={actualControl}
+              name={getFieldName("filters.keywords_excluded")}
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <GroupFilterRow
+                      label="Excluded (reject if contains)"
+                      value={field.value || []}
+                      onChange={field.onChange}
+                      placeholder="Type keyword..."
+                      variant="excluded"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </div>
+
+        {/* Regex patterns */}
+        <div className="space-y-4 pt-2 border-t">
+          <h4 className="font-medium">Regex patterns</h4>
+          <p className="text-xs text-muted-foreground">Regular expressions matched against the full release title (case-insensitive).</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField
+              control={actualControl}
+              name={getFieldName("filters.regex_required")}
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <GroupFilterRow
+                      label="Required (must match one)"
+                      value={field.value || []}
+                      onChange={field.onChange}
+                      placeholder="e.g. REMUX|BluRay"
+                      variant="required"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={actualControl}
+              name={getFieldName("filters.regex_excluded")}
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <GroupFilterRow
+                      label="Excluded (reject if matches)"
+                      value={field.value || []}
+                      onChange={field.onChange}
+                      placeholder="e.g. CAM|TS"
+                      variant="excluded"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </div>
+
+        {/* AvailNZB */}
+        <div className="space-y-4 pt-2 border-t">
+          <h4 className="font-medium">AvailNZB</h4>
+          <FormField
+            control={actualControl}
+            name={getFieldName("filters.availnzb_required")}
+            render={({ field }) => (
+              <FormItem className="flex flex-row items-center space-x-3 space-y-0">
+                <FormControl>
+                  <Checkbox checked={!!field.value} onCheckedChange={field.onChange} />
+                </FormControl>
+                <FormLabel className="font-normal">Only show releases confirmed available by AvailNZB</FormLabel>
+              </FormItem>
+            )}
+          />
+        </div>
+
+        {/* Bitrate */}
+        <div className="space-y-4 pt-2 border-t">
+          <h4 className="font-medium">Bitrate</h4>
+          <p className="text-xs text-muted-foreground">Only applies to Easynews results (Newznab does not provide duration).</p>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <FormField
+              control={actualControl}
+              name={getFieldName("filters.min_bitrate_kbps")}
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Min bitrate (kbps)</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      step="100"
+                      min={0}
+                      placeholder="0 = any"
+                      value={field.value === 0 ? '' : (field.value ?? '')}
+                      onChange={e => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={actualControl}
+              name={getFieldName("filters.max_bitrate_kbps")}
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Max bitrate (kbps)</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      step="100"
+                      min={0}
+                      placeholder="0 = any"
+                      value={field.value === 0 ? '' : (field.value ?? '')}
+                      onChange={e => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}

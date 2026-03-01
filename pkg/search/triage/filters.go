@@ -1,7 +1,9 @@
 package triage
 
 import (
+	"regexp"
 	"strings"
+	"time"
 
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/config/pttoptions"
@@ -72,161 +74,227 @@ func matchGroup(group string, list []string) bool {
 	return false
 }
 
-func checkQuality(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.QualityAvoid) > 0 && matchSingle(p.Quality, cfg.QualityAvoid) {
-		return false
+// isIncludedBypass checks all Included (whitelist bypass) lists across every category.
+// If the release matches ANY included rule in ANY category, it passes ALL filters.
+func isIncludedBypass(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *release.Release) bool {
+	if matchSingle(p.Quality, cfg.QualityIncluded) {
+		return true
 	}
-	if len(cfg.QualityInclude) > 0 && !matchSingle(p.Quality, cfg.QualityInclude) {
-		return false
+	if matchResolution(p, cfg.ResolutionIncluded) {
+		return true
 	}
-	return true
-}
-
-func checkResolution(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.ResolutionAvoid) > 0 && matchResolution(p, cfg.ResolutionAvoid) {
-		return false
+	if matchSingle(p.Codec, cfg.CodecIncluded) {
+		return true
 	}
-	if len(cfg.ResolutionInclude) > 0 && !matchResolution(p, cfg.ResolutionInclude) {
-		return false
+	if matchMulti(p.Audio, cfg.AudioIncluded) {
+		return true
 	}
-	return true
-}
-
-func checkCodec(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.CodecAvoid) > 0 && p.Codec != "" && matchSingle(p.Codec, cfg.CodecAvoid) {
-		return false
+	if matchMulti(p.Channels, cfg.ChannelsIncluded) {
+		return true
 	}
-	if len(cfg.CodecInclude) > 0 {
-		if p.Codec == "" {
-			return false
+	if matchVisualTags(p, cfg.HDRIncluded) {
+		return true
+	}
+	if p.BitDepth != "" && matchSingle(p.BitDepth, cfg.BitDepthIncluded) {
+		return true
+	}
+	if matchSingle(p.Container, cfg.ContainerIncluded) {
+		return true
+	}
+	if matchSingle(p.Edition, cfg.EditionIncluded) {
+		return true
+	}
+	if p.ThreeD != "" && matchSingle(p.ThreeD, cfg.ThreeDIncluded) {
+		return true
+	}
+	if matchSingle(p.Network, cfg.NetworkIncluded) {
+		return true
+	}
+	if matchSingle(p.Region, cfg.RegionIncluded) {
+		return true
+	}
+	if matchGroup(p.Group, cfg.GroupIncluded) {
+		return true
+	}
+	// Languages bypass
+	if len(cfg.LanguagesIncluded) > 0 {
+		languages := mergeReleaseLanguages(p.Languages, nil)
+		if rel != nil && len(rel.Languages) > 0 {
+			languages = mergeReleaseLanguages(p.Languages, rel.Languages)
 		}
-		if !matchSingle(p.Codec, cfg.CodecInclude) {
-			return false
+		if matchLanguages(languages, cfg.LanguagesIncluded) {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
-func checkAudio(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.AudioAvoid) > 0 && matchMulti(p.Audio, cfg.AudioAvoid) {
-		return false
-	}
-	if len(cfg.AudioInclude) > 0 && !matchMulti(p.Audio, cfg.AudioInclude) {
-		return false
-	}
-	return true
+// --- Excluded checks (reject if matches) ---
+
+func checkQualityExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.QualityExcluded) > 0 && matchSingle(p.Quality, cfg.QualityExcluded)
 }
 
-func checkChannels(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.ChannelsAvoid) > 0 && matchMulti(p.Channels, cfg.ChannelsAvoid) {
-		return false
-	}
-	if len(cfg.ChannelsInclude) > 0 && !matchMulti(p.Channels, cfg.ChannelsInclude) {
-		return false
-	}
-	return true
+func checkResolutionExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.ResolutionExcluded) > 0 && matchResolution(p, cfg.ResolutionExcluded)
 }
 
-func checkHDR(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.HDRAvoid) > 0 && matchVisualTags(p, cfg.HDRAvoid) {
-		return false
-	}
-	if len(cfg.HDRInclude) > 0 && !matchVisualTags(p, cfg.HDRInclude) {
-		return false
-	}
-	return true
+func checkCodecExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.CodecExcluded) > 0 && p.Codec != "" && matchSingle(p.Codec, cfg.CodecExcluded)
 }
 
-func checkBitDepth(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.BitDepthAvoid) > 0 && p.BitDepth != "" && matchSingle(p.BitDepth, cfg.BitDepthAvoid) {
-		return false
-	}
-	if len(cfg.BitDepthInclude) > 0 && p.BitDepth != "" && !matchSingle(p.BitDepth, cfg.BitDepthInclude) {
-		return false
-	}
-	return true
+func checkAudioExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.AudioExcluded) > 0 && matchMulti(p.Audio, cfg.AudioExcluded)
 }
 
-func checkContainer(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.ContainerAvoid) > 0 && matchSingle(p.Container, cfg.ContainerAvoid) {
-		return false
-	}
-	if len(cfg.ContainerInclude) > 0 && !matchSingle(p.Container, cfg.ContainerInclude) {
-		return false
-	}
-	return true
+func checkChannelsExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.ChannelsExcluded) > 0 && matchMulti(p.Channels, cfg.ChannelsExcluded)
 }
 
-func checkEdition(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.EditionAvoid) > 0 && matchSingle(p.Edition, cfg.EditionAvoid) {
-		return false
-	}
-	if len(cfg.EditionInclude) > 0 && !matchSingle(p.Edition, cfg.EditionInclude) {
-		return false
-	}
-	return true
+func checkHDRExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.HDRExcluded) > 0 && matchVisualTags(p, cfg.HDRExcluded)
 }
 
-func checkThreeD(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.ThreeDAvoid) > 0 && p.ThreeD != "" && matchSingle(p.ThreeD, cfg.ThreeDAvoid) {
-		return false
-	}
-	if len(cfg.ThreeDInclude) > 0 && p.ThreeD != "" && !matchSingle(p.ThreeD, cfg.ThreeDInclude) {
-		return false
-	}
-	return true
+func checkBitDepthExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.BitDepthExcluded) > 0 && p.BitDepth != "" && matchSingle(p.BitDepth, cfg.BitDepthExcluded)
 }
 
-func checkNetwork(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.NetworkAvoid) > 0 && matchSingle(p.Network, cfg.NetworkAvoid) {
-		return false
-	}
-	if len(cfg.NetworkInclude) > 0 && !matchSingle(p.Network, cfg.NetworkInclude) {
-		return false
-	}
-	return true
+func checkContainerExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.ContainerExcluded) > 0 && matchSingle(p.Container, cfg.ContainerExcluded)
 }
 
-func checkRegion(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.RegionAvoid) > 0 && matchSingle(p.Region, cfg.RegionAvoid) {
-		return false
-	}
-	if len(cfg.RegionInclude) > 0 && !matchSingle(p.Region, cfg.RegionInclude) {
-		return false
-	}
-	return true
+func checkEditionExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.EditionExcluded) > 0 && matchSingle(p.Edition, cfg.EditionExcluded)
 }
 
-func checkGroup(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if len(cfg.GroupAvoid) > 0 && matchGroup(p.Group, cfg.GroupAvoid) {
+func checkThreeDExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.ThreeDExcluded) > 0 && p.ThreeD != "" && matchSingle(p.ThreeD, cfg.ThreeDExcluded)
+}
+
+func checkNetworkExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.NetworkExcluded) > 0 && matchSingle(p.Network, cfg.NetworkExcluded)
+}
+
+func checkRegionExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.RegionExcluded) > 0 && matchSingle(p.Region, cfg.RegionExcluded)
+}
+
+func checkGroupExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.GroupExcluded) > 0 && matchGroup(p.Group, cfg.GroupExcluded)
+}
+
+func checkLanguagesExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *release.Release) bool {
+	if len(cfg.LanguagesExcluded) == 0 {
 		return false
 	}
-	if len(cfg.GroupInclude) > 0 && !matchGroup(p.Group, cfg.GroupInclude) {
+	languages := mergeReleaseLanguages(p.Languages, nil)
+	if rel != nil && len(rel.Languages) > 0 {
+		languages = mergeReleaseLanguages(p.Languages, rel.Languages)
+	}
+	for _, lang := range languages {
+		for _, excl := range cfg.LanguagesExcluded {
+			if languageMatches(excl, lang) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// --- Required checks (must match at least one, or reject) ---
+
+func checkQualityRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.QualityRequired) > 0 && !matchSingle(p.Quality, cfg.QualityRequired)
+}
+
+func checkResolutionRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.ResolutionRequired) > 0 && !matchResolution(p, cfg.ResolutionRequired)
+}
+
+func checkCodecRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	if len(cfg.CodecRequired) == 0 {
 		return false
 	}
-	return true
+	if p.Codec == "" {
+		return true
+	}
+	return !matchSingle(p.Codec, cfg.CodecRequired)
+}
+
+func checkAudioRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.AudioRequired) > 0 && !matchMulti(p.Audio, cfg.AudioRequired)
+}
+
+func checkChannelsRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.ChannelsRequired) > 0 && !matchMulti(p.Channels, cfg.ChannelsRequired)
+}
+
+func checkHDRRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.HDRRequired) > 0 && !matchVisualTags(p, cfg.HDRRequired)
+}
+
+func checkBitDepthRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.BitDepthRequired) > 0 && p.BitDepth != "" && !matchSingle(p.BitDepth, cfg.BitDepthRequired)
+}
+
+func checkContainerRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.ContainerRequired) > 0 && !matchSingle(p.Container, cfg.ContainerRequired)
+}
+
+func checkEditionRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.EditionRequired) > 0 && !matchSingle(p.Edition, cfg.EditionRequired)
+}
+
+func checkThreeDRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.ThreeDRequired) > 0 && p.ThreeD != "" && !matchSingle(p.ThreeD, cfg.ThreeDRequired)
+}
+
+func checkNetworkRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.NetworkRequired) > 0 && !matchSingle(p.Network, cfg.NetworkRequired)
+}
+
+func checkRegionRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.RegionRequired) > 0 && !matchSingle(p.Region, cfg.RegionRequired)
+}
+
+func checkGroupRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
+	return len(cfg.GroupRequired) > 0 && !matchGroup(p.Group, cfg.GroupRequired)
+}
+
+func checkLanguagesRequired(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *release.Release) bool {
+	if len(cfg.LanguagesRequired) == 0 {
+		return false
+	}
+	languages := mergeReleaseLanguages(p.Languages, nil)
+	if rel != nil && len(rel.Languages) > 0 {
+		languages = mergeReleaseLanguages(p.Languages, rel.Languages)
+	}
+	if len(languages) == 0 {
+		return true
+	}
+	return !matchLanguages(languages, cfg.LanguagesRequired)
 }
 
 func checkBooleans(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
-	if cfg.DubbedAvoid != nil && *cfg.DubbedAvoid && p.Dubbed {
+	if cfg.DubbedExcluded != nil && *cfg.DubbedExcluded && p.Dubbed {
 		return false
 	}
-	if cfg.HardcodedAvoid != nil && *cfg.HardcodedAvoid && p.Hardcoded {
+	if cfg.HardcodedExcluded != nil && *cfg.HardcodedExcluded && p.Hardcoded {
 		return false
 	}
-	if cfg.ProperInclude != nil && *cfg.ProperInclude && !p.Proper {
+	if cfg.ProperRequired != nil && *cfg.ProperRequired && !p.Proper {
 		return false
 	}
-	if cfg.RepackInclude != nil && *cfg.RepackInclude && !p.Repack {
+	if cfg.RepackRequired != nil && *cfg.RepackRequired && !p.Repack {
 		return false
 	}
-	if cfg.RepackAvoid != nil && *cfg.RepackAvoid && p.Repack {
+	if cfg.RepackExcluded != nil && *cfg.RepackExcluded && p.Repack {
 		return false
 	}
-	if cfg.ExtendedInclude != nil && *cfg.ExtendedInclude && !p.Extended {
+	if cfg.ExtendedRequired != nil && *cfg.ExtendedRequired && !p.Extended {
 		return false
 	}
-	if cfg.UnratedInclude != nil && *cfg.UnratedInclude && !p.Unrated {
+	if cfg.UnratedRequired != nil && *cfg.UnratedRequired && !p.Unrated {
 		return false
 	}
 	return true
@@ -295,31 +363,6 @@ func matchLanguages(languages []string, list []string) bool {
 	return false
 }
 
-func checkLanguages(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *release.Release) bool {
-	languages := mergeReleaseLanguages(p.Languages, nil)
-	if rel != nil && len(rel.Languages) > 0 {
-		languages = mergeReleaseLanguages(p.Languages, rel.Languages)
-	}
-	if len(cfg.LanguagesAvoid) > 0 {
-		for _, lang := range languages {
-			for _, avoid := range cfg.LanguagesAvoid {
-				if languageMatches(avoid, lang) {
-					return false
-				}
-			}
-		}
-	}
-	if len(cfg.LanguagesInclude) > 0 {
-		if len(languages) == 0 {
-			return false
-		}
-		if !matchLanguages(languages, cfg.LanguagesInclude) {
-			return false
-		}
-	}
-	return true
-}
-
 func checkSize(cfg *config.FilterConfig, rel *release.Release) bool {
 	if rel == nil || rel.Size <= 0 {
 		return false
@@ -339,6 +382,135 @@ func checkYear(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 		return false
 	}
 	if cfg.MaxYear > 0 && p.Year > 0 && p.Year > cfg.MaxYear {
+		return false
+	}
+	return true
+}
+
+func checkAge(cfg *config.FilterConfig, rel *release.Release) bool {
+	if cfg.MinAgeHours <= 0 && cfg.MaxAgeHours <= 0 {
+		return true
+	}
+	if rel == nil || rel.PubDate == "" {
+		return true
+	}
+	pubTime, err := time.Parse(time.RFC1123Z, rel.PubDate)
+	if err != nil {
+		pubTime, err = time.Parse(time.RFC1123, rel.PubDate)
+	}
+	if err != nil {
+		return true
+	}
+	ageHours := time.Since(pubTime).Hours()
+	if cfg.MinAgeHours > 0 && ageHours < cfg.MinAgeHours {
+		return false
+	}
+	if cfg.MaxAgeHours > 0 && ageHours > cfg.MaxAgeHours {
+		return false
+	}
+	return true
+}
+
+func checkKeywordsExcluded(cfg *config.FilterConfig, rel *release.Release) bool {
+	if len(cfg.KeywordsExcluded) == 0 || rel == nil {
+		return false
+	}
+	titleLower := strings.ToLower(rel.Title)
+	for _, kw := range cfg.KeywordsExcluded {
+		if kw != "" && strings.Contains(titleLower, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkKeywordsRequired(cfg *config.FilterConfig, rel *release.Release) bool {
+	if len(cfg.KeywordsRequired) == 0 || rel == nil {
+		return false
+	}
+	titleLower := strings.ToLower(rel.Title)
+	for _, kw := range cfg.KeywordsRequired {
+		if kw != "" && strings.Contains(titleLower, strings.ToLower(kw)) {
+			return false
+		}
+	}
+	return true
+}
+
+func checkRegexExcluded(compiledExcluded []*regexp.Regexp, rel *release.Release) bool {
+	if len(compiledExcluded) == 0 || rel == nil {
+		return false
+	}
+	for _, re := range compiledExcluded {
+		if re.MatchString(rel.Title) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkRegexRequired(compiledRequired []*regexp.Regexp, rel *release.Release) bool {
+	if len(compiledRequired) == 0 || rel == nil {
+		return false
+	}
+	for _, re := range compiledRequired {
+		if re.MatchString(rel.Title) {
+			return false
+		}
+	}
+	return true
+}
+
+func checkAvailNZB(cfg *config.FilterConfig, rel *release.Release) bool {
+	if cfg.AvailNZBRequired == nil || !*cfg.AvailNZBRequired {
+		return true
+	}
+	if rel == nil || rel.Available == nil {
+		return true
+	}
+	return *rel.Available
+}
+
+func checkSizeWithResolution(cfg *config.FilterConfig, rel *release.Release, p *parser.ParsedRelease) bool {
+	if rel == nil || rel.Size <= 0 {
+		return false
+	}
+	sizeGB := float64(rel.Size) / (1024 * 1024 * 1024)
+
+	if len(cfg.SizePerResolution) > 0 && p != nil {
+		group := pttoptions.NormalizeResolutionToGroup(p.Resolution)
+		if sr, ok := cfg.SizePerResolution[group]; ok {
+			if sr.MinGB > 0 && sizeGB < sr.MinGB {
+				return false
+			}
+			if sr.MaxGB > 0 && sizeGB > sr.MaxGB {
+				return false
+			}
+			return true
+		}
+	}
+
+	if cfg.MinSizeGB > 0 && sizeGB < cfg.MinSizeGB {
+		return false
+	}
+	if cfg.MaxSizeGB > 0 && sizeGB > cfg.MaxSizeGB {
+		return false
+	}
+	return true
+}
+
+func checkBitrate(cfg *config.FilterConfig, rel *release.Release) bool {
+	if cfg.MinBitrateKbps <= 0 && cfg.MaxBitrateKbps <= 0 {
+		return true
+	}
+	if rel == nil || rel.Duration <= 0 || rel.Size <= 0 {
+		return true
+	}
+	bitrateKbps := float64(rel.Size*8) / (rel.Duration * 1000)
+	if cfg.MinBitrateKbps > 0 && bitrateKbps < cfg.MinBitrateKbps {
+		return false
+	}
+	if cfg.MaxBitrateKbps > 0 && bitrateKbps > cfg.MaxBitrateKbps {
 		return false
 	}
 	return true

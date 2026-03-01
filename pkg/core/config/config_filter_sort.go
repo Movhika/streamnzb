@@ -3,81 +3,127 @@ package config
 import (
 	"encoding/json"
 	"sort"
+
+	"streamnzb/pkg/core/config/pttoptions"
 )
 
-// FilterConfig holds Include/Avoid per PTT category (typed options). Replaces legacy allowed/blocked/required.
+// FilterConfig holds the 3-tier filter model per PTT category:
+//   - Included (whitelist bypass): if a release matches ANY included rule in ANY category, it passes ALL filters.
+//   - Required: the release MUST match at least one value (OR within the list), or it is rejected.
+//   - Excluded: if the release matches ANY excluded value, it is rejected.
 type FilterConfig struct {
-	AudioInclude     []string `json:"audio_include"`
-	AudioAvoid       []string `json:"audio_avoid"`
-	BitDepthInclude  []string `json:"bit_depth_include"`
-	BitDepthAvoid    []string `json:"bit_depth_avoid"`
-	ChannelsInclude  []string `json:"channels_include"`
-	ChannelsAvoid    []string `json:"channels_avoid"`
-	CodecInclude     []string `json:"codec_include"`
-	CodecAvoid       []string `json:"codec_avoid"`
-	ContainerInclude []string `json:"container_include"`
-	ContainerAvoid   []string `json:"container_avoid"`
-	EditionInclude   []string `json:"edition_include"`
-	EditionAvoid     []string `json:"edition_avoid"`
-	HDRInclude       []string `json:"hdr_include"`
-	HDRAvoid         []string `json:"hdr_avoid"`
-	LanguagesInclude []string `json:"languages_include"`
-	LanguagesAvoid   []string `json:"languages_avoid"`
-	NetworkInclude   []string `json:"network_include"`
-	NetworkAvoid     []string `json:"network_avoid"`
-	QualityInclude   []string `json:"quality_include"`
-	QualityAvoid     []string `json:"quality_avoid"`
-	RegionInclude    []string `json:"region_include"`
-	RegionAvoid      []string `json:"region_avoid"`
-	ResolutionInclude []string `json:"resolution_include"`
-	ResolutionAvoid   []string `json:"resolution_avoid"`
-	ThreeDInclude    []string `json:"three_d_include"`
-	ThreeDAvoid      []string `json:"three_d_avoid"`
-	GroupInclude     []string `json:"group_include"`
-	GroupAvoid       []string `json:"group_avoid"`
+	AudioIncluded     []string `json:"audio_included,omitempty"`
+	AudioRequired     []string `json:"audio_required"`
+	AudioExcluded     []string `json:"audio_excluded"`
+	BitDepthIncluded  []string `json:"bit_depth_included,omitempty"`
+	BitDepthRequired  []string `json:"bit_depth_required"`
+	BitDepthExcluded  []string `json:"bit_depth_excluded"`
+	ChannelsIncluded  []string `json:"channels_included,omitempty"`
+	ChannelsRequired  []string `json:"channels_required"`
+	ChannelsExcluded  []string `json:"channels_excluded"`
+	CodecIncluded     []string `json:"codec_included,omitempty"`
+	CodecRequired     []string `json:"codec_required"`
+	CodecExcluded     []string `json:"codec_excluded"`
+	ContainerIncluded []string `json:"container_included,omitempty"`
+	ContainerRequired []string `json:"container_required"`
+	ContainerExcluded []string `json:"container_excluded"`
+	EditionIncluded   []string `json:"edition_included,omitempty"`
+	EditionRequired   []string `json:"edition_required"`
+	EditionExcluded   []string `json:"edition_excluded"`
+	HDRIncluded       []string `json:"hdr_included,omitempty"`
+	HDRRequired       []string `json:"hdr_required"`
+	HDRExcluded       []string `json:"hdr_excluded"`
+	LanguagesIncluded []string `json:"languages_included,omitempty"`
+	LanguagesRequired []string `json:"languages_required"`
+	LanguagesExcluded []string `json:"languages_excluded"`
+	NetworkIncluded   []string `json:"network_included,omitempty"`
+	NetworkRequired   []string `json:"network_required"`
+	NetworkExcluded   []string `json:"network_excluded"`
+	QualityIncluded   []string `json:"quality_included,omitempty"`
+	QualityRequired   []string `json:"quality_required"`
+	QualityExcluded   []string `json:"quality_excluded"`
+	RegionIncluded    []string `json:"region_included,omitempty"`
+	RegionRequired    []string `json:"region_required"`
+	RegionExcluded    []string `json:"region_excluded"`
+	ResolutionIncluded []string `json:"resolution_included,omitempty"`
+	ResolutionRequired []string `json:"resolution_required"`
+	ResolutionExcluded []string `json:"resolution_excluded"`
+	ThreeDIncluded    []string `json:"three_d_included,omitempty"`
+	ThreeDRequired    []string `json:"three_d_required"`
+	ThreeDExcluded    []string `json:"three_d_excluded"`
+	GroupIncluded     []string `json:"group_included,omitempty"`
+	GroupRequired     []string `json:"group_required"`
+	GroupExcluded     []string `json:"group_excluded"`
 
-	DubbedAvoid     *bool `json:"dubbed_avoid,omitempty"`
-	HardcodedAvoid  *bool `json:"hardcoded_avoid,omitempty"`
-	ProperInclude   *bool `json:"proper_include,omitempty"`
-	RepackInclude   *bool `json:"repack_include,omitempty"`
-	RepackAvoid     *bool `json:"repack_avoid,omitempty"`
-	ExtendedInclude *bool `json:"extended_include,omitempty"`
-	UnratedInclude  *bool `json:"unrated_include,omitempty"`
+	DubbedExcluded    *bool `json:"dubbed_excluded,omitempty"`
+	HardcodedExcluded *bool `json:"hardcoded_excluded,omitempty"`
+	ProperRequired    *bool `json:"proper_required,omitempty"`
+	RepackRequired    *bool `json:"repack_required,omitempty"`
+	RepackExcluded    *bool `json:"repack_excluded,omitempty"`
+	ExtendedRequired  *bool `json:"extended_required,omitempty"`
+	UnratedRequired   *bool `json:"unrated_required,omitempty"`
 
 	MinSizeGB float64 `json:"min_size_gb"`
 	MaxSizeGB float64 `json:"max_size_gb"`
 	MinYear   int     `json:"min_year"`
 	MaxYear   int     `json:"max_year"`
+
+	MinAgeHours float64 `json:"min_age_hours"`
+	MaxAgeHours float64 `json:"max_age_hours"`
+
+	KeywordsExcluded []string `json:"keywords_excluded,omitempty"`
+	KeywordsRequired []string `json:"keywords_required,omitempty"`
+
+	RegexExcluded []string `json:"regex_excluded,omitempty"`
+	RegexRequired []string `json:"regex_required,omitempty"`
+
+	AvailNZBRequired *bool `json:"availnzb_required,omitempty"`
+
+	SizePerResolution map[string]SizeRange `json:"size_per_resolution,omitempty"`
+
+	MinBitrateKbps float64 `json:"min_bitrate_kbps"`
+	MaxBitrateKbps float64 `json:"max_bitrate_kbps"`
 }
 
-// SortConfig holds ordered lists per category; points scale 10 (first) to 0 (last). Replaces legacy weight maps.
-// When UseCustomScoring is true, each category's 0–10 contribution is multiplied by its *_weight (default 1.0),
-// and release group can use three tiers with separate points instead of one ordered list.
+// SizeRange holds min/max size in GB for per-resolution filtering.
+type SizeRange struct {
+	MinGB float64 `json:"min_gb"`
+	MaxGB float64 `json:"max_gb"`
+}
+
+// SortConfig holds preferred lists per category; points scale 10 (first) to 0 (last).
+// When UseCustomScoring is true, each category's 0-10 contribution is multiplied by its *_weight (default 1.0),
+// and release group can use three tiers with separate points instead of one preferred list.
 type SortConfig struct {
-	ResolutionOrder []string `json:"resolution_order"`
-	CodecOrder      []string `json:"codec_order"`
-	AudioOrder      []string `json:"audio_order"`
-	QualityOrder    []string `json:"quality_order"`
-	VisualTagOrder  []string `json:"visual_tag_order"`
-	ChannelsOrder   []string `json:"channels_order"`
-	BitDepthOrder   []string `json:"bit_depth_order"`
-	ContainerOrder  []string `json:"container_order"`
-	LanguagesOrder  []string `json:"languages_order"`
-	GroupOrder      []string `json:"group_order"`
-	EditionOrder    []string `json:"edition_order"`
-	NetworkOrder    []string `json:"network_order"`
-	RegionOrder     []string `json:"region_order"`
-	ThreeDOrder     []string `json:"three_d_order"`
+	PreferredResolution []string `json:"preferred_resolution"`
+	PreferredCodec      []string `json:"preferred_codec"`
+	PreferredAudio      []string `json:"preferred_audio"`
+	PreferredQuality    []string `json:"preferred_quality"`
+	PreferredVisualTag  []string `json:"preferred_visual_tag"`
+	PreferredChannels   []string `json:"preferred_channels"`
+	PreferredBitDepth   []string `json:"preferred_bit_depth"`
+	PreferredContainer  []string `json:"preferred_container"`
+	PreferredLanguages  []string `json:"preferred_languages"`
+	PreferredGroup      []string `json:"preferred_group"`
+	PreferredEdition    []string `json:"preferred_edition"`
+	PreferredNetwork    []string `json:"preferred_network"`
+	PreferredRegion     []string `json:"preferred_region"`
+	PreferredThreeD     []string `json:"preferred_three_d"`
 
 	GrabWeight float64 `json:"grab_weight"`
 	AgeWeight  float64 `json:"age_weight"`
 
-	// SortCriteriaOrder: order of categories for scoring (first = highest priority). Keys: resolution, quality, codec, visual_tag, audio, channels, etc. Empty = use default order.
+	KeywordsPreferred []string `json:"keywords_preferred,omitempty"`
+	KeywordsWeight    float64  `json:"keywords_weight,omitempty"`
+
+	RegexPreferred []string `json:"regex_preferred,omitempty"`
+	RegexWeight    float64  `json:"regex_weight,omitempty"`
+
+	AvailNZBWeight float64 `json:"availnzb_weight,omitempty"`
+
 	SortCriteriaOrder []string `json:"sort_criteria_order,omitempty"`
 
-	// Custom scoring: when true, category weights multiply each category's 0–10 points; group can use tiers.
 	UseCustomScoring *bool `json:"use_custom_scoring,omitempty"`
-	// Category weights (default 1.0 when use_custom_scoring). Only used when UseCustomScoring is true.
 	ResolutionWeight  float64 `json:"resolution_weight,omitempty"`
 	CodecWeight       float64 `json:"codec_weight,omitempty"`
 	AudioWeight       float64 `json:"audio_weight,omitempty"`
@@ -92,18 +138,73 @@ type SortConfig struct {
 	NetworkWeight     float64 `json:"network_weight,omitempty"`
 	RegionWeight      float64 `json:"region_weight,omitempty"`
 	ThreeDWeight      float64 `json:"three_d_weight,omitempty"`
-	// Release group tiers: when any tier list is non-empty, group score = tier points (whole-word match). Else use GroupOrder.
 	GroupOrderTier1   []string `json:"group_order_tier1,omitempty"`
 	GroupOrderTier2   []string `json:"group_order_tier2,omitempty"`
 	GroupOrderTier3   []string `json:"group_order_tier3,omitempty"`
-	GroupTier1Points   int      `json:"group_tier1_points,omitempty"`
-	GroupTier2Points   int      `json:"group_tier2_points,omitempty"`
-	GroupTier3Points   int      `json:"group_tier3_points,omitempty"`
+	GroupTier1Points  int      `json:"group_tier1_points,omitempty"`
+	GroupTier2Points  int      `json:"group_tier2_points,omitempty"`
+	GroupTier3Points  int      `json:"group_tier3_points,omitempty"`
 }
 
-// filterConfigRaw is used to unmarshal both legacy and new JSON into FilterConfig.
+// filterConfigRaw unmarshals all three generations of JSON:
+//
+//	v3 (current): included/required/excluded
+//	v2: include/avoid (maps to required/excluded)
+//	v1 (legacy): allowed/blocked/etc.
 type filterConfigRaw struct {
-	// New
+	// v3: 3-tier
+	AudioIncluded      []string `json:"audio_included"`
+	AudioRequired      []string `json:"audio_required"`
+	AudioExcluded      []string `json:"audio_excluded"`
+	BitDepthIncluded   []string `json:"bit_depth_included"`
+	BitDepthRequired   []string `json:"bit_depth_required"`
+	BitDepthExcluded   []string `json:"bit_depth_excluded"`
+	ChannelsIncluded   []string `json:"channels_included"`
+	ChannelsRequired   []string `json:"channels_required"`
+	ChannelsExcluded   []string `json:"channels_excluded"`
+	CodecIncluded      []string `json:"codec_included"`
+	CodecRequired      []string `json:"codec_required"`
+	CodecExcluded      []string `json:"codec_excluded"`
+	ContainerIncluded  []string `json:"container_included"`
+	ContainerRequired  []string `json:"container_required"`
+	ContainerExcluded  []string `json:"container_excluded"`
+	EditionIncluded    []string `json:"edition_included"`
+	EditionRequired    []string `json:"edition_required"`
+	EditionExcluded    []string `json:"edition_excluded"`
+	HDRIncluded        []string `json:"hdr_included"`
+	HDRRequired        []string `json:"hdr_required"`
+	HDRExcluded        []string `json:"hdr_excluded"`
+	LanguagesIncluded  []string `json:"languages_included"`
+	LanguagesRequired  []string `json:"languages_required"`
+	LanguagesExcluded  []string `json:"languages_excluded"`
+	NetworkIncluded    []string `json:"network_included"`
+	NetworkRequired    []string `json:"network_required"`
+	NetworkExcluded    []string `json:"network_excluded"`
+	QualityIncluded    []string `json:"quality_included"`
+	QualityRequired    []string `json:"quality_required"`
+	QualityExcluded    []string `json:"quality_excluded"`
+	RegionIncluded     []string `json:"region_included"`
+	RegionRequired     []string `json:"region_required"`
+	RegionExcluded     []string `json:"region_excluded"`
+	ResolutionIncluded []string `json:"resolution_included"`
+	ResolutionRequired []string `json:"resolution_required"`
+	ResolutionExcluded []string `json:"resolution_excluded"`
+	ThreeDIncluded     []string `json:"three_d_included"`
+	ThreeDRequired     []string `json:"three_d_required"`
+	ThreeDExcluded     []string `json:"three_d_excluded"`
+	GroupIncluded      []string `json:"group_included"`
+	GroupRequired      []string `json:"group_required"`
+	GroupExcluded      []string `json:"group_excluded"`
+
+	DubbedExcluded    *bool `json:"dubbed_excluded,omitempty"`
+	HardcodedExcluded *bool `json:"hardcoded_excluded,omitempty"`
+	ProperRequired    *bool `json:"proper_required,omitempty"`
+	RepackRequired    *bool `json:"repack_required,omitempty"`
+	RepackExcluded    *bool `json:"repack_excluded,omitempty"`
+	ExtendedRequired  *bool `json:"extended_required,omitempty"`
+	UnratedRequired   *bool `json:"unrated_required,omitempty"`
+
+	// v2: include/avoid (maps to required/excluded)
 	AudioInclude      []string `json:"audio_include"`
 	AudioAvoid        []string `json:"audio_avoid"`
 	BitDepthInclude   []string `json:"bit_depth_include"`
@@ -130,120 +231,171 @@ type filterConfigRaw struct {
 	ResolutionAvoid   []string `json:"resolution_avoid"`
 	ThreeDInclude     []string `json:"three_d_include"`
 	ThreeDAvoid       []string `json:"three_d_avoid"`
-	GroupInclude     []string `json:"group_include"`
-	GroupAvoid       []string `json:"group_avoid"`
-	DubbedAvoid      *bool    `json:"dubbed_avoid,omitempty"`
-	HardcodedAvoid   *bool    `json:"hardcoded_avoid,omitempty"`
-	ProperInclude    *bool    `json:"proper_include,omitempty"`
-	RepackInclude    *bool   `json:"repack_include,omitempty"`
-	RepackAvoid      *bool   `json:"repack_avoid,omitempty"`
-	ExtendedInclude  *bool   `json:"extended_include,omitempty"`
+	GroupInclude      []string `json:"group_include"`
+	GroupAvoid        []string `json:"group_avoid"`
+	DubbedAvoid       *bool   `json:"dubbed_avoid,omitempty"`
+	HardcodedAvoid    *bool   `json:"hardcoded_avoid,omitempty"`
+	ProperInclude     *bool   `json:"proper_include,omitempty"`
+	RepackInclude     *bool   `json:"repack_include,omitempty"`
+	RepackAvoid       *bool   `json:"repack_avoid,omitempty"`
+	ExtendedInclude   *bool   `json:"extended_include,omitempty"`
 	UnratedInclude    *bool   `json:"unrated_include,omitempty"`
-	MinSizeGB         float64 `json:"min_size_gb"`
-	MaxSizeGB         float64 `json:"max_size_gb"`
-	MinYear           int     `json:"min_year"`
-	MaxYear           int     `json:"max_year"`
-	// Legacy
-	AllowedQualities   []string `json:"allowed_qualities"`
-	BlockedQualities   []string `json:"blocked_qualities"`
-	MinResolution      string   `json:"min_resolution"`
-	MaxResolution      string   `json:"max_resolution"`
-	AllowedCodecs      []string `json:"allowed_codecs"`
-	BlockedCodecs      []string `json:"blocked_codecs"`
-	RequiredAudio      []string `json:"required_audio"`
-	AllowedAudio       []string `json:"allowed_audio"`
-	MinChannels        string   `json:"min_channels"`
-	RequireHDR         bool     `json:"require_hdr"`
-	AllowedHDR         []string `json:"allowed_hdr"`
-	BlockedHDR         []string `json:"blocked_hdr"`
-	BlockSDR           bool     `json:"block_sdr"`
-	RequiredLanguages  []string `json:"required_languages"`
-	AllowedLanguages   []string `json:"allowed_languages"`
-	BlockDubbed        bool     `json:"block_dubbed"`
-	BlockCam           bool     `json:"block_cam"`
-	RequireProper      bool     `json:"require_proper"`
-	AllowRepack        bool     `json:"allow_repack"`
-	BlockHardcoded     bool     `json:"block_hardcoded"`
-	MinBitDepth        string   `json:"min_bit_depth"`
-	BlockedGroups      []string `json:"blocked_groups"`
+
+	MinSizeGB float64 `json:"min_size_gb"`
+	MaxSizeGB float64 `json:"max_size_gb"`
+	MinYear   int     `json:"min_year"`
+	MaxYear   int     `json:"max_year"`
+
+	MinAgeHours float64 `json:"min_age_hours"`
+	MaxAgeHours float64 `json:"max_age_hours"`
+
+	KeywordsExcluded []string `json:"keywords_excluded,omitempty"`
+	KeywordsRequired []string `json:"keywords_required,omitempty"`
+
+	RegexExcluded []string `json:"regex_excluded,omitempty"`
+	RegexRequired []string `json:"regex_required,omitempty"`
+
+	AvailNZBRequired *bool `json:"availnzb_required,omitempty"`
+
+	SizePerResolution map[string]SizeRange `json:"size_per_resolution,omitempty"`
+
+	MinBitrateKbps float64 `json:"min_bitrate_kbps"`
+	MaxBitrateKbps float64 `json:"max_bitrate_kbps"`
+
+	// v1 (legacy)
+	AllowedQualities  []string `json:"allowed_qualities"`
+	BlockedQualities  []string `json:"blocked_qualities"`
+	MinResolution     string   `json:"min_resolution"`
+	MaxResolution     string   `json:"max_resolution"`
+	AllowedCodecs     []string `json:"allowed_codecs"`
+	BlockedCodecs     []string `json:"blocked_codecs"`
+	RequiredAudio     []string `json:"required_audio"`
+	AllowedAudio      []string `json:"allowed_audio"`
+	MinChannels       string   `json:"min_channels"`
+	RequireHDR        bool     `json:"require_hdr"`
+	AllowedHDR        []string `json:"allowed_hdr"`
+	BlockedHDR        []string `json:"blocked_hdr"`
+	BlockSDR          bool     `json:"block_sdr"`
+	RequiredLanguages []string `json:"required_languages"`
+	AllowedLanguages  []string `json:"allowed_languages"`
+	BlockDubbed       bool     `json:"block_dubbed"`
+	BlockCam          bool     `json:"block_cam"`
+	RequireProper     bool     `json:"require_proper"`
+	AllowRepack       bool     `json:"allow_repack"`
+	BlockHardcoded    bool     `json:"block_hardcoded"`
+	MinBitDepth       string   `json:"min_bit_depth"`
+	BlockedGroups     []string `json:"blocked_groups"`
 }
 
-// UnmarshalJSON supports both new (include/avoid) and legacy (allowed/blocked) filter JSON.
+// UnmarshalJSON supports v3 (included/required/excluded), v2 (include/avoid),
+// and v1 (legacy allowed/blocked) filter JSON. Newer fields take precedence.
 func (c *FilterConfig) UnmarshalJSON(data []byte) error {
 	var raw filterConfigRaw
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	// New fields take precedence; fall back to legacy
-	c.AudioInclude = firstNonEmpty(raw.AudioInclude, raw.RequiredAudio, raw.AllowedAudio)
-	c.AudioAvoid = firstNonEmpty(raw.AudioAvoid, nil)
-	c.BitDepthInclude = firstNonEmpty(raw.BitDepthInclude, condSlice(raw.MinBitDepth != "", []string{raw.MinBitDepth}))
-	c.BitDepthAvoid = raw.BitDepthAvoid
-	c.ChannelsInclude = firstNonEmpty(raw.ChannelsInclude, condSlice(raw.MinChannels != "", []string{raw.MinChannels}))
-	c.ChannelsAvoid = raw.ChannelsAvoid
-	c.CodecInclude = firstNonEmpty(raw.CodecInclude, raw.AllowedCodecs)
-	c.CodecAvoid = firstNonEmpty(raw.CodecAvoid, raw.BlockedCodecs)
-	c.ContainerInclude = raw.ContainerInclude
-	c.ContainerAvoid = raw.ContainerAvoid
-	c.EditionInclude = raw.EditionInclude
-	c.EditionAvoid = raw.EditionAvoid
-	c.HDRInclude = firstNonEmpty(raw.HDRInclude, raw.AllowedHDR)
-	if raw.RequireHDR && len(c.HDRInclude) == 0 {
-		c.HDRInclude = []string{"HDR", "DV", "HDR10+", "3D"}
+
+	// Included (bypass) — only v3
+	c.AudioIncluded = raw.AudioIncluded
+	c.BitDepthIncluded = raw.BitDepthIncluded
+	c.ChannelsIncluded = raw.ChannelsIncluded
+	c.CodecIncluded = raw.CodecIncluded
+	c.ContainerIncluded = raw.ContainerIncluded
+	c.EditionIncluded = raw.EditionIncluded
+	c.HDRIncluded = raw.HDRIncluded
+	c.LanguagesIncluded = raw.LanguagesIncluded
+	c.NetworkIncluded = raw.NetworkIncluded
+	c.QualityIncluded = raw.QualityIncluded
+	c.RegionIncluded = raw.RegionIncluded
+	c.ResolutionIncluded = raw.ResolutionIncluded
+	c.ThreeDIncluded = raw.ThreeDIncluded
+	c.GroupIncluded = raw.GroupIncluded
+
+	// Required: v3 > v2 > v1
+	c.AudioRequired = firstNonEmpty(raw.AudioRequired, raw.AudioInclude, raw.RequiredAudio, raw.AllowedAudio)
+	c.BitDepthRequired = firstNonEmpty(raw.BitDepthRequired, raw.BitDepthInclude, condSlice(raw.MinBitDepth != "", []string{raw.MinBitDepth}))
+	c.ChannelsRequired = firstNonEmpty(raw.ChannelsRequired, raw.ChannelsInclude, condSlice(raw.MinChannels != "", []string{raw.MinChannels}))
+	c.CodecRequired = firstNonEmpty(raw.CodecRequired, raw.CodecInclude, raw.AllowedCodecs)
+	c.ContainerRequired = firstNonEmpty(raw.ContainerRequired, raw.ContainerInclude)
+	c.EditionRequired = firstNonEmpty(raw.EditionRequired, raw.EditionInclude)
+	c.HDRRequired = firstNonEmpty(raw.HDRRequired, raw.HDRInclude, raw.AllowedHDR)
+	if raw.RequireHDR && len(c.HDRRequired) == 0 {
+		c.HDRRequired = []string{"HDR", "DV", "HDR10+", "3D"}
 	}
-	c.HDRAvoid = firstNonEmpty(raw.HDRAvoid, raw.BlockedHDR)
-	if raw.BlockSDR && len(c.HDRAvoid) == 0 {
-		c.HDRAvoid = []string{"SDR"}
+	c.LanguagesRequired = firstNonEmpty(raw.LanguagesRequired, raw.LanguagesInclude, raw.RequiredLanguages, raw.AllowedLanguages)
+	c.NetworkRequired = firstNonEmpty(raw.NetworkRequired, raw.NetworkInclude)
+	c.QualityRequired = firstNonEmpty(raw.QualityRequired, raw.QualityInclude, raw.AllowedQualities)
+	c.RegionRequired = firstNonEmpty(raw.RegionRequired, raw.RegionInclude)
+	c.ResolutionRequired = firstNonEmpty(raw.ResolutionRequired, raw.ResolutionInclude, condSlice(raw.MinResolution != "", []string{raw.MinResolution}))
+	c.ThreeDRequired = firstNonEmpty(raw.ThreeDRequired, raw.ThreeDInclude)
+	c.GroupRequired = firstNonEmpty(raw.GroupRequired, raw.GroupInclude)
+
+	// Excluded: v3 > v2 > v1
+	c.AudioExcluded = firstNonEmpty(raw.AudioExcluded, raw.AudioAvoid)
+	c.BitDepthExcluded = firstNonEmpty(raw.BitDepthExcluded, raw.BitDepthAvoid)
+	c.ChannelsExcluded = firstNonEmpty(raw.ChannelsExcluded, raw.ChannelsAvoid)
+	c.CodecExcluded = firstNonEmpty(raw.CodecExcluded, raw.CodecAvoid, raw.BlockedCodecs)
+	c.ContainerExcluded = firstNonEmpty(raw.ContainerExcluded, raw.ContainerAvoid)
+	c.EditionExcluded = firstNonEmpty(raw.EditionExcluded, raw.EditionAvoid)
+	c.HDRExcluded = firstNonEmpty(raw.HDRExcluded, raw.HDRAvoid, raw.BlockedHDR)
+	if raw.BlockSDR && len(c.HDRExcluded) == 0 {
+		c.HDRExcluded = []string{"SDR"}
 	}
-	c.LanguagesInclude = firstNonEmpty(raw.LanguagesInclude, raw.RequiredLanguages, raw.AllowedLanguages)
-	c.LanguagesAvoid = raw.LanguagesAvoid
-	c.NetworkInclude = raw.NetworkInclude
-	c.NetworkAvoid = raw.NetworkAvoid
-	c.QualityInclude = firstNonEmpty(raw.QualityInclude, raw.AllowedQualities)
-	c.QualityAvoid = firstNonEmpty(raw.QualityAvoid, raw.BlockedQualities)
-	if raw.BlockCam && len(c.QualityAvoid) == 0 {
-		c.QualityAvoid = []string{"CAM", "TeleSync", "TeleCine", "SCR"}
+	c.LanguagesExcluded = firstNonEmpty(raw.LanguagesExcluded, raw.LanguagesAvoid)
+	c.NetworkExcluded = firstNonEmpty(raw.NetworkExcluded, raw.NetworkAvoid)
+	c.QualityExcluded = firstNonEmpty(raw.QualityExcluded, raw.QualityAvoid, raw.BlockedQualities)
+	if raw.BlockCam && len(c.QualityExcluded) == 0 {
+		c.QualityExcluded = []string{"CAM", "TeleSync", "TeleCine", "SCR"}
 	}
-	c.RegionInclude = raw.RegionInclude
-	c.RegionAvoid = raw.RegionAvoid
-	c.ResolutionInclude = firstNonEmpty(raw.ResolutionInclude, condSlice(raw.MinResolution != "", []string{raw.MinResolution}))
-	c.ResolutionAvoid = raw.ResolutionAvoid
-	c.ThreeDInclude = raw.ThreeDInclude
-	c.ThreeDAvoid = raw.ThreeDAvoid
-	c.GroupInclude = raw.GroupInclude
-	c.GroupAvoid = firstNonEmpty(raw.GroupAvoid, raw.BlockedGroups)
-	if raw.DubbedAvoid != nil {
-		c.DubbedAvoid = raw.DubbedAvoid
-	} else if raw.BlockDubbed {
+	c.RegionExcluded = firstNonEmpty(raw.RegionExcluded, raw.RegionAvoid)
+	c.ResolutionExcluded = firstNonEmpty(raw.ResolutionExcluded, raw.ResolutionAvoid)
+	c.ThreeDExcluded = firstNonEmpty(raw.ThreeDExcluded, raw.ThreeDAvoid)
+	c.GroupExcluded = firstNonEmpty(raw.GroupExcluded, raw.GroupAvoid, raw.BlockedGroups)
+
+	// Booleans: v3 > v2 > v1
+	c.DubbedExcluded = firstBoolPtr(raw.DubbedExcluded, raw.DubbedAvoid)
+	if c.DubbedExcluded == nil && raw.BlockDubbed {
 		t := true
-		c.DubbedAvoid = &t
+		c.DubbedExcluded = &t
 	}
-	if raw.HardcodedAvoid != nil {
-		c.HardcodedAvoid = raw.HardcodedAvoid
-	} else if raw.BlockHardcoded {
+	c.HardcodedExcluded = firstBoolPtr(raw.HardcodedExcluded, raw.HardcodedAvoid)
+	if c.HardcodedExcluded == nil && raw.BlockHardcoded {
 		t := true
-		c.HardcodedAvoid = &t
+		c.HardcodedExcluded = &t
 	}
-	if raw.ProperInclude != nil {
-		c.ProperInclude = raw.ProperInclude
-	} else if raw.RequireProper {
+	c.ProperRequired = firstBoolPtr(raw.ProperRequired, raw.ProperInclude)
+	if c.ProperRequired == nil && raw.RequireProper {
 		t := true
-		c.ProperInclude = &t
+		c.ProperRequired = &t
 	}
-	if raw.RepackInclude != nil {
-		c.RepackInclude = raw.RepackInclude
-	} else if raw.RepackAvoid != nil {
-		c.RepackAvoid = raw.RepackAvoid
-	} else if raw.AllowRepack {
+	c.RepackRequired = firstBoolPtr(raw.RepackRequired, raw.RepackInclude)
+	c.RepackExcluded = firstBoolPtr(raw.RepackExcluded, raw.RepackAvoid)
+	if c.RepackRequired == nil && c.RepackExcluded == nil && raw.AllowRepack {
 		t := true
-		c.RepackInclude = &t
+		c.RepackRequired = &t
 	}
-	c.ExtendedInclude = raw.ExtendedInclude
-	c.UnratedInclude = raw.UnratedInclude
+	c.ExtendedRequired = firstBoolPtr(raw.ExtendedRequired, raw.ExtendedInclude)
+	c.UnratedRequired = firstBoolPtr(raw.UnratedRequired, raw.UnratedInclude)
+
 	c.MinSizeGB = raw.MinSizeGB
 	c.MaxSizeGB = raw.MaxSizeGB
 	c.MinYear = raw.MinYear
 	c.MaxYear = raw.MaxYear
+	c.MinAgeHours = raw.MinAgeHours
+	c.MaxAgeHours = raw.MaxAgeHours
+	c.KeywordsExcluded = raw.KeywordsExcluded
+	c.KeywordsRequired = raw.KeywordsRequired
+	c.RegexExcluded = raw.RegexExcluded
+	c.RegexRequired = raw.RegexRequired
+	c.AvailNZBRequired = raw.AvailNZBRequired
+	c.SizePerResolution = raw.SizePerResolution
+	c.MinBitrateKbps = raw.MinBitrateKbps
+	c.MaxBitrateKbps = raw.MaxBitrateKbps
+
+	// Normalize language lists to short codes so config stores canonical form (UI may send full names).
+	c.LanguagesIncluded = pttoptions.NormalizeLanguageSlice(c.LanguagesIncluded)
+	c.LanguagesRequired = pttoptions.NormalizeLanguageSlice(c.LanguagesRequired)
+	c.LanguagesExcluded = pttoptions.NormalizeLanguageSlice(c.LanguagesExcluded)
 	return nil
 }
 
@@ -263,98 +415,127 @@ func condSlice(ok bool, s []string) []string {
 	return s
 }
 
-// sortConfigRaw for unmarshaling legacy (weight maps) and new (order slices) sort JSON.
-type sortConfigRaw struct {
-	ResolutionOrder []string       `json:"resolution_order"`
-	CodecOrder      []string       `json:"codec_order"`
-	AudioOrder      []string       `json:"audio_order"`
-	QualityOrder    []string       `json:"quality_order"`
-	VisualTagOrder  []string       `json:"visual_tag_order"`
-	ChannelsOrder   []string       `json:"channels_order"`
-	BitDepthOrder   []string       `json:"bit_depth_order"`
-	ContainerOrder  []string       `json:"container_order"`
-	LanguagesOrder  []string       `json:"languages_order"`
-	GroupOrder      []string       `json:"group_order"`
-	EditionOrder    []string       `json:"edition_order"`
-	NetworkOrder    []string       `json:"network_order"`
-	RegionOrder     []string       `json:"region_order"`
-	ThreeDOrder      []string `json:"three_d_order"`
-	GrabWeight       float64  `json:"grab_weight"`
-	AgeWeight        float64  `json:"age_weight"`
-	SortCriteriaOrder []string `json:"sort_criteria_order,omitempty"`
-	// Custom scoring
-	UseCustomScoring *bool    `json:"use_custom_scoring,omitempty"`
-	ResolutionWeight  float64 `json:"resolution_weight,omitempty"`
-	CodecWeight       float64 `json:"codec_weight,omitempty"`
-	AudioWeight       float64 `json:"audio_weight,omitempty"`
-	QualityWeight     float64 `json:"quality_weight,omitempty"`
-	VisualTagWeight   float64 `json:"visual_tag_weight,omitempty"`
-	ChannelsWeight    float64 `json:"channels_weight,omitempty"`
-	BitDepthWeight    float64 `json:"bit_depth_weight,omitempty"`
-	ContainerWeight   float64 `json:"container_weight,omitempty"`
-	LanguagesWeight   float64 `json:"languages_weight,omitempty"`
-	GroupWeight       float64 `json:"group_weight,omitempty"`
-	EditionWeight     float64 `json:"edition_weight,omitempty"`
-	NetworkWeight     float64 `json:"network_weight,omitempty"`
-	RegionWeight      float64 `json:"region_weight,omitempty"`
-	ThreeDWeight      float64 `json:"three_d_weight,omitempty"`
-	GroupOrderTier1   []string `json:"group_order_tier1,omitempty"`
-	GroupOrderTier2   []string `json:"group_order_tier2,omitempty"`
-	GroupOrderTier3   []string `json:"group_order_tier3,omitempty"`
-	GroupTier1Points   int      `json:"group_tier1_points,omitempty"`
-	GroupTier2Points   int      `json:"group_tier2_points,omitempty"`
-	GroupTier3Points   int      `json:"group_tier3_points,omitempty"`
-	// Legacy
-	ResolutionWeights   map[string]int `json:"resolution_weights"`
-	CodecWeights       map[string]int `json:"codec_weights"`
-	AudioWeights       map[string]int `json:"audio_weights"`
-	QualityWeights     map[string]int `json:"quality_weights"`
-	VisualTagWeights   map[string]int `json:"visual_tag_weights"`
-	PreferredGroups    []string       `json:"preferred_groups"`
-	PreferredLanguages []string       `json:"preferred_languages"`
+func firstBoolPtr(ptrs ...*bool) *bool {
+	for _, p := range ptrs {
+		if p != nil {
+			return p
+		}
+	}
+	return nil
 }
 
-// UnmarshalJSON supports both new (order slices) and legacy (weight maps) sort JSON.
+// sortConfigRaw for unmarshaling v3 (preferred_*), v2 (*_order), and v1 (weight maps) sort JSON.
+type sortConfigRaw struct {
+	// v3: preferred_*
+	PreferredResolution []string `json:"preferred_resolution"`
+	PreferredCodec      []string `json:"preferred_codec"`
+	PreferredAudio      []string `json:"preferred_audio"`
+	PreferredQuality    []string `json:"preferred_quality"`
+	PreferredVisualTag  []string `json:"preferred_visual_tag"`
+	PreferredChannels   []string `json:"preferred_channels"`
+	PreferredBitDepth   []string `json:"preferred_bit_depth"`
+	PreferredContainer  []string `json:"preferred_container"`
+	PreferredLanguages  []string `json:"preferred_languages"`
+	PreferredGroup      []string `json:"preferred_group"`
+	PreferredEdition    []string `json:"preferred_edition"`
+	PreferredNetwork    []string `json:"preferred_network"`
+	PreferredRegion     []string `json:"preferred_region"`
+	PreferredThreeD     []string `json:"preferred_three_d"`
+
+	// v2: *_order
+	ResolutionOrder []string `json:"resolution_order"`
+	CodecOrder      []string `json:"codec_order"`
+	AudioOrder      []string `json:"audio_order"`
+	QualityOrder    []string `json:"quality_order"`
+	VisualTagOrder  []string `json:"visual_tag_order"`
+	ChannelsOrder   []string `json:"channels_order"`
+	BitDepthOrder   []string `json:"bit_depth_order"`
+	ContainerOrder  []string `json:"container_order"`
+	LanguagesOrder  []string `json:"languages_order"`
+	GroupOrder      []string `json:"group_order"`
+	EditionOrder    []string `json:"edition_order"`
+	NetworkOrder    []string `json:"network_order"`
+	RegionOrder     []string `json:"region_order"`
+	ThreeDOrder     []string `json:"three_d_order"`
+
+	GrabWeight        float64  `json:"grab_weight"`
+	AgeWeight         float64  `json:"age_weight"`
+	KeywordsPreferred []string `json:"keywords_preferred,omitempty"`
+	KeywordsWeight    float64  `json:"keywords_weight,omitempty"`
+	RegexPreferred    []string `json:"regex_preferred,omitempty"`
+	RegexWeight       float64  `json:"regex_weight,omitempty"`
+	AvailNZBWeight    float64  `json:"availnzb_weight,omitempty"`
+	SortCriteriaOrder []string `json:"sort_criteria_order,omitempty"`
+
+	UseCustomScoring *bool   `json:"use_custom_scoring,omitempty"`
+	ResolutionWeight float64 `json:"resolution_weight,omitempty"`
+	CodecWeight      float64 `json:"codec_weight,omitempty"`
+	AudioWeight      float64 `json:"audio_weight,omitempty"`
+	QualityWeight    float64 `json:"quality_weight,omitempty"`
+	VisualTagWeight  float64 `json:"visual_tag_weight,omitempty"`
+	ChannelsWeight   float64 `json:"channels_weight,omitempty"`
+	BitDepthWeight   float64 `json:"bit_depth_weight,omitempty"`
+	ContainerWeight  float64 `json:"container_weight,omitempty"`
+	LanguagesWeight  float64 `json:"languages_weight,omitempty"`
+	GroupWeight      float64 `json:"group_weight,omitempty"`
+	EditionWeight    float64 `json:"edition_weight,omitempty"`
+	NetworkWeight    float64 `json:"network_weight,omitempty"`
+	RegionWeight     float64 `json:"region_weight,omitempty"`
+	ThreeDWeight     float64 `json:"three_d_weight,omitempty"`
+	GroupOrderTier1  []string `json:"group_order_tier1,omitempty"`
+	GroupOrderTier2  []string `json:"group_order_tier2,omitempty"`
+	GroupOrderTier3  []string `json:"group_order_tier3,omitempty"`
+	GroupTier1Points int      `json:"group_tier1_points,omitempty"`
+	GroupTier2Points int      `json:"group_tier2_points,omitempty"`
+	GroupTier3Points int      `json:"group_tier3_points,omitempty"`
+
+	// v1 (legacy)
+	ResolutionWeights map[string]int `json:"resolution_weights"`
+	CodecWeights      map[string]int `json:"codec_weights"`
+	AudioWeights      map[string]int `json:"audio_weights"`
+	QualityWeights    map[string]int `json:"quality_weights"`
+	VisualTagWeights  map[string]int `json:"visual_tag_weights"`
+	LegacyPreferredGroups    []string `json:"preferred_groups"`
+	LegacyPreferredLanguages []string `json:"preferred_languages"`
+}
+
+// UnmarshalJSON supports v3 (preferred_*), v2 (*_order), and v1 (weight maps) sort JSON.
 func (c *SortConfig) UnmarshalJSON(data []byte) error {
 	var raw sortConfigRaw
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	c.ResolutionOrder = raw.ResolutionOrder
-	if len(c.ResolutionOrder) == 0 && len(raw.ResolutionWeights) > 0 {
-		c.ResolutionOrder = mapKeysByValueDesc(raw.ResolutionWeights)
+
+	c.PreferredResolution = firstNonEmpty(raw.PreferredResolution, raw.ResolutionOrder)
+	if len(c.PreferredResolution) == 0 && len(raw.ResolutionWeights) > 0 {
+		c.PreferredResolution = mapKeysByValueDesc(raw.ResolutionWeights)
 	}
-	c.CodecOrder = raw.CodecOrder
-	if len(c.CodecOrder) == 0 && len(raw.CodecWeights) > 0 {
-		c.CodecOrder = mapKeysByValueDesc(raw.CodecWeights)
+	c.PreferredCodec = firstNonEmpty(raw.PreferredCodec, raw.CodecOrder)
+	if len(c.PreferredCodec) == 0 && len(raw.CodecWeights) > 0 {
+		c.PreferredCodec = mapKeysByValueDesc(raw.CodecWeights)
 	}
-	c.AudioOrder = raw.AudioOrder
-	if len(c.AudioOrder) == 0 && len(raw.AudioWeights) > 0 {
-		c.AudioOrder = mapKeysByValueDesc(raw.AudioWeights)
+	c.PreferredAudio = firstNonEmpty(raw.PreferredAudio, raw.AudioOrder)
+	if len(c.PreferredAudio) == 0 && len(raw.AudioWeights) > 0 {
+		c.PreferredAudio = mapKeysByValueDesc(raw.AudioWeights)
 	}
-	c.QualityOrder = raw.QualityOrder
-	if len(c.QualityOrder) == 0 && len(raw.QualityWeights) > 0 {
-		c.QualityOrder = mapKeysByValueDesc(raw.QualityWeights)
+	c.PreferredQuality = firstNonEmpty(raw.PreferredQuality, raw.QualityOrder)
+	if len(c.PreferredQuality) == 0 && len(raw.QualityWeights) > 0 {
+		c.PreferredQuality = mapKeysByValueDesc(raw.QualityWeights)
 	}
-	c.VisualTagOrder = raw.VisualTagOrder
-	if len(c.VisualTagOrder) == 0 && len(raw.VisualTagWeights) > 0 {
-		c.VisualTagOrder = mapKeysByValueDesc(raw.VisualTagWeights)
+	c.PreferredVisualTag = firstNonEmpty(raw.PreferredVisualTag, raw.VisualTagOrder)
+	if len(c.PreferredVisualTag) == 0 && len(raw.VisualTagWeights) > 0 {
+		c.PreferredVisualTag = mapKeysByValueDesc(raw.VisualTagWeights)
 	}
-	c.ChannelsOrder = raw.ChannelsOrder
-	c.BitDepthOrder = raw.BitDepthOrder
-	c.ContainerOrder = raw.ContainerOrder
-	c.LanguagesOrder = raw.LanguagesOrder
-	if len(c.LanguagesOrder) == 0 {
-		c.LanguagesOrder = raw.PreferredLanguages
-	}
-	c.GroupOrder = raw.GroupOrder
-	if len(c.GroupOrder) == 0 {
-		c.GroupOrder = raw.PreferredGroups
-	}
-	c.EditionOrder = raw.EditionOrder
-	c.NetworkOrder = raw.NetworkOrder
-	c.RegionOrder = raw.RegionOrder
-	c.ThreeDOrder = raw.ThreeDOrder
+	c.PreferredChannels = firstNonEmpty(raw.PreferredChannels, raw.ChannelsOrder)
+	c.PreferredBitDepth = firstNonEmpty(raw.PreferredBitDepth, raw.BitDepthOrder)
+	c.PreferredContainer = firstNonEmpty(raw.PreferredContainer, raw.ContainerOrder)
+	c.PreferredLanguages = pttoptions.NormalizeLanguageSlice(firstNonEmpty(raw.PreferredLanguages, raw.LanguagesOrder, raw.LegacyPreferredLanguages))
+	c.PreferredGroup = firstNonEmpty(raw.PreferredGroup, raw.GroupOrder, raw.LegacyPreferredGroups)
+	c.PreferredEdition = firstNonEmpty(raw.PreferredEdition, raw.EditionOrder)
+	c.PreferredNetwork = firstNonEmpty(raw.PreferredNetwork, raw.NetworkOrder)
+	c.PreferredRegion = firstNonEmpty(raw.PreferredRegion, raw.RegionOrder)
+	c.PreferredThreeD = firstNonEmpty(raw.PreferredThreeD, raw.ThreeDOrder)
+
 	if raw.GrabWeight != 0 {
 		c.GrabWeight = raw.GrabWeight
 	} else {
@@ -365,6 +546,11 @@ func (c *SortConfig) UnmarshalJSON(data []byte) error {
 	} else {
 		c.AgeWeight = 1.0
 	}
+	c.KeywordsPreferred = raw.KeywordsPreferred
+	c.KeywordsWeight = raw.KeywordsWeight
+	c.RegexPreferred = raw.RegexPreferred
+	c.RegexWeight = raw.RegexWeight
+	c.AvailNZBWeight = raw.AvailNZBWeight
 	c.SortCriteriaOrder = raw.SortCriteriaOrder
 	c.UseCustomScoring = raw.UseCustomScoring
 	c.ResolutionWeight = raw.ResolutionWeight
@@ -403,7 +589,10 @@ func (c *SortConfig) UnmarshalJSON(data []byte) error {
 
 // mapKeysByValueDesc returns keys sorted by value descending (highest first).
 func mapKeysByValueDesc(m map[string]int) []string {
-	type kv struct{ k string; v int }
+	type kv struct {
+		k string
+		v int
+	}
 	var s []kv
 	for k, v := range m {
 		s = append(s, kv{k, v})

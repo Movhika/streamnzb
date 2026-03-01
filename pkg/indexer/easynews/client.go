@@ -186,6 +186,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			PubDate:       result.PubDate,
 			Size:          result.Size,
 			SourceIndexer: c,
+			Duration:      result.DurationSeconds,
 		}
 		items = append(items, item)
 	}
@@ -396,11 +397,12 @@ type easynewsSearchResponse struct {
 
 // easynewsResult represents a filtered Easynews search result
 type easynewsResult struct {
-	Title       string
-	DownloadURL string
-	GUID        string
-	PubDate     string
-	Size        int64
+	Title          string
+	DownloadURL    string
+	GUID           string
+	PubDate        string
+	Size           int64
+	DurationSeconds float64
 }
 
 // easynewsItem represents an item in the Easynews data array
@@ -559,12 +561,18 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 			}
 		}
 
+		var durSec float64
+		if durationSeconds != nil && *durationSeconds > 0 {
+			durSec = float64(*durationSeconds)
+		}
+
 		results = append(results, easynewsResult{
-			Title:       finalTitle,
-			DownloadURL: downloadURL,
-			GUID:        fmt.Sprintf("easynews-%s", item.Hash),
-			PubDate:     pubDate,
-			Size:        item.Size,
+			Title:           finalTitle,
+			DownloadURL:     downloadURL,
+			GUID:            fmt.Sprintf("easynews-%s", item.Hash),
+			PubDate:         pubDate,
+			Size:            item.Size,
+			DurationSeconds: durSec,
 		})
 	}
 

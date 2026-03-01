@@ -11,6 +11,7 @@ import (
 
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/media/fileutil"
 	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/media/nzb"
 	"streamnzb/pkg/release"
@@ -138,20 +139,6 @@ type AvailReportMeta struct {
 	TvdbID  string
 	Season  int
 	Episode int
-}
-
-// catFromReportMeta derives Newznab category from report meta: "5000" for TV, "2000" for movies.
-func catFromReportMeta(m *AvailReportMeta) string {
-	if m == nil {
-		return ""
-	}
-	if m.Season > 0 || m.Episode > 0 || m.TvdbID != "" {
-		return "5000"
-	}
-	if m.ImdbID != "" {
-		return "2000"
-	}
-	return ""
 }
 
 // CreateSession creates a new session for the given NZB.
@@ -378,16 +365,16 @@ func (m *Manager) GetDeviceFailoverOrder(deviceToken string) []string {
 	return order
 }
 
-// SetKnownGoodSlot records a slot path that successfully served media for the given stream key.
+// SetKnownGoodSlot records a slot path that successfully served media for the given requested slot.
 // Used to short-circuit repeated requests for earlier slots when the client uses the original URL for Range/retries.
-func (m *Manager) SetKnownGoodSlot(streamKey, slotPath string) {
+func (m *Manager) SetKnownGoodSlot(requestedSlot, successfulSlot string) {
 	expiresAt := time.Now().Add(m.ttl)
-	m.knownGoodSlots.Store(streamKey, &knownGoodSlotEntry{slotPath: slotPath, expiresAt: expiresAt})
+	m.knownGoodSlots.Store(requestedSlot, &knownGoodSlotEntry{slotPath: successfulSlot, expiresAt: expiresAt})
 }
 
-// GetKnownGoodSlot returns a slot path that successfully served for the stream key if valid and not expired.
-func (m *Manager) GetKnownGoodSlot(streamKey string) (slotPath string, ok bool) {
-	val, ok := m.knownGoodSlots.Load(streamKey)
+// GetKnownGoodSlot returns a slot path that successfully served for the requested slot if valid and not expired.
+func (m *Manager) GetKnownGoodSlot(requestedSlot string) (slotPath string, ok bool) {
+	val, ok := m.knownGoodSlots.Load(requestedSlot)
 	if !ok || val == nil {
 		return "", false
 	}
@@ -556,7 +543,7 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 			if s.Release != nil && s.Release.Title != "" {
 				title = s.Release.Title
 			} else if s.NZB != nil && len(s.NZB.Files) > 0 {
-				parts := strings.Split(nzb.ExtractFilename(s.NZB.Files[0].Subject), ".")
+				parts := strings.Split(fileutil.ExtractFilename(s.NZB.Files[0].Subject), ".")
 				if len(parts) > 1 {
 					title = strings.Join(parts[:len(parts)-1], ".")
 				} else {

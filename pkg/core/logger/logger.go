@@ -246,16 +246,6 @@ func SetLevel(levelStr string) {
 	Init(levelStr)
 }
 
-// Close closes the log file if one is open
-func Close() {
-	logFileMu.Lock()
-	defer logFileMu.Unlock()
-	if logFile != nil {
-		logFile.Close()
-		logFile = nil
-	}
-}
-
 // Helper functions for easy access
 // Trace is for verbose debugging; set LOG_LEVEL=TRACE to see these
 func Trace(msg string, args ...any) {
@@ -276,9 +266,4 @@ func Warn(msg string, args ...any) {
 
 func Error(msg string, args ...any) {
 	Log.Error(msg, args...)
-}
-
-func Fatal(msg string, args ...any) {
-	Log.Error(msg, args...)
-	os.Exit(1)
 }

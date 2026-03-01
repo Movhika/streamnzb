@@ -3,6 +3,7 @@ package release
 import (
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -43,6 +44,21 @@ type Release struct {
 	QuerySource string   // "id" or "text" — ID-based results prioritized
 	Grabs       int      // From newznab grabs attribute, for popularity scoring
 	Languages   []string // From Newznab language attribute (e.g. "English", "German")
+
+	Available *bool   // nil = unknown, true/false = checked via AvailNZB
+	Duration  float64 // Duration in seconds (0 = unknown). Populated by Easynews.
+}
+
+// Key returns a stable key for the release: DetailsURL if set, otherwise "normalizedTitle:size".
+// Used for deduplication and map keys (e.g. releaseScores).
+func Key(r *Release) string {
+	if r == nil {
+		return ""
+	}
+	if r.DetailsURL != "" {
+		return r.DetailsURL
+	}
+	return NormalizeTitle(r.Title) + ":" + strconv.FormatInt(r.Size, 10)
 }
 
 // EqualByTitle returns true if both releases have the same normalized title.

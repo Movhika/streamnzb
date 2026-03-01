@@ -27,7 +27,6 @@ const (
 	IndexerPrefix         = "INDEXER_"
 	IndexerQueryHeaderEnv = "INDEXER_QUERY_HEADER"
 	IndexerGrabHeaderEnv  = "INDEXER_GRAB_HEADER"
-	ProviderHeaderEnv     = "PROVIDER_HEADER"
 )
 
 // Config JSON keys returned by OverrideKeys (for UI warnings)
@@ -76,11 +75,6 @@ func IndexerGrabHeader() string {
 		return v
 	}
 	return DefaultIndexerUserAgent
-}
-
-// ProviderHeader returns User-Agent for NNTP provider connections. Empty if not set.
-func ProviderHeader() string {
-	return os.Getenv(ProviderHeaderEnv)
 }
 
 // LogLevel returns LOG_LEVEL with default "INFO" (for early logger init before config).

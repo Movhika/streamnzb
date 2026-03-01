@@ -205,7 +205,19 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 
 	logger.SetLevel(comp.Config.LogLevel)
 	if s.strmServer != nil {
-		s.strmServer.Reload(comp.Config, comp.Config.AddonBaseURL, comp.Indexer, comp.Validator, comp.Triage, comp.AvailClient, comp.AvailNZBIndexerHosts, comp.TMDBClient, comp.TVDBClient, s.deviceManager, s.streamManager)
+		s.strmServer.Reload(&stremio.ServerOptions{
+			Config:               comp.Config,
+			BaseURL:              comp.Config.AddonBaseURL,
+			Indexer:              comp.Indexer,
+			Validator:            comp.Validator,
+			TriageService:        comp.Triage,
+			AvailClient:          comp.AvailClient,
+			AvailNZBIndexerHosts: comp.AvailNZBIndexerHosts,
+			TMDBClient:           comp.TMDBClient,
+			TVDBClient:           comp.TVDBClient,
+			DeviceManager:        s.deviceManager,
+			StreamManager:        s.streamManager,
+		})
 	}
 }
 

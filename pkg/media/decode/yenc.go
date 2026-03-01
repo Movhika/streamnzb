@@ -52,15 +52,6 @@ func normalizeCRLF(r io.Reader) io.Reader { return &crlfReader{r: r} }
 
 // Decode reads from r, decodes yEnc, and writes to w.
 // It returns the number of bytes written and the filename found in the header.
-func Decode(r io.Reader, w io.Writer) (int64, string, error) {
-	dec := rapidyenc.NewDecoder(normalizeCRLF(r))
-	n, err := io.Copy(w, dec)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return 0, "", err
-	}
-	return n, dec.Meta.FileName, nil
-}
-
 // Frame represents a decoded segment.
 type Frame struct {
 	Data     []byte

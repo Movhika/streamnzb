@@ -1,6 +1,10 @@
 package unpack
 
-import "strings"
+import (
+	"strings"
+
+	"streamnzb/pkg/media/fileutil"
+)
 
 const (
 	ExtRar  = ".rar"
@@ -22,59 +26,14 @@ const (
 	ExtNzb  = ".nzb"
 )
 
-var videoExts = []string{
-	ExtMkv, ExtMp4, ExtAvi, ExtM2ts, ExtTs,
-	ExtVob, ExtWmv, ExtFlv, ExtWebm, ExtMov,
-}
-
 // ExtractFilename extracts a clean filename from an NZB subject line or file path.
 func ExtractFilename(subject string) string {
-	// Quoted filename takes priority
-	if start := strings.Index(subject, "\""); start != -1 {
-		if end := strings.Index(subject[start+1:], "\""); end != -1 {
-			return subject[start+1 : start+1+end]
-		}
-	}
-
-	clean := strings.TrimSpace(subject)
-
-	// Strip trailing (x/y) or [x/y] segment counters
-	if idx := strings.LastIndex(clean, " ("); idx != -1 {
-		suffix := clean[idx:]
-		if strings.Contains(suffix, "/") && strings.HasSuffix(suffix, ")") {
-			clean = strings.TrimSpace(clean[:idx])
-		}
-	}
-	if idx := strings.LastIndex(clean, " ["); idx != -1 {
-		suffix := clean[idx:]
-		if strings.Contains(suffix, "/") && strings.HasSuffix(suffix, "]") {
-			clean = strings.TrimSpace(clean[:idx])
-		}
-	}
-
-	// Strip trailing " yEnc"
-	clean = strings.TrimSuffix(clean, " yEnc")
-	clean = strings.TrimSpace(clean)
-
-	// Handle file paths (RAR entry names can contain directory separators)
-	if idx := strings.LastIndex(clean, "/"); idx != -1 {
-		clean = clean[idx+1:]
-	}
-	if idx := strings.LastIndex(clean, "\\"); idx != -1 {
-		clean = clean[idx+1:]
-	}
-
-	return clean
+	return fileutil.ExtractFilename(subject)
 }
 
+// IsVideoFile returns true if name has a video extension.
 func IsVideoFile(name string) bool {
-	lower := strings.ToLower(name)
-	for _, ext := range videoExts {
-		if strings.HasSuffix(lower, ext) {
-			return true
-		}
-	}
-	return false
+	return fileutil.IsVideoFile(name)
 }
 
 func IsArchiveFile(name string) bool {
