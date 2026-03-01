@@ -252,13 +252,13 @@ func (e *encrypted7zStream) Close() error {
 func filter7zFiles(files []*loader.File) []*loader.File {
 	var result []*loader.File
 	for _, f := range files {
-		lower := strings.ToLower(f.Name())
+		lower := strings.ToLower(ExtractFilename(f.Name()))
 		if strings.HasSuffix(lower, ".7z") || strings.Contains(lower, ".7z.") {
 			result = append(result, f)
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return strings.ToLower(result[i].Name()) < strings.ToLower(result[j].Name())
+		return strings.ToLower(ExtractFilename(result[i].Name())) < strings.ToLower(ExtractFilename(result[j].Name()))
 	})
 	return result
 }
