@@ -93,14 +93,22 @@ func (s *Session) SetFallbackStreams(urls []string) {
 	s.FallbackStreamURLs = urls
 }
 
+// knownGoodSlotEntry holds a slot path that successfully served; used to short-circuit repeated
+// requests for earlier slots when the client (e.g. Stremio) uses the original play URL for Range requests.
+type knownGoodSlotEntry struct {
+	slotPath  string
+	expiresAt time.Time
+}
+
 // Manager manages active streaming sessions
 type Manager struct {
-	sessions      map[string]*Session
-	pools         []*nntp.ClientPool
-	estimator     *loader.SegmentSizeEstimator
-	ttl           time.Duration
-	mu            sync.RWMutex
-	failoverOrder sync.Map // key deviceToken (string) -> []string (slot path "stream:s:type:id:idx" or legacy stream ID)
+	sessions        map[string]*Session
+	pools           []*nntp.ClientPool
+	estimator       *loader.SegmentSizeEstimator
+	ttl             time.Duration
+	mu              sync.RWMutex
+	failoverOrder   sync.Map // key deviceToken (string) -> []string (slot path "stream:s:type:id:idx" or legacy stream ID)
+	knownGoodSlots  sync.Map // key streamKey (streamId:contentType:id) -> *knownGoodSlotEntry
 }
 
 // SetBlueprint caches the archive blueprint
@@ -370,6 +378,26 @@ func (m *Manager) GetDeviceFailoverOrder(deviceToken string) []string {
 	return order
 }
 
+// SetKnownGoodSlot records a slot path that successfully served media for the given stream key.
+// Used to short-circuit repeated requests for earlier slots when the client uses the original URL for Range/retries.
+func (m *Manager) SetKnownGoodSlot(streamKey, slotPath string) {
+	expiresAt := time.Now().Add(m.ttl)
+	m.knownGoodSlots.Store(streamKey, &knownGoodSlotEntry{slotPath: slotPath, expiresAt: expiresAt})
+}
+
+// GetKnownGoodSlot returns a slot path that successfully served for the stream key if valid and not expired.
+func (m *Manager) GetKnownGoodSlot(streamKey string) (slotPath string, ok bool) {
+	val, ok := m.knownGoodSlots.Load(streamKey)
+	if !ok || val == nil {
+		return "", false
+	}
+	ent, ok := val.(*knownGoodSlotEntry)
+	if !ok || ent == nil || time.Now().After(ent.expiresAt) {
+		return "", false
+	}
+	return ent.slotPath, true
+}
+
 // GetSession retrieves an existing session
 func (m *Manager) GetSession(sessionID string) (*Session, error) {
 	m.mu.RLock()
@@ -440,6 +468,13 @@ func (m *Manager) cleanup() {
 	for _, s := range toClose {
 		s.Close()
 	}
+
+	m.knownGoodSlots.Range(func(key, val any) bool {
+		if ent, ok := val.(*knownGoodSlotEntry); ok && now.After(ent.expiresAt) {
+			m.knownGoodSlots.Delete(key)
+		}
+		return true
+	})
 }
 
 // StartPlayback increments the active play count for a session and tracks IP

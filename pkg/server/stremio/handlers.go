@@ -1143,6 +1143,12 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 	}
 
 	seenURL := make(map[string]bool)
+	// When skipFilterSort (e.g. AIOStreams), also dedupe by normalized title so the same
+	// release from different indexers (different DetailsURL) collapses to one entry.
+	var seenTitle map[string]bool
+	if skipFilterSort {
+		seenTitle = make(map[string]bool)
+	}
 	var merged []triage.Candidate
 	for _, c := range availCandidates {
 		if c.Release == nil || c.Release.DetailsURL == "" {
@@ -1150,6 +1156,18 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 		}
 		if unavailableDetailsURLs[c.Release.DetailsURL] {
 			continue
+		}
+		if seenURL[c.Release.DetailsURL] {
+			continue
+		}
+		if seenTitle != nil && c.Release.Title != "" {
+			titleKey := release.NormalizeTitleForDedup(c.Release.Title)
+			if titleKey != "" {
+				if seenTitle[titleKey] {
+					continue
+				}
+				seenTitle[titleKey] = true
+			}
 		}
 		seenURL[c.Release.DetailsURL] = true
 		merged = append(merged, c)
@@ -1163,6 +1181,15 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 		}
 		if seenURL[c.Release.DetailsURL] {
 			continue
+		}
+		if seenTitle != nil && c.Release.Title != "" {
+			titleKey := release.NormalizeTitleForDedup(c.Release.Title)
+			if titleKey != "" {
+				if seenTitle[titleKey] {
+					continue
+				}
+				seenTitle[titleKey] = true
+			}
 		}
 		seenURL[c.Release.DetailsURL] = true
 		merged = append(merged, c)
@@ -1569,15 +1596,8 @@ func (s *Server) resolveStreamSlot(ctx context.Context, streamId, contentType, i
 				matchedByPath = true
 				break
 			}
-			// Legacy: entry is stream ID only — match by (streamId, index) occurrence
 			if !strings.HasPrefix(entry, streamSlotPrefix) && entry == streamId {
-				occurrence := 0
-				for k := 0; k <= p; k++ {
-					if order[k] == streamId {
-						occurrence++
-					}
-				}
-				if occurrence == index+1 {
+				if legacyOccurrenceIndex(order, entry, p) == index {
 					ourPosition = p
 					break
 				}
@@ -1594,83 +1614,14 @@ func (s *Server) resolveStreamSlot(ctx context.Context, streamId, contentType, i
 			if strings.HasPrefix(entry, streamSlotPrefix) {
 				fallbackURLs = append(fallbackURLs, base+"/play/"+entry)
 			} else {
-				// Legacy stream ID: k-th occurrence = candidate index k-1
-				count := 0
-				for k := 0; k <= j; k++ {
-					if order[k] == entry {
-						count++
-					}
-				}
-				ci := count - 1
+				ci := legacyOccurrenceIndex(order, entry, j)
 				fallbackURLs = append(fallbackURLs, base+"/play/"+streamSlotPrefix+entry+":"+contentType+":"+id+":"+strconv.Itoa(ci))
 			}
 		}
 	} else {
-		// No stored order (e.g. not AIOStreams): same-stream only.
 		for i := index + 1; i < len(list.Candidates); i++ {
 			fallbackURLs = append(fallbackURLs, base+"/play/"+streamSlotPrefix+streamId+":"+contentType+":"+id+":"+strconv.Itoa(i))
 		}
-	}
-
-	// Log failover order as release names (use existing list when entry is same stream to avoid N buildOrderedPlayList calls)
-	var names []string
-	if ourPosition >= 0 && len(order) > 0 {
-		for j := ourPosition; j < len(order); j++ {
-			entry := order[j]
-			if strings.HasPrefix(entry, streamSlotPrefix) {
-				sid, _, _, idx, ok := parseStreamSlotID(entry)
-				if ok && sid != "" {
-					var cand *triage.Candidate
-					if sid == streamId && idx < len(list.Candidates) {
-						cand = &list.Candidates[idx]
-					} else {
-						nextList, _ := s.buildOrderedPlayList(ctx, sid, contentType, id, skipFilterSort)
-						if nextList != nil && idx < len(nextList.Candidates) {
-							cand = &nextList.Candidates[idx]
-						}
-					}
-					if cand != nil && cand.Release != nil && cand.Release.Title != "" {
-						names = append(names, cand.Release.Title)
-					} else {
-						names = append(names, "["+entry+"]")
-					}
-				} else {
-					names = append(names, "["+entry+"]")
-				}
-			} else {
-				count := 0
-				for k := 0; k <= j; k++ {
-					if order[k] == entry {
-						count++
-					}
-				}
-				ci := count - 1
-				var cand *triage.Candidate
-				if entry == streamId && ci < len(list.Candidates) {
-					cand = &list.Candidates[ci]
-				} else {
-					nextList, _ := s.buildOrderedPlayList(ctx, entry, contentType, id, skipFilterSort)
-					if nextList != nil && ci < len(nextList.Candidates) {
-						cand = &nextList.Candidates[ci]
-					}
-				}
-				if cand != nil && cand.Release != nil && cand.Release.Title != "" {
-					names = append(names, cand.Release.Title)
-				} else {
-					names = append(names, "["+entry+":"+strconv.Itoa(ci)+"]")
-				}
-			}
-		}
-		logger.Info("Failover order (release names)", "stream", streamId, "contentType", contentType, "id", id, "ourPosition", ourPosition, "matchedBySlotPath", matchedByPath, "names", names)
-	} else {
-		for i := index; i < len(list.Candidates); i++ {
-			if r := list.Candidates[i].Release; r != nil && r.Title != "" {
-				names = append(names, r.Title)
-			} else {
-				names = append(names, fmt.Sprintf("[%d]", i))
-			}
-		}
-		logger.Info("Failover order (release names)", "stream", streamId, "contentType", contentType, "id", id, "names", names)
 	}
 	s.sessionManager.SetFallbackStreams(sessionID, fallbackURLs)
 	sess, err := s.sessionManager.GetSession(sessionID)
@@ -1833,99 +1784,114 @@ func parseStreamSlotID(sessionID string) (streamId, contentType, id string, inde
 	return streamId, contentType, id, index, true
 }
 
+// streamKeyFromSlotID returns the content key ("streamId:contentType:id") for a slot session ID,
+// using defaultStreamID when the slot uses the legacy 3-part format (empty streamId).
+func streamKeyFromSlotID(sessionID, defaultStreamID string) (key string, ok bool) {
+	streamId, contentType, id, _, ok := parseStreamSlotID(sessionID)
+	if !ok {
+		return "", false
+	}
+	if streamId == "" {
+		streamId = defaultStreamID
+	}
+	return streamId + ":" + contentType + ":" + id, true
+}
+
+// legacyOccurrenceIndex returns the 0-based candidate index for a legacy (stream-ID-only) entry
+// at position pos in the failover order. The k-th occurrence of the same stream ID maps to candidate k-1.
+func legacyOccurrenceIndex(order []string, entry string, pos int) int {
+	count := 0
+	for k := 0; k <= pos; k++ {
+		if order[k] == entry {
+			count++
+		}
+	}
+	return count - 1
+}
+
 // handlePlay serves video content for a session.
 // Each request creates its own stream from the cached blueprint.
 // No stream sharing, no mutexes, no caching -- the shared segment
 // cache in loader.File handles deduplication automatically.
 // Phase 3: sessionID may be a stream slot "stream:type:id:index"; we create a deferred session on first hit and set fallbacks.
+// Failover is handled internally: on failure the handler tries the next slot in sequence without any HTTP redirects.
 func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/play/")
 	logger.Info("Play request", "session", sessionID)
 
-	sess, err := s.sessionManager.GetSession(sessionID)
-	if err != nil {
-		// Phase 3: resolve stream slot to a real session (create deferred for this index, set fallbacks)
-		if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
-			// Use unfiltered list when device has stored failover order (slot paths), so slot indices match the list we sent to AIOStreams.
-			skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
-			if !skipFilterSort && device != nil {
-				order := s.sessionManager.GetDeviceFailoverOrder(device.Token)
-				if len(order) > 0 && strings.HasPrefix(order[0], streamSlotPrefix) {
-					skipFilterSort = true
-				}
+	// Short-circuit: players (Stremio, VLC, etc.) reuse the original play URL for Range/retry
+	// requests instead of the final redirected URL (HTTP 307 = "keep using original URL").
+	// Swap sessionID to the known-good slot and serve its content directly.
+	if streamKey, ok := streamKeyFromSlotID(sessionID, s.getDefaultStreamID()); ok {
+		_, _, _, reqIndex, _ := parseStreamSlotID(sessionID)
+		if knownGood, found := s.sessionManager.GetKnownGoodSlot(streamKey); found && knownGood != sessionID {
+			if _, _, _, goodIndex, goodOK := parseStreamSlotID(knownGood); goodOK && reqIndex < goodIndex {
+				logger.Info("Serving known-good stream directly (player reused original URL)", "requested", sessionID, "serving", knownGood)
+				sessionID = knownGood
 			}
-			sess, err = s.resolveStreamSlot(r.Context(), streamId, contentType, id, index, device, skipFilterSort)
-			if err != nil {
-				logger.Debug("Resolve stream slot failed", "slot", sessionID, "err", err)
-				http.Error(w, "Stream slot not found or invalid", http.StatusNotFound)
-				return
-			}
-			// sess is now the created session (sessionID includes streamId)
-		} else {
-			http.Error(w, "Session expired or not found", http.StatusNotFound)
-			return
 		}
 	}
 
-	if _, err = sess.GetOrDownloadNZB(s.sessionManager); err != nil {
-		logger.Error("Failed to lazy load NZB", "id", sessionID, "err", err)
-		redirectToNextStreamOrError(w, r, s.baseURL, sess, true)
-		return
-	}
+	// Try slots in sequence until one works or all fallbacks are exhausted.
+	var (
+		sess   *session.Session
+		stream io.ReadSeekCloser
+		name   string
+		size   int64
+	)
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			logger.Info("Internal failover to next slot", "session", sessionID, "attempt", attempt)
+		}
 
-	files := sess.Files
-	if len(files) == 0 {
-		if sess.File != nil {
-			files = []*loader.File{sess.File}
-		} else {
-			logger.Error("No files in session", "id", sessionID)
-			if sess.NZB != nil {
-				s.validator.InvalidateCache(sess.NZB.Hash())
+		// Resolve or retrieve session
+		var err error
+		sess, err = s.sessionManager.GetSession(sessionID)
+		if err != nil {
+			if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
+				skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
+				if !skipFilterSort && device != nil {
+					order := s.sessionManager.GetDeviceFailoverOrder(device.Token)
+					if len(order) > 0 && strings.HasPrefix(order[0], streamSlotPrefix) {
+						skipFilterSort = true
+					}
+				}
+				sess, err = s.resolveStreamSlot(r.Context(), streamId, contentType, id, index, device, skipFilterSort)
+				if err != nil {
+					logger.Debug("Resolve stream slot failed", "slot", sessionID, "err", err)
+					http.Error(w, "Stream slot not found or invalid", http.StatusNotFound)
+					return
+				}
+			} else {
+				http.Error(w, "Session expired or not found", http.StatusNotFound)
+				return
 			}
+		}
+
+		stream, name, size, err = s.tryPlaySlot(r.Context(), sess, sessionID)
+		if err == nil {
+			break
+		}
+
+		next := nextFallbackSessionID(sess)
+		s.sessionManager.DeleteSession(sessionID)
+		if next == "" {
 			forceDisconnect(w, s.baseURL)
 			return
 		}
-	}
-
-	// If any file has exceeded its failure threshold, redirect immediately
-	// instead of starting a stream that will fail on the first read.
-	for _, f := range files {
-		if f.IsFailed() {
-			logger.Error("Session file has too many failures, redirecting to next stream", "session", sessionID, "file", f.Name())
-			s.reportBadRelease(sess, loader.ErrTooManyZeroFills)
-			if sess.NZB != nil {
-				s.validator.InvalidateCache(sess.NZB.Hash())
-			}
-			redirectToNextStreamOrError(w, r, s.baseURL, sess, true)
-			return
-		}
-	}
-
-	// Each request gets its own stream, scoped to the HTTP request context.
-	// When the client disconnects, r.Context() is cancelled, which propagates
-	// down through VirtualStream -> SegmentReader -> DownloadSegment.
-	password := ""
-	if sess.NZB != nil {
-		password = sess.NZB.Password()
-	}
-	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), files, sess.Blueprint, password)
-	if bp != nil && sess.Blueprint == nil {
-		sess.SetBlueprint(bp)
-	}
-	if err != nil {
-		logger.Error("Failed to open media stream", "id", sessionID, "err", err)
-		s.reportBadRelease(sess, err)
-		if sess.NZB != nil {
-			s.validator.InvalidateCache(sess.NZB.Hash())
-		}
-		redirectToNextStreamOrError(w, r, s.baseURL, sess, true)
-		return
+		sessionID = next
 	}
 	defer stream.Close()
 
 	// Report successful fetch/stream to AvailNZB (lazy sessions weren't reported at catalog time)
 	if s.availReporter != nil {
 		s.availReporter.ReportGood(sess)
+	}
+
+	// Record known-good slot so repeated requests (player reusing original URL)
+	// can short-circuit directly here instead of re-running the failover chain.
+	if sk, ok := streamKeyFromSlotID(sessionID, s.getDefaultStreamID()); ok {
+		s.sessionManager.SetKnownGoodSlot(sk, sessionID)
 	}
 
 	// If client sent t= (start time in seconds) and no Range, convert to byte offset for supported containers.
@@ -1963,6 +1929,71 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 
 	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
 	logger.Trace("Finished serving media", "session", sessionID)
+}
+
+// tryPlaySlot attempts to download the NZB, validate files, and open a media stream for the
+// given session. On failure it reports bad releases and invalidates the NZB cache as needed.
+// The caller is responsible for DeleteSession and advancing to the next fallback.
+func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session, sessionID string) (io.ReadSeekCloser, string, int64, error) {
+	if _, err := sess.GetOrDownloadNZB(s.sessionManager); err != nil {
+		logger.Error("Failed to lazy load NZB", "id", sessionID, "err", err)
+		return nil, "", 0, err
+	}
+
+	files := sess.Files
+	if len(files) == 0 {
+		if sess.File != nil {
+			files = []*loader.File{sess.File}
+		} else {
+			logger.Error("No files in session", "id", sessionID)
+			if sess.NZB != nil {
+				s.validator.InvalidateCache(sess.NZB.Hash())
+			}
+			return nil, "", 0, fmt.Errorf("no files in session %s", sessionID)
+		}
+	}
+
+	for _, f := range files {
+		if f.IsFailed() {
+			logger.Error("Session file has too many failures", "session", sessionID, "file", f.Name())
+			s.reportBadRelease(sess, loader.ErrTooManyZeroFills)
+			if sess.NZB != nil {
+				s.validator.InvalidateCache(sess.NZB.Hash())
+			}
+			return nil, "", 0, fmt.Errorf("file %s exceeded failure threshold", f.Name())
+		}
+	}
+
+	password := ""
+	if sess.NZB != nil {
+		password = sess.NZB.Password()
+	}
+	stream, name, size, bp, err := unpack.GetMediaStream(ctx, files, sess.Blueprint, password)
+	if bp != nil && sess.Blueprint == nil {
+		sess.SetBlueprint(bp)
+	}
+	if err != nil {
+		logger.Error("Failed to open media stream", "id", sessionID, "err", err)
+		s.reportBadRelease(sess, err)
+		if sess.NZB != nil {
+			s.validator.InvalidateCache(sess.NZB.Hash())
+		}
+		return nil, "", 0, err
+	}
+	return stream, name, size, nil
+}
+
+// nextFallbackSessionID extracts the session ID from the first fallback play URL.
+func nextFallbackSessionID(sess *session.Session) string {
+	nextURL := sess.FirstFallbackStreamURL()
+	if nextURL == "" {
+		return ""
+	}
+	idx := strings.Index(nextURL, "/play/")
+	if idx < 0 {
+		return ""
+	}
+	return nextURL[idx+len("/play/"):]
 }
 
 // reportBadRelease reports unstreamable releases to AvailNZB in the background.
@@ -2126,43 +2157,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // triage which respects the user's priority configuration (resolution, codec, etc.).
 func streamScore(s Stream) int {
 	return s.Score
-}
-
-// redirectToNextStreamOrError redirects to the next stream in the priority list if enableFailover is true and the session has fallback URLs; otherwise redirects to the error video.
-func redirectToNextStreamOrError(w http.ResponseWriter, r *http.Request, baseURL string, sess *session.Session, enableFailover bool) {
-	if enableFailover {
-		if nextURL := sess.FirstFallbackStreamURL(); nextURL != "" {
-			var positionLog string
-			if r != nil {
-				if t := r.URL.Query().Get("t"); t != "" {
-					nextURL = appendQueryParam(nextURL, "t", t)
-					positionLog = " with t=" + t
-				}
-			}
-			if positionLog != "" {
-				logger.Info("Redirecting to next stream"+positionLog, "url", nextURL)
-			} else {
-				logger.Info("Redirecting to next stream in priority list", "url", nextURL)
-			}
-			w.Header().Set("Connection", "close")
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			http.Redirect(w, &http.Request{Method: "GET"}, nextURL, http.StatusTemporaryRedirect)
-			return
-		}
-	}
-	forceDisconnect(w, baseURL)
-}
-
-// appendQueryParam appends key=value to url, using ? or & as needed.
-func appendQueryParam(u, key, value string) string {
-	parsed, err := url.Parse(u)
-	if err != nil {
-		return u
-	}
-	q := parsed.Query()
-	q.Set(key, value)
-	parsed.RawQuery = q.Encode()
-	return parsed.String()
 }
 
 // forceDisconnect redirects to the embedded failure video when streaming is unavailable.
