@@ -8,3 +8,4 @@ pkg/server/web/static
 state.json
 *.log
 .cursor
+.agents

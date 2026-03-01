@@ -130,7 +130,7 @@ func (f *File) detectSegmentSize() error {
 				f.mu.Unlock()
 				return nil
 			}
-			logger.Debug("Using estimated segment size", "name", f.Name(), "size", decoded)
+			logger.Trace("Using estimated segment size", "name", f.Name(), "size", decoded)
 			f.applySegmentSize(decoded)
 			f.mu.Unlock()
 			return nil
@@ -176,7 +176,7 @@ func (f *File) applySegmentSize(segSize int64) {
 	}
 	f.totalSize = offset
 	f.detected = true
-	logger.Debug("Recalculated total decoded size", "size", f.totalSize)
+	logger.Trace("Recalculated total decoded size", "size", f.totalSize)
 }
 
 // --- Segment lookup (binary search) ---

@@ -546,12 +546,12 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile, password str
 			VolOffset:    p.dataOffset,
 		})
 		if i < 3 || i >= len(mainParts)-2 {
-			logger.Debug("Blueprint part", "idx", i, "vStart", vOffset, "vEnd", vOffset+p.packedSize, "volOff", p.dataOffset, "packed", p.packedSize)
+			logger.Trace("Blueprint part", "idx", i, "vStart", vOffset, "vEnd", vOffset+p.packedSize, "volOff", p.dataOffset, "packed", p.packedSize)
 		}
 		vOffset += p.packedSize
 	}
 
-	logger.Debug("Blueprint total", "vOffset", vOffset, "headerSize", headerSize, "parts", len(mainParts))
+	logger.Trace("Blueprint total", "vOffset", vOffset, "headerSize", headerSize, "parts", len(mainParts))
 
 	if vOffset < headerSize {
 		logger.Debug("Adjusting stream size", "header", headerSize, "actual", vOffset)
@@ -645,7 +645,7 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 	// read from the wrong byte offset and produce corrupt data.
 	probe := probeContinuation(allRarFiles, startIdx, name, password)
 	if probe.dataOffset > 0 {
-		logger.Debug("Probed continuation volume", "dataOffset", probe.dataOffset, "packedSize", probe.packedSize)
+		logger.Trace("Probed continuation volume", "dataOffset", probe.dataOffset, "packedSize", probe.packedSize)
 	}
 
 	first := mainParts[0]
@@ -711,7 +711,7 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 		})
 		added++
 	}
-	logger.Debug("Manual volume aggregation", "added", added, "total", len(result))
+	logger.Trace("Manual volume aggregation", "added", added, "total", len(result))
 	return result
 }
 
@@ -805,7 +805,7 @@ func tryNestedArchive(parts []filePart, password string) (*ArchiveBlueprint, err
 	nestedParts := sets[bestSet].parts
 	logger.Info("Detected nested archive", "set", bestSet, "size", maxSize, "volumes", len(nestedParts))
 	for _, p := range nestedParts {
-		logger.Debug("Nested archive part", "name", p.name, "volName", p.volName, "packed", p.packedSize, "unpacked", p.unpackedSize)
+		logger.Trace("Nested archive part", "name", p.name, "volName", p.volName, "packed", p.packedSize, "unpacked", p.unpackedSize)
 	}
 
 	// Build VirtualFiles for each inner archive volume

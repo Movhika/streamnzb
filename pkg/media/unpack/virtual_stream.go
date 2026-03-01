@@ -147,7 +147,7 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 		return target, nil
 	}
 
-	logger.Debug("VirtualStream.Seek: start", "from", s.offset, "to", target, "whence", whence, "currentPart", s.currentPart)
+	logger.Trace("VirtualStream.Seek: start", "from", s.offset, "to", target, "whence", whence, "currentPart", s.currentPart)
 	logger.Trace("VirtualStream.Seek: start", "from", s.offset, "to", target, "whence", whence, "currentPart", s.currentPart)
 
 	// Check if we're staying in the same part - if so, reuse the reader and seek within it
@@ -164,10 +164,10 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 			if err := volFile.EnsureSegmentMap(); err == nil {
 				if segIdx := volFile.FindSegmentIndex(volOff); segIdx >= 0 {
 					if _, cached := volFile.GetCachedSegment(segIdx); !cached {
-						logger.Debug("VirtualStream.Seek: prefetching segment in same part", "segIdx", segIdx, "volOff", volOff)
+						logger.Trace("VirtualStream.Seek: prefetching segment in same part", "segIdx", segIdx, "volOff", volOff)
 						logger.Trace("VirtualStream.Seek: prefetching segment in same part", "segIdx", segIdx)
 						done := volFile.StartDownloadSegment(s.ctx, segIdx)
-						logger.Debug("VirtualStream.Seek: prefetch registered (same part)", "segIdx", segIdx, "hasChannel", done != nil)
+						logger.Trace("VirtualStream.Seek: prefetch registered (same part)", "segIdx", segIdx, "hasChannel", done != nil)
 					}
 				}
 			}
@@ -234,7 +234,7 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 		localOff := target - part.VirtualStart
 		volOff := part.VolOffset + localOff
 		if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 {
-			logger.Debug("VirtualStream.Seek: prefetching target segment", "volOff", volOff, "partIdx", partIdx)
+			logger.Trace("VirtualStream.Seek: prefetching target segment", "volOff", volOff, "partIdx", partIdx)
 			logger.Trace("VirtualStream.Seek: prefetching target segment", "volOff", volOff, "partIdx", partIdx)
 			if err := volFile.EnsureSegmentMap(); err == nil {
 				if segIdx := volFile.FindSegmentIndex(volOff); segIdx >= 0 {
@@ -243,9 +243,9 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 					// each volume has its own segment cache, so part 2's seg 0 is rarely cached until
 					// we request it; without waiting, first Read() blocks and client gets no data,
 					// then may open range=0- ("download from start").
-					logger.Debug("VirtualStream.Seek: starting prefetch", "segIdx", segIdx, "volOff", volOff, "partIdx", partIdx)
+					logger.Trace("VirtualStream.Seek: starting prefetch", "segIdx", segIdx, "volOff", volOff, "partIdx", partIdx)
 					done := volFile.StartDownloadSegment(s.ctx, segIdx)
-					logger.Debug("VirtualStream.Seek: prefetch registered", "segIdx", segIdx, "hasChannel", done != nil)
+					logger.Trace("VirtualStream.Seek: prefetch registered", "segIdx", segIdx, "hasChannel", done != nil)
 					select {
 					case <-done:
 						logger.Trace("VirtualStream.Seek: target segment ready", "segIdx", segIdx)
@@ -254,13 +254,13 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 						logger.Trace("VirtualStream.Seek: prefetch wait timeout", "segIdx", segIdx)
 					}
 				} else {
-					logger.Debug("VirtualStream.Seek: segment index not found", "volOff", volOff)
+					logger.Trace("VirtualStream.Seek: segment index not found", "volOff", volOff)
 				}
 			} else {
-				logger.Debug("VirtualStream.Seek: EnsureSegmentMap failed", "err", err)
+				logger.Trace("VirtualStream.Seek: EnsureSegmentMap failed", "err", err)
 			}
 		} else {
-			logger.Debug("VirtualStream.Seek: not RAR volume or volOff=0", "isLoaderFile", ok, "volOff", volOff)
+			logger.Trace("VirtualStream.Seek: not RAR volume or volOff=0", "isLoaderFile", ok, "volOff", volOff)
 		}
 	}
 
