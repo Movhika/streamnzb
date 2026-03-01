@@ -1766,55 +1766,55 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		}
 	}
 
-	// Try slots in sequence until one works or all fallbacks are exhausted.
 	var (
 		sess   *session.Session
 		stream io.ReadSeekCloser
 		name   string
 		size   int64
 	)
-	for attempt := 0; ; attempt++ {
-		if attempt > 0 {
-			logger.Info("Internal failover to next slot", "session", sessionID, "attempt", attempt)
-		}
 
-		// Resolve or retrieve session
-		var err error
-		sess, err = s.sessionManager.GetSession(sessionID)
-		if err != nil {
-			if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
-				skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
-				if !skipFilterSort && device != nil {
-					order := s.sessionManager.GetDeviceFailoverOrder(device.Token)
-					if len(order) > 0 && strings.HasPrefix(order[0], streamSlotPrefix) {
-						skipFilterSort = true
-					}
+	// Resolve or retrieve session
+	var err error
+	sess, err = s.sessionManager.GetSession(sessionID)
+	if err != nil {
+		if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
+			skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
+			if !skipFilterSort && device != nil {
+				order := s.sessionManager.GetDeviceFailoverOrder(device.Token)
+				if len(order) > 0 && strings.HasPrefix(order[0], streamSlotPrefix) {
+					skipFilterSort = true
 				}
-				key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
-				sess, err = s.resolveStreamSlot(r.Context(), key, index, device, skipFilterSort)
-				if err != nil {
-					logger.Debug("Resolve stream slot failed", "slot", sessionID, "err", err)
-					http.Error(w, "Stream slot not found or invalid", http.StatusNotFound)
-					return
-				}
-			} else {
-				http.Error(w, "Session expired or not found", http.StatusNotFound)
+			}
+			key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
+			sess, err = s.resolveStreamSlot(r.Context(), key, index, device, skipFilterSort)
+			if err != nil {
+				logger.Debug("Resolve stream slot failed", "slot", sessionID, "err", err)
+				http.Error(w, "Stream slot not found or invalid", http.StatusNotFound)
 				return
 			}
+		} else {
+			http.Error(w, "Session expired or not found", http.StatusNotFound)
+			return
 		}
+	}
 
-		stream, name, size, err = s.tryPlaySlot(r.Context(), sess)
-		if err == nil {
-			break
-		}
-
+	stream, name, size, err = s.tryPlaySlot(r.Context(), sess)
+	if err != nil {
 		next := nextFallbackSessionID(sess)
 		s.sessionManager.DeleteSession(sessionID)
 		if next == "" {
 			forceDisconnect(w, s.baseURL)
 			return
 		}
-		sessionID = next
+
+		redirectURL := fmt.Sprintf("%s/play/%s", s.baseURLWithToken(device), next)
+		if r.URL.RawQuery != "" {
+			redirectURL += "?" + r.URL.RawQuery
+		}
+
+		logger.Info("Redirecting to next fallback slot", "from", sessionID, "to", next, "err", err)
+		http.Redirect(w, r, redirectURL, http.StatusFound)
+		return
 	}
 	defer stream.Close()
 
