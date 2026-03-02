@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// UsageData stores the usage for a specific indexer
 type UsageData struct {
 	LastResetDay         string `json:"last_reset_day"`
 	APIHitsUsed          int    `json:"api_hits_used"`
@@ -16,7 +15,6 @@ type UsageData struct {
 	AllTimeDownloadsUsed int    `json:"all_time_downloads_used"`
 }
 
-// UsageManager handles persistent storage of indexer usage via StateManager
 type UsageManager struct {
 	state *persistence.StateManager
 	data  map[string]*UsageData
@@ -26,7 +24,6 @@ type UsageManager struct {
 var globalManager *UsageManager
 var managerMu sync.Mutex
 
-// GetUsageManager returns a usage manager using the provided StateManager
 func GetUsageManager(sm *persistence.StateManager) (*UsageManager, error) {
 	managerMu.Lock()
 	defer managerMu.Unlock()
@@ -81,7 +78,6 @@ func (m *UsageManager) save() error {
 	return m.state.Set("indexer_usage", m.data)
 }
 
-// GetIndexerUsage returns the usage for an indexer, resetting it if it's a new day
 func (m *UsageManager) GetIndexerUsage(name string) *UsageData {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -107,11 +103,8 @@ func (m *UsageManager) GetIndexerUsage(name string) *UsageData {
 	return data
 }
 
-// UpdateUsage updates and saves the usage for an indexer
 func (m *UsageManager) UpdateUsage(name string, apiHits, downloads int) {
 	m.mu.Lock()
-	// We don't unlock yet because we want to save while holding lock?
-	// Actually, let's update then save.
 
 	today := time.Now().Format("2006-01-02")
 	data, ok := m.data[name]
@@ -122,19 +115,16 @@ func (m *UsageManager) UpdateUsage(name string, apiHits, downloads int) {
 
 	if data.LastResetDay != today {
 		data.LastResetDay = today
-		// Add previous day's final counts to all-time before resetting
+
 		data.AllTimeAPIHitsUsed += data.APIHitsUsed
 		data.AllTimeDownloadsUsed += data.DownloadsUsed
 		data.APIHitsUsed = apiHits
 		data.DownloadsUsed = downloads
-		// Add today's usage from indexer headers (may be >0 if searches already done today)
+
 		data.AllTimeAPIHitsUsed += apiHits
 		data.AllTimeDownloadsUsed += downloads
 	} else {
-		// Newznab headers often give us the TOTAL spent or REMAINING.
-		// If apiHits is provided as an absolute "used" value, we set it.
-		// If it's a delta, we should add it.
-		// Let's assume absolute "used" for simplicity if possible.
+
 		deltaHits := apiHits - data.APIHitsUsed
 		deltaDls := downloads - data.DownloadsUsed
 		data.APIHitsUsed = apiHits
@@ -153,7 +143,6 @@ func (m *UsageManager) UpdateUsage(name string, apiHits, downloads int) {
 	}
 }
 
-// IncrementUsed increments the hits/downloads and saves
 func (m *UsageManager) IncrementUsed(name string, hits, downloads int) {
 	m.mu.Lock()
 	today := time.Now().Format("2006-01-02")
@@ -180,7 +169,6 @@ func (m *UsageManager) IncrementUsed(name string, hits, downloads int) {
 	}
 }
 
-// GetUsageByPrefix returns usage data for all indexers whose name has the given prefix.
 func (m *UsageManager) GetUsageByPrefix(prefix string) map[string]*UsageData {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -188,7 +176,7 @@ func (m *UsageManager) GetUsageByPrefix(prefix string) map[string]*UsageData {
 	result := make(map[string]*UsageData)
 	for name, data := range m.data {
 		if len(name) >= len(prefix) && name[:len(prefix)] == prefix {
-			// Return a copy to avoid concurrent modification
+
 			cp := *data
 			result[name] = &cp
 		}
@@ -196,8 +184,6 @@ func (m *UsageManager) GetUsageByPrefix(prefix string) map[string]*UsageData {
 	return result
 }
 
-// SyncUsage removes usage data for indexers that are no longer active.
-// Keeps sub-indexers (e.g. "Parent: Child") when their parent is active.
 func (m *UsageManager) SyncUsage(activeNames []string) {
 	m.mu.Lock()
 
@@ -206,12 +192,11 @@ func (m *UsageManager) SyncUsage(activeNames []string) {
 		activeMap[name] = true
 	}
 
-	// Check if name is active (directly or as sub-indexer of an active parent)
 	isActive := func(name string) bool {
 		if activeMap[name] {
 			return true
 		}
-		// Check if this is a sub-indexer (e.g. "Parent: Child")
+
 		for active := range activeMap {
 			prefix := active + ": "
 			if len(name) > len(prefix) && name[:len(prefix)] == prefix {

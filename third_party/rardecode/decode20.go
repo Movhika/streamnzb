@@ -8,9 +8,9 @@ const audioSize = 257
 
 type decoder20 struct {
 	br      *rarBitReader
-	size    int64 // unpacked bytes left to be decompressed
-	hdrRead bool  // block header has been read
-	isAudio bool  // current block is Audio
+	size    int64
+	hdrRead bool
+	isAudio bool
 
 	codeLength [audioSize * 4]byte
 
@@ -20,7 +20,6 @@ type decoder20 struct {
 
 func (d *decoder20) version() int { return decode20Ver }
 
-// init intializes the decoder for decoding a new file.
 func (d *decoder20) init(r byteReader, reset bool, size int64, ver int) {
 	if d.br == nil {
 		d.br = newRarBitReader(r)

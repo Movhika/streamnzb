@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// NZBFS implements fs.FS for rardecode, mapping filenames to UnpackableFile streams.
 type NZBFS struct {
 	files map[string]UnpackableFile
 }

@@ -8,33 +8,28 @@ import (
 	"sync"
 )
 
-// ProviderHostsSource provides provider hostnames for reporting.
 type ProviderHostsSource interface {
 	GetProviderHosts() []string
 }
 
-// Reporter reports availability to AvailNZB.
 type Reporter struct {
 	client      *Client
 	providerSrc ProviderHostsSource
-	reported    sync.Map // sessionID -> struct{} for dedup; ReportGood is called on every play request (seeking, etc.)
+	reported    sync.Map
 }
 
-// NewReporter creates a reporter.
 func NewReporter(client *Client, providerSrc ProviderHostsSource) *Reporter {
 	return &Reporter{client: client, providerSrc: providerSrc}
 }
 
-// ReportGood reports successful fetch/stream to AvailNZB. Deduplicated per session (avoids spam from each range/seek request).
 func (r *Reporter) ReportGood(sess *session.Session) {
 	if _, loaded := r.reported.LoadOrStore(sess.ID, struct{}{}); loaded {
-		return // already reported for this session
+		return
 	}
 	logger.Info("Reporting good/streamable release to AvailNZB", "session", sess.ID)
 	r.report(sess, true)
 }
 
-// ReportBad reports bad/unstreamable release to AvailNZB as unavailable.
 func (r *Reporter) ReportBad(sess *session.Session, reason string) {
 	if reason != "" {
 		logger.Info("Reporting bad/unstreamable release to AvailNZB", "session", sess.ID, "reason", reason)
@@ -42,7 +37,6 @@ func (r *Reporter) ReportBad(sess *session.Session, reason string) {
 	r.report(sess, false)
 }
 
-// ReportRAR reports RAR releases to AvailNZB as available with compression_type=rar.
 func (r *Reporter) ReportRAR(sess *session.Session) {
 	logger.Info("Reporting RAR release to AvailNZB (compression_type)", "session", sess.ID)
 	r.report(sess, true)
@@ -63,7 +57,7 @@ func (r *Reporter) report(sess *session.Session, available bool) {
 		}
 		meta := ReportMeta{ReleaseName: sess.ReportReleaseName(), Size: sess.ReportSize()}
 		if ids := sess.ContentIDs; ids != nil {
-			// Prefer TV (TvdbID + season/episode) when we have episode context, so reports aren't sent as movie-only when both are set.
+
 			if ids.TvdbID != "" && (ids.Season > 0 || ids.Episode > 0) {
 				meta.TvdbID = ids.TvdbID
 				meta.Season = ids.Season

@@ -11,22 +11,18 @@ import (
 	"streamnzb/pkg/core/logger"
 )
 
-// SegmentReader provides linear reading with read-ahead prefetching.
-// It uses the File's shared segment cache so concurrent readers on the
-// same volume benefit from each other's downloads.
 type SegmentReader struct {
 	file   *File
 	ctx    context.Context
 	cancel context.CancelFunc
-	parent context.Context // Store parent to recreate context on seek
+	parent context.Context
 
 	mu     sync.Mutex
 	segIdx int
-	segOff int64 // byte offset within current segment
-	offset int64 // virtual offset in file
+	segOff int64
+	offset int64
 	closed bool
 
-	// Prefetch
 	prefetchWg  sync.WaitGroup
 	prefetching map[int]bool
 }
@@ -53,8 +49,9 @@ func NewSegmentReader(parent context.Context, f *File, startOffset int64) *Segme
 		sr.segIdx = idx
 		sr.segOff = startOffset - f.segments[idx].StartOffset
 	}
-	// No prefetch here - first Read() gets the segment with zero competition.
-	// startPrefetch() runs after each Read for sequential throughput.
+
+	sr.startPrefetch()
+
 	return sr
 }
 
@@ -72,9 +69,6 @@ func (r *SegmentReader) Read(p []byte) (int, error) {
 	segOff := r.segOff
 	r.mu.Unlock()
 
-	// Download the segment the caller actually needs FIRST, before
-	// spawning any prefetch goroutines. This guarantees the sync read
-	// gets an NNTP connection without competing against prefetch.
 	data, err := r.waitForSegment(segIdx)
 	if err != nil {
 		return 0, err
@@ -103,19 +97,17 @@ func (r *SegmentReader) Read(p []byte) (int, error) {
 	}
 	r.mu.Unlock()
 
-	// Start prefetch AFTER the sync read succeeds. This way prefetch
-	// goroutines only use connections that the active read doesn't need.
 	r.startPrefetch()
 
 	return n, nil
 }
 
 func (r *SegmentReader) waitForSegment(index int) ([]byte, error) {
-	// Fast path: already in shared cache
+
 	if data, ok := r.file.GetCachedSegment(index); ok {
 		return data, nil
 	}
-	// Direct download - no waiting on in-flight; avoids seek latency from blocking on other downloads
+
 	return r.file.DownloadSegment(r.ctx, index)
 }
 
@@ -132,10 +124,7 @@ func (r *SegmentReader) startPrefetch() {
 		maxWorkers = 1
 	}
 
-	// Prefetch only as many segments as we have connections.
-	// Going beyond this just queues goroutines that block on pool.Get,
-	// adding contention without any throughput benefit.
-	ahead := maxWorkers
+	ahead := 40
 
 	r.mu.Lock()
 	for i := 0; i < ahead; i++ {
@@ -167,9 +156,6 @@ func (r *SegmentReader) startPrefetch() {
 	r.mu.Unlock()
 }
 
-// Seek implements io.Seeker. On seek, closes the current position and
-// repositions. The shared segment cache means previously-downloaded
-// data is still available.
 func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -198,18 +184,13 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 		return target, nil
 	}
 
-	// Cancel any ongoing prefetch operations since we're seeking to a new position.
-	// The context cancellation will stop them gracefully.
 	r.cancel()
-	// Create new context for the new position (using same parent)
+
 	r.ctx, r.cancel = context.WithCancel(r.parent)
-	// Clear prefetching map - old prefetch goroutines will exit via context cancellation
+
 	r.prefetching = make(map[int]bool)
 	r.mu.Unlock()
 
-	// Drain prefetch goroutines before returning. We must not return until Wait() has
-	// returned, otherwise the next Read() can call Add(1) and panic "WaitGroup is
-	// reused before previous Wait has returned".
 	r.prefetchWg.Wait()
 
 	r.mu.Lock()
@@ -225,9 +206,12 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 		} else {
 			r.segIdx = idx
 			r.segOff = target - r.file.segments[idx].StartOffset
-			// No prefetch - first Read() gets the segment with zero competition
 		}
 	}
+
+	r.mu.Unlock()
+	r.startPrefetch()
+	r.mu.Lock()
 
 	return target, nil
 }

@@ -24,15 +24,13 @@ const (
 	downloadTimeout   = 30 * time.Second
 )
 
-// Client represents an Easynews API client
 type Client struct {
 	username     string
 	password     string
 	name         string
 	client       *http.Client
-	downloadBase string // Base URL for NZB download proxying
+	downloadBase string
 
-	// Usage tracking
 	apiLimit          int
 	apiUsed           int
 	apiRemaining      int
@@ -43,10 +41,8 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
-// Ensure Client implements indexer.Indexer at compile time.
 var _ indexer.Indexer = (*Client)(nil)
 
-// NewClient creates a new Easynews client
 func NewClient(username, password, name string, downloadBase string, apiLimit, downloadLimit int, um *indexer.UsageManager) (*Client, error) {
 	if username == "" || password == "" {
 		return nil, fmt.Errorf("easynews username and password are required")
@@ -77,7 +73,6 @@ func NewClient(username, password, name string, downloadBase string, apiLimit, d
 		},
 	}
 
-	// Load initial usage if manager is provided
 	if um != nil && name != "" {
 		usage := um.GetIndexerUsage(name)
 		c.apiUsed = usage.APIHitsUsed
@@ -86,7 +81,6 @@ func NewClient(username, password, name string, downloadBase string, apiLimit, d
 		c.apiRemaining = apiLimit - usage.APIHitsUsed
 		c.downloadRemaining = downloadLimit - usage.DownloadsUsed
 
-		// Ensure remaining isn't negative if limits were lowered
 		if c.apiRemaining < 0 && apiLimit > 0 {
 			c.apiRemaining = 0
 		}
@@ -98,7 +92,6 @@ func NewClient(username, password, name string, downloadBase string, apiLimit, d
 	return c, nil
 }
 
-// Name returns the name of this indexer
 func (c *Client) Name() string {
 	if c.name != "" {
 		return c.name
@@ -106,7 +99,6 @@ func (c *Client) Name() string {
 	return "Easynews"
 }
 
-// GetUsage returns the current usage stats
 func (c *Client) GetUsage() indexer.Usage {
 	c.mu.RLock()
 	u := indexer.Usage{
@@ -126,9 +118,8 @@ func (c *Client) GetUsage() indexer.Usage {
 	return u
 }
 
-// Ping checks if Easynews credentials are valid
 func (c *Client) Ping() error {
-	// Test with a simple search
+
 	testQuery := "dune"
 	_, err := c.searchInternal(testQuery, "", "", "", false)
 	if err != nil {
@@ -137,16 +128,14 @@ func (c *Client) Ping() error {
 	return nil
 }
 
-// Search queries Easynews for content
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
 	if err := c.checkAPILimit(); err != nil {
 		return nil, err
 	}
 
-	// Build query from request
 	query := req.Query
 	if req.IMDbID != "" {
-		// Remove 'tt' prefix if present
+
 		imdbID := strings.TrimPrefix(req.IMDbID, "tt")
 		query = fmt.Sprintf("%s %s", query, imdbID)
 	}
@@ -157,13 +146,11 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	season := req.Season
 	episode := req.Episode
 
-	// Perform search
 	results, err := c.searchInternal(query, season, episode, req.Cat, false)
 	if err != nil {
 		return nil, fmt.Errorf("easynews search failed: %w", err)
 	}
 
-	// Increment API usage
 	c.mu.Lock()
 	c.apiUsed++
 	if c.apiRemaining > 0 {
@@ -171,12 +158,10 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 	c.mu.Unlock()
 
-	// Save usage if manager is provided
 	if c.usageManager != nil && c.name != "" {
 		c.usageManager.IncrementUsed(c.name, 1, 0)
 	}
 
-	// Convert Easynews results to Newznab format
 	items := make([]indexer.Item, 0, len(results))
 	for _, result := range results {
 		item := indexer.Item{
@@ -198,16 +183,11 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}, nil
 }
 
-// DownloadNZB downloads an NZB file.
-// ctx is used for timeout; use 60s for resolve/lazy load, 5s for validation.
 func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
 		return nil, err
 	}
 
-	// Easynews URLs are proxied through our server
-	// Format: {downloadBase}/easynews/nzb?payload={token}
-	// We need to extract the payload and download from Easynews
 	parsedURL, err := url.Parse(nzbURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid NZB URL: %w", err)
@@ -218,21 +198,18 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 		return nil, fmt.Errorf("missing payload token in URL")
 	}
 
-	// Decode payload to get hash, filename, ext, sig
 	payload, err := decodePayload(payloadToken)
 	if err != nil {
 		return nil, fmt.Errorf("invalid payload token: %w", err)
 	}
 
-	// Build NZB download request
 	nzbData, err := c.downloadNZBInternal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download NZB: %w", err)
 	}
 
-	// Increment download usage
 	c.mu.Lock()
-	c.apiUsed++ // Download also counts as API hit
+	c.apiUsed++
 	c.downloadUsed++
 	if c.apiRemaining > 0 {
 		c.apiRemaining--
@@ -242,7 +219,6 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	}
 	c.mu.Unlock()
 
-	// Save usage if manager is provided
 	if c.usageManager != nil && c.name != "" {
 		c.usageManager.IncrementUsed(c.name, 1, 1)
 	}
@@ -250,7 +226,6 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	return nzbData, nil
 }
 
-// searchInternal performs the actual Easynews search
 func (c *Client) searchInternal(query, season, episode, category string, strictMode bool) ([]easynewsResult, error) {
 	params := url.Values{}
 	params.Set("fly", "2")
@@ -268,11 +243,10 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 	params.Set("s1d", "-")
 	params.Add("fty[]", "VIDEO")
 
-	// Add category filters if specified
 	if category == "2000" {
-		// Movies - could add specific filters
+
 	} else if category == "5000" {
-		// TV - add season/episode to query if provided
+
 		if season != "" && episode != "" {
 			params.Set("gps", fmt.Sprintf("%s S%sE%s", query, season, episode))
 		}
@@ -310,13 +284,11 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 		return nil, fmt.Errorf("failed to parse Easynews response: %w", err)
 	}
 
-	// Filter and map results
 	results := c.filterAndMapResults(data, query, season, episode, strictMode)
 
 	return results, nil
 }
 
-// downloadNZBInternal downloads NZB from Easynews
 func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, error) {
 	hash, _ := payload["hash"].(string)
 	filename, _ := payload["filename"].(string)
@@ -328,7 +300,6 @@ func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, er
 		return nil, fmt.Errorf("missing hash in payload")
 	}
 
-	// Build NZB payload
 	nzbEntries := buildNZBPayload([]easynewsItem{
 		{Hash: hash, Filename: filename, Ext: ext, Sig: sig},
 	}, title)
@@ -368,7 +339,6 @@ func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, er
 	return nzbData, nil
 }
 
-// checkAPILimit returns error if API limit is reached
 func (c *Client) checkAPILimit() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -378,7 +348,6 @@ func (c *Client) checkAPILimit() error {
 	return nil
 }
 
-// checkDownloadLimit returns error if download limit is reached
 func (c *Client) checkDownloadLimit() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -388,24 +357,21 @@ func (c *Client) checkDownloadLimit() error {
 	return nil
 }
 
-// easynewsSearchResponse represents the Easynews search API response
 type easynewsSearchResponse struct {
 	Data     []interface{} `json:"data"`
 	Total    int           `json:"total"`
 	ThumbURL string        `json:"thumbURL"`
 }
 
-// easynewsResult represents a filtered Easynews search result
 type easynewsResult struct {
-	Title          string
-	DownloadURL    string
-	GUID           string
-	PubDate        string
-	Size           int64
+	Title           string
+	DownloadURL     string
+	GUID            string
+	PubDate         string
+	Size            int64
 	DurationSeconds float64
 }
 
-// easynewsItem represents an item in the Easynews data array
 type easynewsItem struct {
 	Hash     string
 	Filename string
@@ -418,7 +384,6 @@ type easynewsItem struct {
 	Duration interface{}
 }
 
-// filterAndMapResults filters and maps Easynews results
 func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season, episode string, strictMode bool) []easynewsResult {
 	results := make([]easynewsResult, 0)
 
@@ -433,8 +398,6 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 	for _, entry := range data.Data {
 		var item easynewsItem
 
-		// Handle array format: [hash, ..., subject, poster, posted, ..., filename, ext, size, ..., duration]
-		// Based on Easynews API: [0:hash, 6:subject, 7:poster, 8:posted, 10:filename, 11:ext, 12:size, 14:duration]
 		if arr, ok := entry.([]interface{}); ok && len(arr) >= 12 {
 			if hash, ok := arr[0].(string); ok {
 				item.Hash = hash
@@ -454,7 +417,7 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 			if posted, ok := arr[8].(string); ok {
 				item.Posted = posted
 			}
-			// Extract size (position 12)
+
 			if len(arr) > 12 {
 				if sizeVal, ok := arr[12].(float64); ok {
 					item.Size = int64(sizeVal)
@@ -468,7 +431,7 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 				item.Duration = arr[14]
 			}
 		} else if obj, ok := entry.(map[string]interface{}); ok {
-			// Handle object format
+
 			if hash, ok := obj["hash"].(string); ok {
 				item.Hash = hash
 			}
@@ -493,7 +456,6 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 			continue
 		}
 
-		// Filter by extension
 		extLower := strings.ToLower(item.Ext)
 		if !strings.HasPrefix(extLower, ".") {
 			extLower = "." + extLower
@@ -505,13 +467,11 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 			continue
 		}
 
-		// Parse duration and filter short videos (< 60 seconds)
 		durationSeconds := parseDuration(item.Duration)
 		if durationSeconds != nil && *durationSeconds < 60 {
 			continue
 		}
 
-		// Build title
 		title := item.Filename
 		if item.Ext != "" {
 			if !strings.HasPrefix(item.Ext, ".") {
@@ -527,13 +487,11 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 			title = item.Hash
 		}
 
-		// Filter samples
 		titleLower := strings.ToLower(title)
 		if strings.Contains(titleLower, "sample") {
 			continue
 		}
 
-		// Use filename+ext for final title if available, otherwise subject
 		finalTitle := title
 		if finalTitle == "" {
 			finalTitle = item.Subject
@@ -542,7 +500,6 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 			finalTitle = fmt.Sprintf("Easynews-%s", item.Hash[:min(8, len(item.Hash))])
 		}
 
-		// Build download URL using payload token
 		payload := map[string]interface{}{
 			"hash":     item.Hash,
 			"filename": item.Filename,
@@ -553,7 +510,6 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 		payloadToken := encodePayload(payload)
 		downloadURL := fmt.Sprintf("%s/easynews/nzb?payload=%s", c.downloadBase, url.QueryEscape(payloadToken))
 
-		// Parse posted date
 		pubDate := time.Now().Format(time.RFC1123Z)
 		if item.Posted != "" {
 			if t, err := time.Parse("2006-01-02 15:04:05", item.Posted); err == nil {
@@ -579,7 +535,6 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 	return results
 }
 
-// parseDuration parses duration from various formats and returns seconds
 func parseDuration(raw interface{}) *int64 {
 	if raw == nil {
 		return nil
@@ -601,11 +556,11 @@ func parseDuration(raw interface{}) *int64 {
 			return &sec
 		}
 	case string:
-		// Try parsing as number
+
 		if num, err := strconv.ParseInt(v, 10, 64); err == nil && num > 0 {
 			return &num
 		}
-		// Try parsing duration formats like "1h23m45s" or "1:23:45"
+
 		if strings.Contains(v, ":") {
 			parts := strings.Split(v, ":")
 			if len(parts) == 3 {
@@ -630,7 +585,6 @@ func parseDuration(raw interface{}) *int64 {
 	return nil
 }
 
-// min returns the minimum of two integers
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -638,16 +592,14 @@ func min(a, b int) int {
 	return b
 }
 
-// encodePayload encodes a payload map to a base64 URL-safe token
 func encodePayload(payload map[string]interface{}) string {
 	jsonData, _ := json.Marshal(payload)
 	encoded := base64.URLEncoding.EncodeToString(jsonData)
 	return strings.TrimRight(encoded, "=")
 }
 
-// decodePayload decodes a base64 URL-safe token to a payload map
 func decodePayload(token string) (map[string]interface{}, error) {
-	// Add padding if needed
+
 	padLen := (4 - len(token)%4) % 4
 	token += strings.Repeat("=", padLen)
 
@@ -664,7 +616,6 @@ func decodePayload(token string) (map[string]interface{}, error) {
 	return payload, nil
 }
 
-// buildNZBPayload builds the form data for NZB download
 func buildNZBPayload(items []easynewsItem, name string) map[string]string {
 	result := map[string]string{
 		"autoNZB": "1",
@@ -686,7 +637,6 @@ func buildNZBPayload(items []easynewsItem, name string) map[string]string {
 	return result
 }
 
-// buildValueToken builds the value token for an item
 func buildValueToken(item easynewsItem) string {
 	fnB64 := base64.URLEncoding.EncodeToString([]byte(item.Filename))
 	extB64 := base64.URLEncoding.EncodeToString([]byte(item.Ext))

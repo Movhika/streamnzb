@@ -40,8 +40,8 @@ type lz29Decoder struct {
 	lowOffsetDecoder huffmanDecoder
 	lengthDecoder    huffmanDecoder
 
-	offset           [4]int // history of previous offsets
-	length           int    // previous length
+	offset           [4]int
+	length           int
 	lowOffset        int
 	lowOffsetRepeats int
 
@@ -229,7 +229,6 @@ func (d *lz29Decoder) decodeOffset(i int) error {
 	return nil
 }
 
-// fill window until full, error, filter found or end of block.
 func (d *lz29Decoder) fill(dr *decodeReader) ([]byte, error) {
 	for dr.notFull() {
 		sym, err := d.mainDecoder.readSym(d.br)
@@ -238,10 +237,10 @@ func (d *lz29Decoder) fill(dr *decodeReader) ([]byte, error) {
 		}
 
 		switch {
-		case sym < 256: // literal
+		case sym < 256:
 			dr.writeByte(byte(sym))
 			continue
-		case sym == 258: // use previous offset and length
+		case sym == 258:
 			dr.copyBytes(d.length, d.offset[0])
 			continue
 		case sym >= 271:
@@ -252,7 +251,7 @@ func (d *lz29Decoder) fill(dr *decodeReader) ([]byte, error) {
 			err = d.decodeLength(sym - 259)
 		case sym == 256:
 			return nil, d.readEndOfBlock()
-		default: // sym == 257
+		default:
 			return d.readFilterData()
 		}
 		if err != nil {

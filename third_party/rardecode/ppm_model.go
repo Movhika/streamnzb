@@ -23,8 +23,6 @@ const (
 	n4       = (128 + 3 - 1*n1 - 2*n2 - 3*n3) / 4
 	nIndexes = n0 + n1 + n2 + n3 + n4
 
-	// memory is allocated in units. A unit contains unitSize number of bytes.
-	// A unit can store one context or two states.
 	unitSize = 12
 
 	freeMark = -1
@@ -39,9 +37,8 @@ var (
 	ns2Index   [256]byte
 	ns2BSIndex [256]byte
 
-	// units2Index maps the number of units in a block to a freelist index
 	units2Index [128 + 1]byte
-	// index2Units maps a freelist index to the size of the block in units
+
 	index2Units [nIndexes]int32
 )
 
@@ -170,33 +167,15 @@ type state struct {
 	sym  byte
 	freq byte
 
-	// succ can point to a context or byte in memory.
-	// A context pointer is a positive integer. It is an index into the states
-	// array that points to the first of two states which the context is
-	// marshalled into.
-	// A byte pointer is a negative integer. The magnitude represents the position
-	// in bytes from the bottom of the memory. As memory is modelled as an array of
-	// states, this is used to calculate which state, and where in the state the
-	// byte is stored.
-	// A zero value represents a nil pointer.
 	succ int32
 }
 
-// uint16 return a uint16 stored in the sym and freq fields of a state
 func (s state) uint16() uint16 { return uint16(s.sym) | uint16(s.freq)<<8 }
 
-// setUint16 stores a uint16 in the sym and freq fields of a state
 func (s *state) setUint16(n uint16) { s.sym = byte(n); s.freq = byte(n >> 8) }
 
-// A context is marshalled into a slice of two states.
-// The first state contains the number of states, and the suffix pointer.
-// If there is only one state, the second state contains that state.
-// If there is more than one state, the second state contains the summFreq
-// and the index to the slice of states.
-// The context is represented by the index into the states array for these two states.
 type context int32
 
-// succContext returns a context given a state.succ index
 func succContext(i int32) context {
 	if i <= 0 {
 		return 0
@@ -205,25 +184,15 @@ func succContext(i int32) context {
 }
 
 type subAllocator struct {
-	// memory for allocation is split into two heaps
-
 	glueCount     int
-	heap1MaxBytes int32 // maximum bytes available in heap1
-	heap1Lo       int32 // heap1 bottom in number of bytes
-	heap1Hi       int32 // heap1 top in number of bytes
-	heap2Lo       int32 // heap2 bottom index in states
-	heap2Hi       int32 // heap2 top index in states
+	heap1MaxBytes int32
+	heap1Lo       int32
+	heap1Hi       int32
+	heap2Lo       int32
+	heap2Hi       int32
 
-	// Each freeList entry contains an index into states for the beginning
-	// of a free block. The first state in that block may contain an index
-	// to another free block and so on. The size of the free block in units
-	// (2 states) for that freeList index can be determined from the
-	// index2Units array.
 	freeList [nIndexes]int32
 
-	// Instead of bytes, memory is represented by a slice of states.
-	// context's are marshalled to and from a pair of states.
-	// multiple bytes are stored in a state.
 	states []state
 }
 
@@ -231,10 +200,9 @@ func (a *subAllocator) init(maxMB int) {
 	bytes := int32(maxMB) << 20
 	heap2Units := bytes / 8 / unitSize * 7
 	a.heap1MaxBytes = bytes - heap2Units*unitSize
-	// Add one for the case when bytes are not a multiple of unitSize
+
 	heap1Units := a.heap1MaxBytes/unitSize + 1
-	// Calculate total size in state's. Add 1 unit so we can reserve the first unit.
-	// This will allow us to use the zero index as a nil pointer.
+
 	n := int(1+heap1Units+heap2Units) * 2
 	if cap(a.states) > n {
 		a.states = a.states[:n]
@@ -244,8 +212,7 @@ func (a *subAllocator) init(maxMB int) {
 }
 
 func (a *subAllocator) restart() {
-	// Pad heap1 start by 1 unit and enough bytes so that there is no
-	// gap between heap1 end and heap2 start.
+
 	a.heap1Lo = unitSize + (unitSize - a.heap1MaxBytes%unitSize)
 	a.heap1Hi = unitSize + (a.heap1MaxBytes/unitSize+1)*unitSize
 	a.heap2Lo = a.heap1Hi / unitSize * 2
@@ -254,11 +221,9 @@ func (a *subAllocator) restart() {
 	clear(a.freeList[:])
 }
 
-// pushByte puts a byte on the heap and returns a state.succ index that
-// can be used to retrieve it.
 func (a *subAllocator) pushByte(c byte) int32 {
-	si := a.heap1Lo / 6 // state index
-	oi := a.heap1Lo % 6 // byte position in state
+	si := a.heap1Lo / 6
+	oi := a.heap1Lo % 6
 	switch oi {
 	case 0:
 		a.states[si].sym = c
@@ -278,10 +243,8 @@ func (a *subAllocator) pushByte(c byte) int32 {
 	return -a.heap1Lo
 }
 
-// popByte reverses the previous pushByte
 func (a *subAllocator) popByte() { a.heap1Lo-- }
 
-// succByte returns a byte from the heap given a state.succ index
 func (a *subAllocator) succByte(i int32) byte {
 	i = -i
 	si := i / 6
@@ -298,8 +261,6 @@ func (a *subAllocator) succByte(i int32) byte {
 	}
 }
 
-// nextByteAddr takes a state.succ value representing a pointer
-// to a byte, and returns the next bytes address
 func (a *subAllocator) nextByteAddr(n int32) int32 { return n - 1 }
 
 func (a *subAllocator) removeFreeBlock(i byte) int32 {
@@ -385,7 +346,7 @@ func (a *subAllocator) allocUnitsRare(index byte) int32 {
 			return n
 		}
 	}
-	// try to find a larger free block and split it
+
 	for i := index + 1; i < nIndexes; i++ {
 		if n := a.removeFreeBlock(i); n > 0 {
 			u := index2Units[i] - index2Units[index]
@@ -395,7 +356,6 @@ func (a *subAllocator) allocUnitsRare(index byte) int32 {
 	}
 	a.glueCount--
 
-	// try to allocate units from the top of heap1
 	n := a.heap1Hi - index2Units[index]*unitSize
 	if n > a.heap1Lo {
 		a.heap1Hi = n
@@ -405,11 +365,11 @@ func (a *subAllocator) allocUnitsRare(index byte) int32 {
 }
 
 func (a *subAllocator) allocUnits(i byte) int32 {
-	// try to allocate a free block
+
 	if n := a.removeFreeBlock(i); n > 0 {
 		return n
 	}
-	// try to allocate from the bottom of heap2
+
 	n := index2Units[i] << 1
 	if a.heap2Lo+n <= a.heap2Hi {
 		lo := a.heap2Lo
@@ -422,7 +382,7 @@ func (a *subAllocator) allocUnits(i byte) int32 {
 func (a *subAllocator) newContext(s state, suffix context) context {
 	var n int32
 	if a.heap2Lo < a.heap2Hi {
-		// allocate from top of heap2
+
 		a.heap2Hi -= 2
 		n = a.heap2Hi
 	} else if n = a.removeFreeBlock(1); n == 0 {
@@ -430,8 +390,7 @@ func (a *subAllocator) newContext(s state, suffix context) context {
 			return 0
 		}
 	}
-	// we don't need to set numStates to 1 as the default value of 0 in the sym
-	// field is always incremented by 1 to get numStates.
+
 	a.states[n] = state{succ: int32(suffix)}
 	a.states[n+1] = s
 	return context(n)
@@ -446,7 +405,6 @@ func (a *subAllocator) newContextSize(ns int) context {
 	return c
 }
 
-// since number of states is always > 0 && <= 256, we can fit it in a single byte
 func (a *subAllocator) contextNumStates(c context) int       { return int(a.states[c].sym) + 1 }
 func (a *subAllocator) contextSetNumStates(c context, n int) { a.states[c].sym = byte(n - 1) }
 
@@ -469,27 +427,26 @@ func (a *subAllocator) contextStates(c context) []state {
 	return a.states[c+1 : c+2]
 }
 
-// shrinkStates shrinks the state list down to size states
 func (a *subAllocator) shrinkStates(c context, states []state, size int) []state {
 	i1 := units2Index[(len(states)+1)>>1]
 	i2 := units2Index[(size+1)>>1]
 
 	if size == 1 {
-		// store state in context, and free states block
+
 		n := a.contextStatesIndex(c)
 		a.states[c+1] = states[0]
 		states = a.states[c+1:]
 		a.addFreeBlock(n, i1)
 	} else if i1 != i2 {
 		if n := a.removeFreeBlock(i2); n > 0 {
-			// allocate new block and copy
+
 			copy(a.states[n:], states[:size])
 			states = a.states[n:]
-			// free old block
+
 			a.addFreeBlock(a.contextStatesIndex(c), i1)
 			a.contextSetStatesIndex(c, n)
 		} else {
-			// split current block, and free units not needed
+
 			n = a.contextStatesIndex(c) + index2Units[i2]<<1
 			u := index2Units[i1] - index2Units[i2]
 			a.freeUnits(n, u)
@@ -499,7 +456,6 @@ func (a *subAllocator) shrinkStates(c context, states []state, size int) []state
 	return states[:size]
 }
 
-// expandStates expands the states list by one
 func (a *subAllocator) expandStates(c context) []state {
 	states := a.contextStates(c)
 	ns := len(states)
@@ -711,8 +667,7 @@ func (m *model) decodeBinSymbol(c context) (*state, error) {
 func (m *model) decodeSymbol1(c context) (*state, error) {
 	states := m.a.contextStates(c)
 	scale := uint32(m.a.contextSummFreq(c))
-	// protect against divide by zero
-	// TODO: look at why this happens, may be problem elsewhere
+
 	if scale == 0 {
 		return nil, ErrCorruptPPM
 	}
@@ -899,7 +854,7 @@ func (m *model) update(minC, maxC context, s *state) context {
 		clear(m.charMask[:])
 	}
 
-	var ss *state // matching minC.suffix state
+	var ss *state
 
 	if s.freq < maxFreq/4 && m.a.contextSuffix(minC) > 0 {
 		c := m.a.contextSuffix(minC)
@@ -921,7 +876,7 @@ func (m *model) update(minC, maxC context, s *state) context {
 		} else if states[0].freq < 32 {
 			states[0].freq++
 		}
-		ss = &states[i] // save later for createSuccessors
+		ss = &states[i]
 	}
 
 	if m.orderFall == 0 {

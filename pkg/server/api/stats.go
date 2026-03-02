@@ -11,45 +11,41 @@ import (
 	"streamnzb/pkg/session"
 )
 
-// SystemStats represents the current state of the application
 type SystemStats struct {
 	Timestamp         time.Time                   `json:"timestamp"`
-	TotalSpeed        float64                     `json:"total_speed_mbps"` // Mbps
+	TotalSpeed        float64                     `json:"total_speed_mbps"`
 	ActiveStreams     int                         `json:"active_streams"`
 	TotalConnections  int                         `json:"total_connections"`
 	ActiveConnections int                         `json:"active_connections"`
-	TotalDownloadedMB float64                     `json:"total_downloaded_mb"` // Sum of all providers
+	TotalDownloadedMB float64                     `json:"total_downloaded_mb"`
 	Providers         []ProviderStats             `json:"providers"`
 	Indexers          []IndexerStats              `json:"indexers"`
 	ActiveSessions    []session.ActiveSessionInfo `json:"active_sessions"`
 }
 
-// IndexerStats represents statistics and usage for an indexer
 type IndexerStats struct {
-	Name                   string `json:"name"`
-	APIHitsLimit           int    `json:"api_hits_limit"`
-	APIHitsUsed            int    `json:"api_hits_used"`
-	APIHitsRemaining       int    `json:"api_hits_remaining"`
-	AllTimeAPIHitsUsed     int    `json:"api_hits_used_all_time"`
-	DownloadsLimit         int    `json:"downloads_limit"`
-	DownloadsUsed          int    `json:"downloads_used"`
-	DownloadsRemaining     int    `json:"downloads_remaining"`
-	AllTimeDownloadsUsed   int    `json:"downloads_used_all_time"`
+	Name                 string `json:"name"`
+	APIHitsLimit         int    `json:"api_hits_limit"`
+	APIHitsUsed          int    `json:"api_hits_used"`
+	APIHitsRemaining     int    `json:"api_hits_remaining"`
+	AllTimeAPIHitsUsed   int    `json:"api_hits_used_all_time"`
+	DownloadsLimit       int    `json:"downloads_limit"`
+	DownloadsUsed        int    `json:"downloads_used"`
+	DownloadsRemaining   int    `json:"downloads_remaining"`
+	AllTimeDownloadsUsed int    `json:"downloads_used_all_time"`
 }
 
-// ProviderStats represents statistics for a single NNTP provider
 type ProviderStats struct {
 	Name         string  `json:"name"`
 	Host         string  `json:"host"`
 	ActiveConns  int     `json:"active_conns"`
 	IdleConns    int     `json:"idle_conns"`
 	MaxConns     int     `json:"max_conns"`
-	CurrentSpeed float64 `json:"current_speed_mbps"` // Mbps (instantaneous)
-	DownloadedMB float64 `json:"downloaded_mb"`      // Lifetime MB for this provider
-	UsagePercent float64 `json:"usage_percent"`      // Share of total downloaded MB
+	CurrentSpeed float64 `json:"current_speed_mbps"`
+	DownloadedMB float64 `json:"downloaded_mb"`
+	UsagePercent float64 `json:"usage_percent"`
 }
 
-// collectStats gathers metrics from all sources
 func (s *Server) collectStats() SystemStats {
 	logger.Trace("collectStats start")
 	stats := SystemStats{
@@ -85,7 +81,6 @@ func (s *Server) collectStats() SystemStats {
 		stats.Providers = append(stats.Providers, pStats)
 	}
 
-	// Compute usage share per provider
 	if totalDownloadedMB > 0 {
 		for i := range stats.Providers {
 			stats.Providers[i].UsagePercent = (stats.Providers[i].DownloadedMB / totalDownloadedMB) * 100
@@ -93,23 +88,12 @@ func (s *Server) collectStats() SystemStats {
 		stats.TotalDownloadedMB = totalDownloadedMB
 	}
 
-	// Sort providers by name
 	sort.Slice(stats.Providers, func(i, j int) bool {
 		return stats.Providers[i].Name < stats.Providers[j].Name
 	})
 
-	// Indexer Stats
 	if s.indexer != nil {
-		// If it's an aggregator, we want details for each internal indexer
-		// Actually, let's just use the aggregator's Indexers if it has them
-		// We'll use a type assertion or just call GetUsage.
-		// But for the dashboard we want a list of individual ones.
 
-		// In Aggregator.go we have Indexers []Indexer.
-		// We can't directly access it if it's the Indexer interface.
-		// Wait, s.indexer is set during initialization.
-
-		// Let's assume s.indexer might be an Aggregator
 		type indexerContainer interface {
 			GetIndexers() []indexer.Indexer
 		}
@@ -140,15 +124,12 @@ func (s *Server) collectStats() SystemStats {
 	stats.ActiveConnections = totalActive
 	stats.TotalConnections = totalMax
 
-	// Active Sessions (Detailed)
 	stats.ActiveSessions = s.sessionMgr.GetActiveSessions()
 
-	// Append Proxy Sessions (Aggregated by IP)
-	s.mu.RLock() // Lock for proxyServer access
+	s.mu.RLock()
 	if s.proxyServer != nil {
 		proxySessions := s.proxyServer.GetSessions()
 
-		// Group by Client IP
 		type proxyGroup struct {
 			count int
 			group string
@@ -157,8 +138,7 @@ func (s *Server) collectStats() SystemStats {
 		groups := make(map[string]*proxyGroup)
 
 		for _, ps := range proxySessions {
-			// Extract IP (naive strip port if present, or use as is)
-			// Assuming remote_addr is "ip:port"
+
 			ip := ps.RemoteAddr
 			if host, _, err := net.SplitHostPort(ip); err == nil {
 				ip = host
@@ -169,13 +149,12 @@ func (s *Server) collectStats() SystemStats {
 			}
 			g := groups[ip]
 			g.count++
-			// Keep last non-empty group as representative?
+
 			if ps.CurrentGroup != "" {
 				g.group = ps.CurrentGroup
 			}
 		}
 
-		// Convert groups to ActiveSessionInfo
 		for ip, g := range groups {
 			title := fmt.Sprintf("Proxy Client (%d conns)", g.count)
 			if g.group != "" {

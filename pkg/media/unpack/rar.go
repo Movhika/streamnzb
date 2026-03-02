@@ -12,18 +12,16 @@ import (
 	"time"
 
 	"streamnzb/pkg/core/logger"
-	"streamnzb/pkg/media/loader"
 
 	"github.com/javi11/rardecode/v2"
 )
 
-// ArchiveBlueprint stores the verified structure of a RAR archive.
 type ArchiveBlueprint struct {
 	MainFileName string
 	TotalSize    int64
 	Parts        []VirtualPartDef
 	IsCompressed bool
-	AnyEncrypted bool // true if any part is encrypted (streaming uses rardecode when password set)
+	AnyEncrypted bool
 }
 
 type VirtualPartDef struct {
@@ -33,14 +31,6 @@ type VirtualPartDef struct {
 	VolOffset    int64
 }
 
-// StreamFromBlueprint returns a reader over the virtual file. We do not use rardecode
-// for the read path when unencrypted: rardecode is only used for scanning (ListArchiveInfo) to get
-// DataOffset per volume. For STORE mode, the bytes at DataOffset in each volume are
-// the raw file content, so we read via the loader at VolOffset (DataOffset) and never
-// decode through rardecode.Reader (which is sequential and would force "download from
-// start" on seek). When the archive is encrypted, password must be provided and we
-// use rardecode.OpenReader + Next to stream decrypted content (sequential read; seek
-// is emulated by re-opening and skipping).
 func StreamFromBlueprint(ctx context.Context, bp *ArchiveBlueprint, password string) (io.ReadSeekCloser, string, int64, error) {
 	if bp.IsCompressed {
 		return nil, "", 0, fmt.Errorf("compressed RAR archive (file: %s) -- STORE mode required for streaming", bp.MainFileName)
@@ -60,9 +50,6 @@ func StreamFromBlueprint(ctx context.Context, bp *ArchiveBlueprint, password str
 	return NewVirtualStream(ctx, parts, bp.TotalSize, 0), bp.MainFileName, bp.TotalSize, nil
 }
 
-// streamEncryptedRAR opens the RAR with rardecode.OpenReader and positions at the
-// main file, then returns a ReadSeekCloser that decrypts on read. Seek is supported
-// by re-opening the archive and skipping to the file then skipping offset bytes.
 func streamEncryptedRAR(ctx context.Context, bp *ArchiveBlueprint, password string) (io.ReadSeekCloser, string, int64, error) {
 	fileMap := make(map[string]UnpackableFile, len(bp.Parts))
 	for _, p := range bp.Parts {
@@ -78,7 +65,6 @@ func streamEncryptedRAR(ctx context.Context, bp *ArchiveBlueprint, password stri
 		return nil, "", 0, fmt.Errorf("open encrypted RAR: %w", err)
 	}
 
-	// Advance to the main file
 	mainBase := filepath.Base(bp.MainFileName)
 	for {
 		h, err := rc.Next()
@@ -101,13 +87,11 @@ func streamEncryptedRAR(ctx context.Context, bp *ArchiveBlueprint, password stri
 			}
 			return stream, bp.MainFileName, bp.TotalSize, nil
 		}
-		// Skip this file's content by reading to EOF
+
 		_, _ = io.Copy(io.Discard, io.LimitReader(rc, h.UnPackedSize))
 	}
 }
 
-// encryptedRARStream is a ReadSeekCloser for a single file inside an encrypted RAR.
-// Seek is implemented by re-opening the archive and skipping to the target offset.
 type encryptedRARStream struct {
 	rc           *rardecode.ReadCloser
 	limit        int64
@@ -157,7 +141,7 @@ func (e *encryptedRARStream) Seek(offset int64, whence int) (int64, error) {
 	if abs == e.read {
 		return e.read, nil
 	}
-	// Re-open and skip to target position
+
 	if err := e.rc.Close(); err != nil {
 		logger.Debug("encrypted RAR stream close on seek", "err", err)
 	}
@@ -168,7 +152,7 @@ func (e *encryptedRARStream) Seek(offset int64, whence int) (int64, error) {
 		return e.read, fmt.Errorf("reopen for seek: %w", err)
 	}
 	e.rc = rc
-	// Advance to main file
+
 	for {
 		h, err := rc.Next()
 		if err != nil {
@@ -180,7 +164,7 @@ func (e *encryptedRARStream) Seek(offset int64, whence int) (int64, error) {
 		}
 		_, _ = io.Copy(io.Discard, io.LimitReader(rc, h.UnPackedSize))
 	}
-	// Skip to offset
+
 	if abs > 0 {
 		_, err = io.CopyN(io.Discard, rc, abs)
 		if err != nil && err != io.EOF {
@@ -203,35 +187,25 @@ func (e *encryptedRARStream) Close() error {
 	return err
 }
 
-// ScanArchive scans RAR volumes in parallel to build a blueprint.
-// password is the archive password from the NZB head, if any (required for encrypted RAR).
 func ScanArchive(files []UnpackableFile, password string) (*ArchiveBlueprint, error) {
 	rarFiles := filterRarFiles(files)
 	if len(rarFiles) == 0 {
 		return nil, errors.New("no RAR files found")
 	}
 
-	// Only scan first volumes to avoid "bad volume number" errors
 	firstVols := filterFirstVolumes(rarFiles)
 	logger.Debug("Scanning RAR first volumes", "count", len(firstVols), "total", len(rarFiles))
 
 	start := time.Now()
 	parts := scanVolumesParallel(firstVols, password)
 
-	// Fail fast: if any scanned volume already exceeded its failure threshold,
-	// the release is dead and there's no point building a blueprint.
 	for _, f := range firstVols {
 		if fc, ok := f.(interface{ IsFailed() bool }); ok && fc.IsFailed() {
 			logger.Error("First volume failed too many segments, aborting scan", "file", f.Name())
-			return nil, fmt.Errorf("first volume unavailable: %w", loader.ErrTooManyZeroFills)
+			return nil, fmt.Errorf("first volume unavailable: %w", ErrTooManyZeroFills)
 		}
 	}
 
-	// No media found: likely a nested archive (RAR-in-RAR). Scan remaining
-	// outer volumes to discover inner files that start in later volumes.
-	// Only triggers when the first volume was actually parseable (len(parts) > 0)
-	// but contained no video. If parts is empty, the first volume's data is too
-	// corrupt for rardecode to read headers, so the full scan would also fail.
 	hasMedia := false
 	for _, p := range parts {
 		if p.isMedia {
@@ -249,7 +223,6 @@ func ScanArchive(files []UnpackableFile, password string) (*ArchiveBlueprint, er
 
 	logger.Info("RAR scan complete", "files", len(rarFiles), "duration", time.Since(start))
 
-	// Fail fast on compression
 	for _, p := range parts {
 		if p.isCompressed {
 			return nil, fmt.Errorf("compressed RAR archive (file: %s) -- STORE mode required for streaming", p.name)
@@ -263,23 +236,7 @@ func ScanArchive(files []UnpackableFile, password string) (*ArchiveBlueprint, er
 	return bp, nil
 }
 
-// excludeFiles returns files from all that are not in exclude (by Name()).
-func excludeFiles(all, exclude []UnpackableFile) []UnpackableFile {
-	skip := make(map[string]bool, len(exclude))
-	for _, f := range exclude {
-		skip[f.Name()] = true
-	}
-	var result []UnpackableFile
-	for _, f := range all {
-		if !skip[f.Name()] {
-			result = append(result, f)
-		}
-	}
-	return result
-}
-
-// InspectRAR reads the first volume's headers to check for video content.
-func InspectRAR(files []*loader.File) (string, error) {
+func InspectRAR(files []UnpackableFile) (string, error) {
 	if len(files) == 0 {
 		return "", errors.New("no files provided")
 	}
@@ -318,8 +275,6 @@ func InspectRAR(files []*loader.File) (string, error) {
 	return "", errors.New("no video found in rar")
 }
 
-// --- internal types ---
-
 type filePart struct {
 	name         string
 	unpackedSize int64
@@ -331,8 +286,6 @@ type filePart struct {
 	isCompressed bool
 	isEncrypted  bool
 }
-
-// --- scanning ---
 
 func scanVolumesParallel(files []UnpackableFile, password string) []filePart {
 	var mu sync.Mutex
@@ -398,13 +351,9 @@ func scanVolumesParallel(files []UnpackableFile, password string) []filePart {
 	return result
 }
 
-// scanFullArchive scans all volumes as a single multi-volume archive set.
-// rardecode traverses volumes in order and seeks over data blocks, so only
-// headers are downloaded. This gives complete FilePartInfo for every inner
-// file, including data that spans across multiple outer volumes.
 func scanFullArchive(rarFiles []UnpackableFile, password string) []filePart {
 	sort.Slice(rarFiles, func(i, j int) bool {
-		return volumeOrder(rarFiles[i].Name()) < volumeOrder(rarFiles[j].Name())
+		return GetRARVolumeNumber(rarFiles[i].Name()) < GetRARVolumeNumber(rarFiles[j].Name())
 	})
 
 	fileMap := make(map[string]UnpackableFile, len(rarFiles))
@@ -420,11 +369,8 @@ func scanFullArchive(rarFiles []UnpackableFile, password string) []filePart {
 		firstName = ExtractFilename(rarFiles[0].Name())
 	}
 
-	// Ensure segment maps so seeking is possible during the scan
 	for _, f := range rarFiles {
-		if sm, ok := f.(segmentMapper); ok {
-			sm.EnsureSegmentMap()
-		}
+		_ = f.EnsureSegmentMap()
 	}
 
 	fsys := NewNZBFSFromMap(fileMap)
@@ -477,13 +423,9 @@ func scanFullArchive(rarFiles []UnpackableFile, password string) []filePart {
 	return result
 }
 
-// --- blueprint construction ---
-
 func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile, password string) (*ArchiveBlueprint, error) {
 	bestName := selectMainFile(parts)
 
-	// When direct media is dwarfed by archive content, the media is likely
-	// just a sample and the real movie lives inside a nested archive.
 	if bestName != "" {
 		var mediaTotal, archiveTotal int64
 		for _, p := range parts {
@@ -514,7 +456,6 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile, password str
 	headerSize := mainParts[0].unpackedSize
 	scannedSize := totalPackedSize(mainParts)
 
-	// If scanned parts don't cover the full file, fill from remaining volumes
 	if scannedSize < headerSize && len(allRarFiles) > len(mainParts) {
 		mainParts = aggregateRemainingVolumes(mainParts, allRarFiles, bestName, headerSize, password)
 	}
@@ -558,15 +499,6 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile, password str
 		bp.TotalSize = vOffset
 	}
 
-	// Pre-warm the last volume's final segment. Video players always seek to
-	// the end of the file to read MKV/MP4 metadata (Cues / moov atom) before
-	// they can start playback. Kicking this download off now means the data
-	// is likely cached by the time the first play request arrives.
-	lastPart := mainParts[len(mainParts)-1]
-	if pw, ok := lastPart.volFile.(segmentPrewarmer); ok {
-		pw.PrewarmSegment(pw.SegmentCount() - 1)
-	}
-
 	return bp, nil
 }
 
@@ -606,22 +538,9 @@ func totalPackedSize(parts []filePart) int64 {
 	return total
 }
 
-// segmentMapper is satisfied by loader.File to trigger decoded size detection.
-type segmentMapper interface {
-	EnsureSegmentMap() error
-}
-
-// segmentPrewarmer is satisfied by loader.File to pre-download segments
-// in the background so data is cached before the player requests it.
-type segmentPrewarmer interface {
-	segmentMapper
-	SegmentCount() int
-	PrewarmSegment(index int)
-}
-
 func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFile, name string, headerSize int64, password string) []filePart {
 	sort.Slice(allRarFiles, func(i, j int) bool {
-		return volumeOrder(allRarFiles[i].Name()) < volumeOrder(allRarFiles[j].Name())
+		return GetRARVolumeNumber(allRarFiles[i].Name()) < GetRARVolumeNumber(allRarFiles[j].Name())
 	})
 
 	startVol := mainParts[0].volName
@@ -636,13 +555,6 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 		return mainParts
 	}
 
-	// Probe the first continuation volume to determine the RAR header
-	// overhead AND the exact packed data size per continuation volume.
-	// Using f.Size() - headerOverhead is wrong because f.Size() is based on
-	// estimated segment sizes (the last segment's decoded size is a ratio
-	// estimate). Even ~80 bytes of error per volume causes cumulative
-	// misalignment of VirtualStart/VirtualEnd, so seeks to later volumes
-	// read from the wrong byte offset and produce corrupt data.
 	probe := probeContinuation(allRarFiles, startIdx, name, password)
 	if probe.dataOffset > 0 {
 		logger.Trace("Probed continuation volume", "dataOffset", probe.dataOffset, "packedSize", probe.packedSize)
@@ -656,14 +568,9 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 		return result
 	}
 
-	// For standard RAR splits, all non-last continuation volumes have the
-	// same packed data size. Use the probed PackedSize for them and derive
-	// the last volume's size from the total file size.
 	contPackedSize := probe.packedSize
 	contDataOffset := probe.dataOffset
 
-	// Calculate the last volume's exact data size from the total.
-	// totalFileData = firstPart + (numContVolumes-1)*contPackedSize + lastPartData
 	var lastPartData int64
 	if contPackedSize > 0 && numContVolumes > 1 {
 		lastPartData = headerSize - first.packedSize - int64(numContVolumes-1)*contPackedSize
@@ -674,9 +581,7 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 	added := 0
 	for i := startIdx + 1; i < len(allRarFiles); i++ {
 		f := allRarFiles[i]
-		if sm, ok := f.(segmentMapper); ok {
-			sm.EnsureSegmentMap()
-		}
+		_ = f.EnsureSegmentMap()
 		if f.Size() <= 0 {
 			continue
 		}
@@ -689,11 +594,11 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 			} else if !isLastVolume {
 				dataSize = contPackedSize
 			} else {
-				// Last volume, but couldn't compute lastPartData (only 1 cont volume)
+
 				dataSize = contPackedSize
 			}
 		} else {
-			// Fallback: no probe data, use estimated size
+
 			dataSize = f.Size() - contDataOffset
 		}
 
@@ -715,7 +620,6 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 	return result
 }
 
-// continuationProbe holds exact offset and packed size for continuation volumes.
 type continuationProbe struct {
 	dataOffset int64
 	packedSize int64
@@ -760,14 +664,11 @@ func probeContinuation(allRarFiles []UnpackableFile, startIdx int, targetName st
 	return continuationProbe{}
 }
 
-// --- nested archive handling ---
-
 func tryNestedArchive(parts []filePart, password string) (*ArchiveBlueprint, error) {
 	if len(parts) == 0 {
 		return nil, errors.New("empty archive")
 	}
 
-	// Group archive files by set name
 	type archiveSet struct {
 		totalSize int64
 		parts     []filePart
@@ -792,7 +693,6 @@ func tryNestedArchive(parts []filePart, password string) (*ArchiveBlueprint, err
 		return nil, errors.New("no video or nested archive found")
 	}
 
-	// Pick largest set
 	var bestSet string
 	var maxSize int64
 	for name, s := range sets {
@@ -808,7 +708,6 @@ func tryNestedArchive(parts []filePart, password string) (*ArchiveBlueprint, err
 		logger.Trace("Nested archive part", "name", p.name, "volName", p.volName, "packed", p.packedSize, "unpacked", p.unpackedSize)
 	}
 
-	// Build VirtualFiles for each inner archive volume
 	innerFiles := make(map[string][]filePart)
 	for _, p := range nestedParts {
 		innerFiles[p.name] = append(innerFiles[p.name], p)
@@ -852,8 +751,6 @@ func tryNestedArchive(parts []filePart, password string) (*ArchiveBlueprint, err
 	return ScanArchive(nestedFiles, password)
 }
 
-// --- helpers ---
-
 func filterRarFiles(files []UnpackableFile) []UnpackableFile {
 	var result []UnpackableFile
 	for _, f := range files {
@@ -861,6 +758,11 @@ func filterRarFiles(files []UnpackableFile) []UnpackableFile {
 		lower := strings.ToLower(name)
 		if strings.HasSuffix(lower, ExtPar2) {
 			logger.Trace("filterRarFiles: skip par2", "name", name)
+			continue
+		}
+
+		if strings.Contains(lower, ".7z.") || strings.HasSuffix(lower, ".7z") {
+			logger.Trace("filterRarFiles: skip 7z", "name", name)
 			continue
 		}
 		if strings.HasSuffix(lower, ExtRar) || strings.Contains(lower, ".part") || IsRarPart(lower) || IsSplitArchivePart(lower) {
@@ -891,8 +793,8 @@ func filterFirstVolumes(files []UnpackableFile) []UnpackableFile {
 	return result
 }
 
-func findFirstVolume(files []*loader.File) *loader.File {
-	// Pass 1: definite first volumes
+func findFirstVolume(files []UnpackableFile) UnpackableFile {
+
 	for _, f := range files {
 		lower := strings.ToLower(f.Name())
 		if strings.HasSuffix(lower, ".par2") || strings.HasSuffix(lower, ".nzb") || strings.HasSuffix(lower, ".nfo") {
@@ -904,7 +806,7 @@ func findFirstVolume(files []*loader.File) *loader.File {
 			return f
 		}
 	}
-	// Pass 2: any .rar
+
 	for _, f := range files {
 		lower := strings.ToLower(f.Name())
 		if strings.HasSuffix(lower, ".par2") || strings.HasSuffix(lower, ".nzb") || strings.HasSuffix(lower, ".nfo") {
@@ -943,16 +845,6 @@ func archiveSetName(name string) string {
 
 func sortByVolume(parts []filePart) {
 	sort.Slice(parts, func(i, j int) bool {
-		return volumeOrder(parts[i].volName) < volumeOrder(parts[j].volName)
+		return GetRARVolumeNumber(parts[i].volName) < GetRARVolumeNumber(parts[j].volName)
 	})
-}
-
-func volumeOrder(name string) string {
-	clean := strings.ToLower(ExtractFilename(name))
-	// Old-style naming: .rar is first (vol 0), .r00 = vol 1, .r01 = vol 2, etc.
-	// Alphabetically .rar sorts after .r00-.r99, so we remap to a sortable key.
-	if strings.HasSuffix(clean, ".rar") && !strings.Contains(clean, ".part") {
-		return clean[:len(clean)-4] + ".r!!" // '!' < '0', so sorts before .r00
-	}
-	return clean
 }

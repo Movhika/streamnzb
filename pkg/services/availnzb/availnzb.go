@@ -22,38 +22,30 @@ type Client struct {
 	HTTP    *http.Client
 
 	backbonesMu sync.RWMutex
-	backbones   map[string]string // hostname -> backbone; populated by RefreshBackbones
+	backbones   map[string]string
 }
 
-// ReportRequest is the body for POST /api/v1/report (authenticated).
-// For movies: set ImdbID. For TV: set TvdbID, Season, Episode.
-// download_link is not sent; status/releases return it (Newznab API URL without apikey—add apikey when fetching).
-// compression_type: "direct", "7z", or "rar" — used by AvailNZB to filter GetReleases.
 type ReportRequest struct {
-	URL             string `json:"url"`                        // Indexer release URL (details link)
-	ReleaseName     string `json:"release_name"`               // Release name (e.g. Show.Name.S01E02.720p.WEB.x264-GROUP)
-	Size            int64  `json:"size"`                       // File size in bytes (required)
-	CompressionType string `json:"compression_type,omitempty"` // "direct", "7z", or "rar"
-	ProviderURL     string `json:"provider_url"`               // Usenet provider hostname
-	Status          bool   `json:"status"`                     // true = available, false = failed
-	ImdbID          string `json:"imdb_id,omitempty"`          // Required for movies
-	TvdbID          string `json:"tvdb_id,omitempty"`          // Required for TV (with season, episode)
-	Season          int    `json:"season,omitempty"`           // Required for TV
-	Episode         int    `json:"episode,omitempty"`          // Required for TV
+	URL             string `json:"url"`
+	ReleaseName     string `json:"release_name"`
+	Size            int64  `json:"size"`
+	CompressionType string `json:"compression_type,omitempty"`
+	ProviderURL     string `json:"provider_url"`
+	Status          bool   `json:"status"`
+	ImdbID          string `json:"imdb_id,omitempty"`
+	TvdbID          string `json:"tvdb_id,omitempty"`
+	Season          int    `json:"season,omitempty"`
+	Episode         int    `json:"episode,omitempty"`
 }
 
-// BackboneStatus is one backbone's status in a summary (Summary keys are backbone names, e.g. Omicron, Eweka).
 type BackboneStatus struct {
 	Text        string    `json:"text"`
 	LastUpdated time.Time `json:"last_updated"`
 	Healthy     bool      `json:"healthy"`
 }
 
-// ProviderStatus is an alias for backward compatibility; API summary is keyed by backbone.
 type ProviderStatus = BackboneStatus
 
-// StatusResponse is the response from GET /api/v1/status/url?url=...
-// Summary keys are backbone names (use GetBackbones to map provider hostnames to backbones).
 type StatusResponse struct {
 	URL          string                    `json:"url"`
 	Available    bool                      `json:"available"`
@@ -63,8 +55,6 @@ type StatusResponse struct {
 	Summary      map[string]BackboneStatus `json:"summary"`
 }
 
-// releaseItemJSON is the JSON shape for status/imdb and status/tvdb responses (unmarshal only).
-// Summary keys are backbone names.
 type releaseItemJSON struct {
 	URL             string                    `json:"url"`
 	ReleaseName     string                    `json:"release_name,omitempty"`
@@ -76,8 +66,6 @@ type releaseItemJSON struct {
 	Summary         map[string]BackboneStatus `json:"summary"`
 }
 
-// ReleaseWithStatus wraps release.Release with AvailNZB-specific status.
-// Summary keys are backbone names (use GetBackbones to map provider hostnames to backbones).
 type ReleaseWithStatus struct {
 	*release.Release
 	Available       bool
@@ -85,21 +73,18 @@ type ReleaseWithStatus struct {
 	Summary         map[string]BackboneStatus
 }
 
-// ReleasesResult is the return value of GetReleases.
 type ReleasesResult struct {
 	ImdbID   string
 	Count    int
 	Releases []*ReleaseWithStatus
 }
 
-// ReportMeta holds data for reporting (movie or TV). ReleaseName and Size are required by the API.
-// CompressionType: "direct", "7z", or "rar" — optional; when empty, API may default.
 type ReportMeta struct {
-	ReleaseName     string // Release name (e.g. item.Title)
-	Size            int64  // File size in bytes (required)
-	CompressionType string // "direct", "7z", or "rar"
-	ImdbID          string // For movies
-	TvdbID          string // For TV
+	ReleaseName     string
+	Size            int64
+	CompressionType string
+	ImdbID          string
+	TvdbID          string
 	Season          int
 	Episode         int
 }
@@ -115,8 +100,6 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
-// ReportAvailability submits an availability report for a release (POST /api/v1/report).
-// releaseURL is the indexer details URL. meta.ReleaseName is required; meta must have either ImdbID (movie) or TvdbID+Season+Episode (TV).
 func (c *Client) ReportAvailability(releaseURL string, providerURL string, status bool, meta ReportMeta) error {
 	if c.BaseURL == "" {
 		logger.Debug("AvailNZB report skipped", "reason", "no base URL configured")
@@ -139,7 +122,7 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 		ProviderURL:     providerURL,
 		Status:          status,
 	}
-	// For TV, send TvdbID + season/episode. ImdbID is sent without season/episode.
+
 	if meta.TvdbID != "" && (meta.Season > 0 || meta.Episode > 0) {
 		body.TvdbID = meta.TvdbID
 		body.Season = meta.Season
@@ -182,16 +165,11 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 	return nil
 }
 
-// backbonesResponse matches GET /api/v1/backbones from the AvailNZB API (check.snzb.stream/openapi.json).
-// BackbonesResponse: backbones = list of backbone names; provider_hostnames = map of backbone -> []provider hostname.
 type backbonesResponse struct {
 	Backbones         []string            `json:"backbones"`
 	ProviderHostnames map[string][]string `json:"provider_hostnames"`
 }
 
-// RefreshBackbones fetches GET /api/v1/backbones and updates the cached hostname->backbone map.
-// API returns {"backbones": ["name", ...], "provider_hostnames": {"backbone": ["host1", ...], ...}}.
-// Call on startup and when provider config changes (e.g. on Reload).
 func (c *Client) RefreshBackbones() error {
 	if c.BaseURL == "" {
 		return nil
@@ -239,8 +217,6 @@ func (c *Client) RefreshBackbones() error {
 	return nil
 }
 
-// GetBackbones returns the cached map of provider hostname -> backbone name.
-// Populated by RefreshBackbones (call on start and on provider config changes).
 func (c *Client) GetBackbones() (map[string]string, error) {
 	c.backbonesMu.RLock()
 	defer c.backbonesMu.RUnlock()
@@ -254,8 +230,6 @@ func (c *Client) GetBackbones() (map[string]string, error) {
 	return out, nil
 }
 
-// GetStatus returns availability for a release by URL (GET /api/v1/status/url?url=...).
-// Summary keys in the response are backbone names.
 func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {
 	if c.BaseURL == "" {
 		logger.Trace("AvailNZB GetStatus skipped", "reason", "no base URL")
@@ -284,7 +258,7 @@ func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {
 
 	if resp.StatusCode == http.StatusNotFound {
 		logger.Debug("AvailNZB GetStatus", "result", "not_found", "url", releaseURL)
-		return nil, nil // No reports yet
+		return nil, nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -302,22 +276,18 @@ func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {
 	return &status, nil
 }
 
-// releasesResponseJSON is the JSON shape for status/imdb and status/tvdb (unmarshal only).
 type releasesResponseJSON struct {
 	ImdbID   string            `json:"imdb_id,omitempty"`
 	Count    int               `json:"count"`
 	Releases []releaseItemJSON `json:"releases"`
 }
 
-// GetReleases returns cached releases for content via GET /api/v1/status/imdb/{id} or status/tvdb/{id}/{s}/{e}.
-// indexers and providers (NNTP hostnames) are optional filters; Summary keys in results are backbone names.
 func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, indexers []string, providers []string) (*ReleasesResult, error) {
 	if c.BaseURL == "" {
 		logger.Trace("AvailNZB GetReleases skipped", "reason", "no base URL")
 		return nil, nil
 	}
 
-	// For TV, prefer tvdb endpoint (same as reporting) when we have tvdb_id and season/episode.
 	var path string
 	if tvdbID != "" && (season > 0 || episode > 0) {
 		path = fmt.Sprintf("%s/status/tvdb/%s/%d/%d", apiPath, url.PathEscape(tvdbID), season, episode)
@@ -394,8 +364,6 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 	return &ReleasesResult{ImdbID: raw.ImdbID, Count: raw.Count, Releases: releases}, nil
 }
 
-// OurBackbones returns the set of backbone names for the given provider hostnames (e.g. for matching Summary keys).
-// Uses GetBackbones() to resolve; if that fails, returns nil and callers should treat Summary as empty or skip backbone logic.
 func (c *Client) OurBackbones(providerHosts []string) (map[string]bool, error) {
 	m, err := c.GetBackbones()
 	if err != nil || m == nil {
@@ -410,9 +378,6 @@ func (c *Client) OurBackbones(providerHosts []string) (map[string]bool, error) {
 	return out, nil
 }
 
-// CheckPreDownload checks if the release URL is already known and healthy for one of validProviderHosts.
-// Uses GET /backbones to map hostnames to backbones; Summary in status is keyed by backbone.
-// Returns: available (can skip validation), last updated time, capable provider hostname, error.
 func (c *Client) CheckPreDownload(releaseURL string, validProviderHosts []string) (available bool, lastUpdated time.Time, capableProvider string, err error) {
 	logger.Debug("AvailNZB CheckPreDownload", "url", releaseURL, "our_providers", len(validProviderHosts))
 	if c.BaseURL == "" || releaseURL == "" {
@@ -461,7 +426,6 @@ func (c *Client) CheckPreDownload(releaseURL string, validProviderHosts []string
 		return false, time.Time{}, "", nil
 	}
 
-	// Summary keys are backbone names
 	for backbone, report := range status.Summary {
 		if ourBackbones[backbone] && report.Healthy {
 			if report.LastUpdated.After(lastUpdated) {

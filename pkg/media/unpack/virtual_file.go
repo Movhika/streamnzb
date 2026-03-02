@@ -5,7 +5,6 @@ import (
 	"io"
 )
 
-// VirtualFile implements UnpackableFile for a file inside an archive.
 type VirtualFile struct {
 	name  string
 	size  int64
@@ -19,8 +18,14 @@ func NewVirtualFile(name string, size int64, parts []virtualPart) *VirtualFile {
 func (f *VirtualFile) Name() string { return f.name }
 func (f *VirtualFile) Size() int64  { return f.size }
 
+func (f *VirtualFile) EnsureSegmentMap() error { return nil }
+
 func (f *VirtualFile) OpenStream() (io.ReadSeekCloser, error) {
 	return NewVirtualStream(context.Background(), f.parts, f.size, 0), nil
+}
+
+func (f *VirtualFile) OpenStreamCtx(ctx context.Context) (io.ReadSeekCloser, error) {
+	return NewVirtualStream(ctx, f.parts, f.size, 0), nil
 }
 
 func (f *VirtualFile) OpenReaderAt(ctx context.Context, offset int64) (io.ReadCloser, error) {

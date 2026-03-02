@@ -12,7 +12,6 @@ import (
 
 const saveDebounceInterval = 2 * time.Second
 
-// StateManager handles persistent key-value storage in a JSON file
 type StateManager struct {
 	filePath  string
 	data      map[string]json.RawMessage
@@ -24,7 +23,6 @@ type StateManager struct {
 var globalManager *StateManager
 var managerMu sync.Mutex
 
-// GetManager returns the global state manager
 func GetManager(dataDir string) (*StateManager, error) {
 	managerMu.Lock()
 	defer managerMu.Unlock()
@@ -54,13 +52,13 @@ func (m *StateManager) load() error {
 	data, err := os.ReadFile(m.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Try migration from usage.json if it exists
+
 			usagePath := filepath.Join(filepath.Dir(m.filePath), "usage.json")
 			if _, err := os.Stat(usagePath); err == nil {
 				logger.Info("Migrating usage.json to state.json")
 				usageData, err := os.ReadFile(usagePath)
 				if err == nil {
-					// Store it under "indexer_usage" key
+
 					m.data["indexer_usage"] = usageData
 					if err := m.saveLocked(); err == nil {
 						os.Remove(usagePath)
@@ -83,7 +81,7 @@ func (m *StateManager) Save() error {
 }
 
 func (m *StateManager) saveLocked() error {
-	// Ensure directory exists
+
 	if err := os.MkdirAll(filepath.Dir(m.filePath), 0755); err != nil {
 		return err
 	}
@@ -96,7 +94,6 @@ func (m *StateManager) saveLocked() error {
 	return os.WriteFile(m.filePath, data, 0644)
 }
 
-// Get retrieves data for a key and unmarshals it into target
 func (m *StateManager) Get(key string, target interface{}) (bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -113,8 +110,6 @@ func (m *StateManager) Get(key string, target interface{}) (bool, error) {
 	return true, nil
 }
 
-// Set stores data for a key and schedules a debounced save to disk.
-// Multiple rapid updates (e.g. usage stats) are batched into a single write.
 func (m *StateManager) Set(key string, value interface{}) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -129,7 +124,6 @@ func (m *StateManager) Set(key string, value interface{}) error {
 	return nil
 }
 
-// Delete removes a key from state and schedules a save.
 func (m *StateManager) Delete(key string) error {
 	m.mu.Lock()
 	delete(m.data, key)
@@ -138,8 +132,6 @@ func (m *StateManager) Delete(key string) error {
 	return nil
 }
 
-// scheduleSave triggers a debounced save. The actual write runs after saveDebounceInterval
-// with no further updates; rapid updates coalesce into one write.
 func (m *StateManager) scheduleSave() {
 	m.saveMu.Lock()
 	defer m.saveMu.Unlock()
@@ -157,8 +149,6 @@ func (m *StateManager) scheduleSave() {
 	})
 }
 
-// Flush immediately persists any pending changes. Call before shutdown or when
-// immediate persistence is required.
 func (m *StateManager) Flush() error {
 	m.saveMu.Lock()
 	if m.saveTimer != nil {

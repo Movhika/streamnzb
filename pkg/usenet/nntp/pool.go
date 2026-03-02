@@ -17,15 +17,14 @@ type ClientPool struct {
 	maxConn int
 
 	idleClients chan *Client
-	slots       chan struct{} // Semaphore tokens for creating new connections
-	// Metrics
-	bytesRead      int64   // bytes since last speed sample (kept for compatibility)
-	totalBytesRead int64   // cumulative bytes read (lifetime)
-	lastTotalBytes int64   // totalBytesRead at last GetSpeed sample (for delta-based speed)
-	lastSpeed      float64 // Mbps
+	slots       chan struct{}
+
+	bytesRead      int64
+	totalBytesRead int64
+	lastTotalBytes int64
+	lastSpeed      float64
 	lastCheck      time.Time
 
-	// Reporting: pool reports bytes to usage manager; manager owns persistence
 	providerName string
 	usageManager *ProviderUsageManager
 
@@ -46,7 +45,6 @@ func NewClientPool(host string, port int, ssl bool, user, pass string, maxConn i
 		lastCheck:   time.Now(),
 	}
 
-	// Fill slots with permits
 	for i := 0; i < maxConn; i++ {
 		p.slots <- struct{}{}
 	}
@@ -55,7 +53,6 @@ func NewClientPool(host string, port int, ssl bool, user, pass string, maxConn i
 	return p
 }
 
-// SetUsageManager configures the pool to persist usage data
 func (p *ClientPool) SetUsageManager(name string, mgr *ProviderUsageManager) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -63,16 +60,13 @@ func (p *ClientPool) SetUsageManager(name string, mgr *ProviderUsageManager) {
 	p.usageManager = mgr
 }
 
-// RestoreTotalBytes allows persisted counters to be injected on startup
 func (p *ClientPool) RestoreTotalBytes(total int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.totalBytesRead = total
-	p.lastTotalBytes = total // avoid fake speed spike from delta at startup
+	p.lastTotalBytes = total
 }
 
-// TrackRead updates the total bytes read and reports the delta to the usage manager.
-// The pool only records; ProviderUsageManager owns when to persist.
 func (p *ClientPool) TrackRead(n int) {
 	p.mu.Lock()
 	p.bytesRead += int64(n)
@@ -86,17 +80,10 @@ func (p *ClientPool) TrackRead(n int) {
 	}
 }
 
-// minSpeedWindow is the minimum duration (seconds) before we report speed from delta.
 const minSpeedWindow = 0.05
 
-// maxSpeedDuration caps the duration used for speed calculation so that after
-// idle we don't show an artificially low speed (delta/small over huge seconds).
 const maxSpeedDuration = 5.0
 
-// GetSpeed returns the current speed in Mbps.
-// Speed is derived from the delta of totalBytesRead over time so that any
-// TrackRead() activity is reflected. The clock (lastCheck) is advanced on
-// every call so seeking or a new stream sees correct speed immediately.
 func (p *ClientPool) GetSpeed() float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -104,15 +91,12 @@ func (p *ClientPool) GetSpeed() float64 {
 	now := time.Now()
 	duration := now.Sub(p.lastCheck).Seconds()
 
-	// Always advance the clock so the next sample has a correct window (avoids
-	// "stuck" speed after idle or when starting a new stream).
 	p.lastCheck = now
 
 	if duration < minSpeedWindow {
 		return p.lastSpeed
 	}
 
-	// Cap duration so we don't understate speed after long idle
 	if duration > maxSpeedDuration {
 		duration = maxSpeedDuration
 	}
@@ -121,7 +105,7 @@ func (p *ClientPool) GetSpeed() float64 {
 	p.lastTotalBytes = p.totalBytesRead
 
 	if delta > 0 {
-		// Mbps = (bytes * 8) / (1024*1024) / seconds
+
 		p.lastSpeed = (float64(delta) * 8) / (1024 * 1024) / duration
 	} else {
 		const decay = 0.35
@@ -133,7 +117,6 @@ func (p *ClientPool) GetSpeed() float64 {
 	return p.lastSpeed
 }
 
-// TotalMegabytes returns the cumulative downloaded data in megabytes (lifetime)
 func (p *ClientPool) TotalMegabytes() float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -143,7 +126,7 @@ func (p *ClientPool) TotalMegabytes() float64 {
 
 func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 	logger.Trace("pool.Get start", "host", p.host)
-	// 1. Prefer Idle Client
+
 	select {
 	case <-ctx.Done():
 		logger.Trace("pool.Get ctx.Done (idle check)", "host", p.host)
@@ -154,16 +137,15 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 	default:
 	}
 
-	// 2. Try to create new connection (check slots)
 	select {
 	case <-ctx.Done():
 		logger.Trace("pool.Get ctx.Done (slot check)", "host", p.host)
 		return nil, ctx.Err()
 	case <-p.slots:
-		// Got permit, dial
+
 		c, err := NewClient(p.host, p.port, p.ssl)
 		if err != nil {
-			p.slots <- struct{}{} // Return permit on failure
+			p.slots <- struct{}{}
 			return nil, err
 		}
 		c.SetPool(p)
@@ -177,7 +159,6 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 	default:
 	}
 
-	// 3. Block and wait for resource
 	logger.Trace("pool.Get blocking", "host", p.host)
 	select {
 	case <-ctx.Done():
@@ -187,7 +168,7 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 		logger.Trace("pool.Get from idle (after block)", "host", p.host)
 		return c, nil
 	case <-p.slots:
-		// Got permit, dial
+
 		c, err := NewClient(p.host, p.port, p.ssl)
 		if err != nil {
 			p.slots <- struct{}{}
@@ -204,9 +185,8 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 	}
 }
 
-// TryGet attempts to get a client without blocking.
 func (p *ClientPool) TryGet(ctx context.Context) (*Client, bool) {
-	// 1. Check Idle
+
 	select {
 	case <-ctx.Done():
 		return nil, false
@@ -215,7 +195,6 @@ func (p *ClientPool) TryGet(ctx context.Context) (*Client, bool) {
 	default:
 	}
 
-	// 2. Check Slots
 	select {
 	case <-ctx.Done():
 		return nil, false
@@ -245,7 +224,7 @@ func (p *ClientPool) Put(c *Client) {
 	closed := p.closed
 	p.mu.Unlock()
 	if closed {
-		// Shutdown closed idleClients; don't send on closed channel (would panic)
+
 		c.Quit()
 		p.slots <- struct{}{}
 		return
@@ -256,15 +235,12 @@ func (p *ClientPool) Put(c *Client) {
 	select {
 	case p.idleClients <- c:
 	default:
-		// Buffer full? Should not happen if logic is correct (slots + idle <= max).
-		// But if it does, force close to avoid leak?
+
 		c.Quit()
 		p.slots <- struct{}{}
 	}
 }
 
-// Discard closes the client and releases its slot. Use when the connection cannot be reused
-// (e.g. body was not fully read), so the next user does not get a connection in a bad state.
 func (p *ClientPool) Discard(c *Client) {
 	if c == nil {
 		return
@@ -275,8 +251,8 @@ func (p *ClientPool) Discard(c *Client) {
 }
 
 func (p *ClientPool) reaperLoop() {
-	ticker := time.NewTicker(15 * time.Second) // Check every 15 seconds
-	timeout := 30 * time.Second                // Close connections idle >30s
+	ticker := time.NewTicker(15 * time.Second)
+	timeout := 30 * time.Second
 
 	for range ticker.C {
 		p.mu.Lock()
@@ -285,33 +261,26 @@ func (p *ClientPool) reaperLoop() {
 			return
 		}
 		p.mu.Unlock()
-		// Scan idle clients
-		// We want to check ALL currently idle clients.
-		// However, channel is FIFO/random.
-		// Strategy: Iterate 'count' times equal to current length.
-		// If used recently, put back. If old, close.
 
 		count := len(p.idleClients)
 		for i := 0; i < count; i++ {
 			select {
 			case c := <-p.idleClients:
 				if time.Since(c.LastUsed) > timeout {
-					// Idle timeout
+
 					c.Quit()
-					p.slots <- struct{}{} // Release permit
+					p.slots <- struct{}{}
 				} else {
-					// Still fresh, keep
+
 					p.idleClients <- c
 				}
 			default:
-				// Empty
+
 			}
 		}
 	}
 }
 
-// Validate checks if the pool can successfully connect and authenticate.
-// Uses a timeout to avoid blocking config save/validation indefinitely when the pool is exhausted.
 func (p *ClientPool) Validate() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -331,22 +300,18 @@ func (p *ClientPool) MaxConn() int {
 	return p.maxConn
 }
 
-// TotalConnections returns the number of open connections (active + idle)
 func (p *ClientPool) TotalConnections() int {
 	return p.maxConn - len(p.slots)
 }
 
-// IdleConnections returns the number of idle connections ready for reuse
 func (p *ClientPool) IdleConnections() int {
 	return len(p.idleClients)
 }
 
-// ActiveConnections returns the number of connections continuously using bandwidth
 func (p *ClientPool) ActiveConnections() int {
 	return p.TotalConnections() - p.IdleConnections()
 }
 
-// Shutdown closes all connections and asks the usage manager to flush this provider's total.
 func (p *ClientPool) Shutdown() {
 	p.mu.Lock()
 	if p.closed {

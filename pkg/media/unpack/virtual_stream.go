@@ -6,13 +6,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
-
-	"streamnzb/pkg/core/logger"
-	"streamnzb/pkg/media/loader"
 )
 
-// virtualPart maps a range of the virtual file to a physical volume location.
 type virtualPart struct {
 	VirtualStart int64
 	VirtualEnd   int64
@@ -20,9 +15,6 @@ type virtualPart struct {
 	VolOffset    int64
 }
 
-// VirtualStream provides io.ReadSeekCloser over a set of virtual parts.
-// It is fully synchronous -- no background goroutines or channels.
-// Each Read/Seek call directly operates on the underlying volume readers.
 type VirtualStream struct {
 	parts     []virtualPart
 	totalSize int64
@@ -33,12 +25,6 @@ type VirtualStream struct {
 	currentReader io.ReadCloser
 	currentPart   int
 	closed        bool
-
-	// lastSeekWasEnd tracks if the previous Seek was SeekEnd (size probe). ServeContent
-	// does Seek(0, SeekEnd) then Seek(0, SeekStart) then Seek(rangeStart, SeekStart).
-	// We skip prefetch for SeekEnd; we also skip prefetch for the following Seek(0)
-	// so we don't download the start of the file on every range request.
-	lastSeekWasEnd bool
 }
 
 func NewVirtualStream(ctx context.Context, parts []virtualPart, totalSize int64, startOffset int64) *VirtualStream {
@@ -58,7 +44,6 @@ func (s *VirtualStream) Read(p []byte) (int, error) {
 	return s.readLocked(p)
 }
 
-// readLocked performs the actual read with s.mu already held.
 func (s *VirtualStream) readLocked(p []byte) (int, error) {
 	if s.closed {
 		return 0, io.ErrClosedPipe
@@ -79,12 +64,9 @@ func (s *VirtualStream) readLocked(p []byte) (int, error) {
 		return 0, fmt.Errorf("offset %d not mapped in %d parts", s.offset, len(s.parts))
 	}
 
-	logger.Trace("VirtualStream.readLocked: before ensureReader", "offset", s.offset, "partIdx", partIdx, "bufSize", len(p))
 	if err := s.ensureReader(part, partIdx); err != nil {
-		logger.Trace("VirtualStream.readLocked: ensureReader failed", "err", err)
 		return 0, err
 	}
-	logger.Trace("VirtualStream.readLocked: after ensureReader", "offset", s.offset, "partIdx", partIdx)
 
 	remaining := part.VirtualEnd - s.offset
 	buf := p
@@ -92,17 +74,12 @@ func (s *VirtualStream) readLocked(p []byte) (int, error) {
 		buf = buf[:remaining]
 	}
 
-	logger.Trace("VirtualStream.readLocked: calling reader.Read", "offset", s.offset, "bufSize", len(buf))
 	n, err := s.currentReader.Read(buf)
-	logger.Trace("VirtualStream.readLocked: reader.Read returned", "n", n, "err", err, "offset", s.offset)
 	s.offset += int64(n)
 
 	if err == io.EOF {
-		logger.Trace("VirtualStream.readLocked: EOF, closing reader", "n", n)
 		s.closeReader()
-		// Advance past current part so next iteration finds the next one.
-		// This prevents an infinite loop when a reader returns (0, EOF)
-		// because the underlying volume data is shorter than the blueprint.
+
 		if s.offset < part.VirtualEnd {
 			s.offset = part.VirtualEnd
 		}
@@ -143,127 +120,34 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 	}
 
 	if target == s.offset {
-		logger.Trace("VirtualStream.Seek: no-op", "offset", s.offset)
 		return target, nil
 	}
 
-	logger.Trace("VirtualStream.Seek: start", "from", s.offset, "to", target, "whence", whence, "currentPart", s.currentPart)
-	logger.Trace("VirtualStream.Seek: start", "from", s.offset, "to", target, "whence", whence, "currentPart", s.currentPart)
-
-	// Check if we're staying in the same part - if so, reuse the reader and seek within it
 	part, partIdx := s.findPart(target)
 	if part != nil && s.currentReader != nil && s.currentPart == partIdx {
-		// Same part - seek within the existing reader (reuse connection)
 		localOff := target - part.VirtualStart
 		volOff := part.VolOffset + localOff
-		logger.Trace("VirtualStream.Seek: same part, reusing reader", "partIdx", partIdx, "volOff", volOff)
-
-		// Prefetch target segment even when reusing reader (SegmentReader.Seek handles this too, but
-		// doing it here ensures it starts immediately when http.ServeContent calls Seek)
-		if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 {
-			if err := volFile.EnsureSegmentMap(); err == nil {
-				if segIdx := volFile.FindSegmentIndex(volOff); segIdx >= 0 {
-					if _, cached := volFile.GetCachedSegment(segIdx); !cached {
-						logger.Trace("VirtualStream.Seek: prefetching segment in same part", "segIdx", segIdx, "volOff", volOff)
-						logger.Trace("VirtualStream.Seek: prefetching segment in same part", "segIdx", segIdx)
-						done := volFile.StartDownloadSegment(s.ctx, segIdx)
-						logger.Trace("VirtualStream.Seek: prefetch registered (same part)", "segIdx", segIdx, "hasChannel", done != nil)
-					}
-				}
-			}
-		}
 
 		if seeker, ok := s.currentReader.(io.Seeker); ok {
-			// Calculate seek offset relative to current reader position
+
 			currentLocalOff := s.offset - part.VirtualStart
 			currentVolOff := part.VolOffset + currentLocalOff
 			seekDelta := volOff - currentVolOff
 			if seekDelta != 0 {
-				newPos, err := seeker.Seek(seekDelta, io.SeekCurrent)
+				_, err := seeker.Seek(seekDelta, io.SeekCurrent)
 				if err == nil {
-					logger.Trace("VirtualStream.Seek: seeked within reader", "delta", seekDelta, "newPos", newPos)
 					s.offset = target
 					return target, nil
 				}
-				logger.Trace("VirtualStream.Seek: seek failed, will recreate", "err", err)
-				// Seek failed, fall through to close and recreate
 			} else {
-				// Already at the right position
-				logger.Trace("VirtualStream.Seek: already at position")
 				s.offset = target
 				return target, nil
 			}
-		} else {
-			logger.Trace("VirtualStream.Seek: reader not seekable, will recreate")
-		}
-	} else {
-		if part != nil {
-			logger.Trace("VirtualStream.Seek: different part", "oldPart", s.currentPart, "newPart", partIdx)
-		} else {
-			logger.Trace("VirtualStream.Seek: part not found for target", "target", target)
 		}
 	}
 
-	// Different part or seek failed - close current reader; a new one will be opened on next Read
-	logger.Trace("VirtualStream.Seek: closing reader, will recreate on next Read", "oldPart", s.currentPart)
 	s.closeReader()
 	s.offset = target
-
-	// Skip prefetch when ServeContent is only probing for size (SeekEnd). Prefetching the
-	// last segment here would hold an NNTP connection and compete with the real range read,
-	// causing seek-to-position playback to stall.
-	if whence == io.SeekEnd {
-		s.lastSeekWasEnd = true
-		return target, nil
-	}
-
-	// Skip prefetch when this is the inevitable Seek(0) after SeekEnd. Otherwise we
-	// download segment 0 (start of the file) on every range request, making it feel like
-	// we're downloading the movie from the start until we reach the seek position.
-	if target == 0 && s.lastSeekWasEnd {
-		s.lastSeekWasEnd = false
-		return target, nil
-	}
-	s.lastSeekWasEnd = false
-
-	// Prefetch the target segment immediately when seeking (before Read() is called).
-	// Call EnsureSegmentMap first so we have segment boundaries (for a new volume this may
-	// block on segment 0 once); then prefetch and wait for the target segment so the first
-	// Read() after seek doesn't block and the client doesn't timeout and retry range=0-.
-	if part != nil {
-		localOff := target - part.VirtualStart
-		volOff := part.VolOffset + localOff
-		if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 {
-			logger.Trace("VirtualStream.Seek: prefetching target segment", "volOff", volOff, "partIdx", partIdx)
-			logger.Trace("VirtualStream.Seek: prefetching target segment", "volOff", volOff, "partIdx", partIdx)
-			if err := volFile.EnsureSegmentMap(); err == nil {
-				if segIdx := volFile.FindSegmentIndex(volOff); segIdx >= 0 {
-					// Always start prefetch and wait (done closes immediately if already cached).
-					// Skipping wait when "already cached" was wrong for other RAR volumes (e.g. part 2):
-					// each volume has its own segment cache, so part 2's seg 0 is rarely cached until
-					// we request it; without waiting, first Read() blocks and client gets no data,
-					// then may open range=0- ("download from start").
-					logger.Trace("VirtualStream.Seek: starting prefetch", "segIdx", segIdx, "volOff", volOff, "partIdx", partIdx)
-					done := volFile.StartDownloadSegment(s.ctx, segIdx)
-					logger.Trace("VirtualStream.Seek: prefetch registered", "segIdx", segIdx, "hasChannel", done != nil)
-					select {
-					case <-done:
-						logger.Trace("VirtualStream.Seek: target segment ready", "segIdx", segIdx)
-					case <-s.ctx.Done():
-					case <-time.After(15 * time.Second):
-						logger.Trace("VirtualStream.Seek: prefetch wait timeout", "segIdx", segIdx)
-					}
-				} else {
-					logger.Trace("VirtualStream.Seek: segment index not found", "volOff", volOff)
-				}
-			} else {
-				logger.Trace("VirtualStream.Seek: EnsureSegmentMap failed", "err", err)
-			}
-		} else {
-			logger.Trace("VirtualStream.Seek: not RAR volume or volOff=0", "isLoaderFile", ok, "volOff", volOff)
-		}
-	}
-
 	return target, nil
 }
 
@@ -278,8 +162,6 @@ func (s *VirtualStream) Close() error {
 	s.closeReader()
 	return nil
 }
-
-// --- internal ---
 
 func (s *VirtualStream) findPart(offset int64) (*virtualPart, int) {
 	left, right := 0, len(s.parts)-1
@@ -300,67 +182,21 @@ func (s *VirtualStream) findPart(offset int64) (*virtualPart, int) {
 
 func (s *VirtualStream) ensureReader(part *virtualPart, partIdx int) error {
 	if s.currentReader != nil && s.currentPart == partIdx {
-		logger.Trace("VirtualStream.ensureReader: reader already open", "partIdx", partIdx)
 		return nil
 	}
 
-	logger.Trace("VirtualStream.ensureReader: creating new reader", "partIdx", partIdx, "currentPart", s.currentPart)
 	s.closeReader()
 
 	localOff := s.offset - part.VirtualStart
 	volOff := part.VolOffset + localOff
-	logger.Trace("VirtualStream.ensureReader: calculated offsets", "localOff", localOff, "volOff", volOff)
 
-	// For loader.File volumes, ensure segment map and wait for the target segment before
-	// opening the reader, so the first Read() returns quickly instead of blocking in
-	// DownloadSegment (which can cause client timeouts and range=0- retries).
-	if volFile, ok := part.VolFile.(*loader.File); ok {
-		if err := volFile.EnsureSegmentMap(); err == nil {
-			segIdx := -1
-			if volOff > 0 {
-				segIdx = volFile.FindSegmentIndex(volOff)
-			} else {
-				segIdx = 0 // Prefetch first segment when starting from start of file (faster MP4 start)
-			}
-			if segIdx >= 0 {
-				if _, cached := volFile.GetCachedSegment(segIdx); !cached {
-					logger.Trace("VirtualStream.ensureReader: starting prefetch and waiting", "segIdx", segIdx, "volOff", volOff)
-					done := volFile.StartDownloadSegment(s.ctx, segIdx)
-					logger.Trace("VirtualStream.ensureReader: prefetch registered", "segIdx", segIdx, "hasChannel", done != nil)
-					wait := 15 * time.Second
-					if segIdx == 0 {
-						wait = 10 * time.Second // Shorter wait for segment 0 so playback starts sooner
-					}
-					select {
-					case <-done:
-						logger.Trace("VirtualStream.ensureReader: target segment ready", "segIdx", segIdx)
-					case <-s.ctx.Done():
-					case <-time.After(wait):
-						logger.Trace("VirtualStream.ensureReader: prefetch wait timeout", "segIdx", segIdx)
-					}
-				} else {
-					logger.Trace("VirtualStream.ensureReader: segment already cached", "segIdx", segIdx)
-				}
-			} else if volOff > 0 {
-				logger.Trace("VirtualStream.ensureReader: segment index not found", "volOff", volOff)
-			}
-		} else {
-			logger.Trace("VirtualStream.ensureReader: EnsureSegmentMap failed", "err", err)
-		}
-	} else {
-		logger.Trace("VirtualStream.ensureReader: not RAR volume", "volOff", volOff)
-	}
-
-	logger.Trace("VirtualStream.ensureReader: opening reader", "partIdx", partIdx, "volOff", volOff)
 	r, err := part.VolFile.OpenReaderAt(s.ctx, volOff)
 	if err != nil {
-		logger.Trace("VirtualStream.ensureReader: OpenReaderAt failed", "err", err, "partIdx", partIdx, "volOff", volOff)
 		return fmt.Errorf("open volume part %d at offset %d: %w", partIdx, volOff, err)
 	}
 
 	s.currentReader = r
 	s.currentPart = partIdx
-	logger.Trace("VirtualStream.ensureReader: reader opened successfully", "partIdx", partIdx)
 	return nil
 }
 

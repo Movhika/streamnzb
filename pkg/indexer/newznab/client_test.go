@@ -12,21 +12,19 @@ import (
 
 func TestNewznabSearch(t *testing.T) {
 	logger.Init("DEBUG")
-	// Mock Newznab server
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check API key
+
 		if r.URL.Query().Get("apikey") != "test-api-key" {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 
-		// Check search type
 		if r.URL.Query().Get("t") != "movie" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
-		// Return mock XML with size in attributes but NOT in top-level size tag
 		w.Header().Set("Content-Type", "application/xml")
 		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
@@ -72,7 +70,6 @@ func TestNewznabSearch(t *testing.T) {
 		t.Errorf("Expected title 'Test Movie 2024', got '%s'", item.Title)
 	}
 
-	// Verify size extraction from attributes
 	if item.Size != 1073741824 {
 		t.Errorf("Expected size 1073741824, got %d", item.Size)
 	}
@@ -90,7 +87,7 @@ func TestNewznabPagination(t *testing.T) {
 		limit := r.URL.Query().Get("limit")
 
 		w.Header().Set("Content-Type", "application/xml")
-		// Indexer handles pagination internally, returns all requested items in one call
+
 		if limit == "2" {
 			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
@@ -107,7 +104,6 @@ func TestNewznabPagination(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Request limit = 2, indexer should return all 2 items in one call
 	client := NewClient(config.IndexerConfig{
 		Name:   "MockIndexer",
 		URL:    server.URL,

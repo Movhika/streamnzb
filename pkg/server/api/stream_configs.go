@@ -13,7 +13,6 @@ import (
 
 const streamConfigsPrefix = "/api/stream/configs/"
 
-// handleStreamConfigs handles GET (list) and POST (create) /api/stream/configs. Admin only.
 func (s *Server) handleStreamConfigs(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/api/stream/configs" {
 		http.NotFound(w, r)
@@ -34,7 +33,6 @@ func (s *Server) handleStreamConfigs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleStreamConfigByID handles GET/PUT/DELETE /api/stream/configs/:id. Admin only.
 func (s *Server) handleStreamConfigByID(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, streamConfigsPrefix) {
 		http.NotFound(w, r)

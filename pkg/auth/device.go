@@ -11,27 +11,23 @@ import (
 	"sync"
 )
 
-// Device represents a device account (token-based auth; optional per-indexer overrides).
 type Device struct {
-	Username         string                                   `json:"username"`
-	Token            string                                   `json:"token"`
-	IndexerOverrides map[string]config.IndexerSearchConfig    `json:"indexer_overrides"` // per-indexer overrides; key = indexer name
+	Username         string                                `json:"username"`
+	Token            string                                `json:"token"`
+	IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides"`
 }
 
-// DeviceManager handles device storage and authentication.
-// Storage is either config-backed (cfg != nil) or state.json-backed (manager != nil).
 type DeviceManager struct {
 	mu      sync.RWMutex
 	devices map[string]*Device
-	manager *persistence.StateManager // nil when using config
-	cfg     *config.Config           // nil when using state
-	saveFn  func() error             // save config when using cfg
+	manager *persistence.StateManager
+	cfg     *config.Config
+	saveFn  func() error
 }
 
 var globalDeviceManager *DeviceManager
 var deviceManagerMu sync.Mutex
 
-// GetDeviceManager returns the global device manager
 func GetDeviceManager(dataDir string) (*DeviceManager, error) {
 	deviceManagerMu.Lock()
 	defer deviceManagerMu.Unlock()
@@ -58,8 +54,6 @@ func GetDeviceManager(dataDir string) (*DeviceManager, error) {
 	return dm, nil
 }
 
-// NewDeviceManagerFromConfig creates a device manager backed by config (devices in config.json).
-// saveFn is called when devices are updated (e.g. cfg.Save).
 func NewDeviceManagerFromConfig(cfg *config.Config, saveFn func() error) (*DeviceManager, error) {
 	deviceManagerMu.Lock()
 	defer deviceManagerMu.Unlock()
@@ -84,7 +78,6 @@ func NewDeviceManagerFromConfig(cfg *config.Config, saveFn func() error) (*Devic
 	return dm, nil
 }
 
-// load loads devices from config or state
 func (dm *DeviceManager) load() error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
@@ -154,7 +147,6 @@ func (dm *DeviceManager) load() error {
 	return nil
 }
 
-// saveLocked saves devices to config or state (caller must hold write lock)
 func (dm *DeviceManager) saveLocked() error {
 	if dm.cfg != nil {
 		dm.cfg.Devices = make(map[string]*config.DeviceEntry)
@@ -177,13 +169,11 @@ func (dm *DeviceManager) saveLocked() error {
 	return dm.manager.Set("devices", dm.devices)
 }
 
-// HashPassword creates a SHA256 hash of a password (exported for API password updates).
 func HashPassword(password string) string {
 	hash := sha256.Sum256([]byte(password))
 	return hex.EncodeToString(hash[:])
 }
 
-// GenerateToken generates a random SHA256 token (exported for migration/config bootstrap).
 func GenerateToken() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
@@ -193,9 +183,6 @@ func GenerateToken() (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-// Authenticate validates username and password, returns device if valid.
-// adminUsername, adminPasswordHash, adminToken come from config (admin uses a single persistent token).
-// When loginUsername == adminUsername, validates password against adminPasswordHash and returns Device with Token set to adminToken.
 func (dm *DeviceManager) Authenticate(loginUsername, password, adminUsername, adminPasswordHash, adminToken string) (*Device, error) {
 	if adminUsername == "" {
 		adminUsername = "admin"
@@ -219,8 +206,6 @@ func (dm *DeviceManager) Authenticate(loginUsername, password, adminUsername, ad
 	return nil, fmt.Errorf("invalid credentials")
 }
 
-// AuthenticateToken validates a token and returns the device.
-// adminUsername and adminToken come from config; if token == adminToken, returns admin device.
 func (dm *DeviceManager) AuthenticateToken(token string, adminUsername, adminToken string) (*Device, error) {
 	if adminUsername == "" {
 		adminUsername = "admin"
@@ -245,7 +230,6 @@ func (dm *DeviceManager) AuthenticateToken(token string, adminUsername, adminTok
 	return nil, fmt.Errorf("invalid token")
 }
 
-// GetDevice retrieves a device by username. Admin (dashboard login) is not a regular device; pass adminUsername to reject it.
 func (dm *DeviceManager) GetDevice(username string, adminUsername string) (*Device, error) {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
@@ -265,19 +249,17 @@ func (dm *DeviceManager) GetDevice(username string, adminUsername string) (*Devi
 	return device, nil
 }
 
-// GetUser is an alias for GetDevice for backwards compatibility
 func (dm *DeviceManager) GetUser(username string, adminUsername string) (*Device, error) {
 	return dm.GetDevice(username, adminUsername)
 }
 
-// GetAllDevices returns all devices (without password hashes for security, excludes admin)
 func (dm *DeviceManager) GetAllDevices() []Device {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 
 	devices := make([]Device, 0, len(dm.devices))
 	for _, device := range dm.devices {
-		// Skip dashboard admin if it somehow got in there (admin is stored separately)
+
 		if device.Username == "admin" {
 			continue
 		}
@@ -291,12 +273,10 @@ func (dm *DeviceManager) GetAllDevices() []Device {
 	return devices
 }
 
-// GetAllUsers is an alias for GetAllDevices for backwards compatibility
 func (dm *DeviceManager) GetAllUsers() []Device {
 	return dm.GetAllDevices()
 }
 
-// CreateDevice creates a new device (password is optional). adminUsername is the dashboard admin name; cannot create a device with that name.
 func (dm *DeviceManager) CreateDevice(username, password string, adminUsername string) (*Device, error) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
@@ -334,13 +314,10 @@ func (dm *DeviceManager) CreateDevice(username, password string, adminUsername s
 	return device, nil
 }
 
-// CreateUser is an alias for CreateDevice for backwards compatibility
 func (dm *DeviceManager) CreateUser(username, password string, adminUsername string) (*Device, error) {
 	return dm.CreateDevice(username, password, adminUsername)
 }
 
-// UpdateUser updates dashboard admin password. adminUsername is the configured admin name.
-// Admin password is stored in config; callers must update config and save instead of using this for admin.
 func (dm *DeviceManager) UpdateUser(username, newPassword string, adminUsername string) error {
 	if adminUsername == "" {
 		adminUsername = "admin"
@@ -351,7 +328,6 @@ func (dm *DeviceManager) UpdateUser(username, newPassword string, adminUsername 
 	return fmt.Errorf("only admin password can be updated")
 }
 
-// RegenerateToken generates a new token for a device
 func (dm *DeviceManager) RegenerateToken(username string) (string, error) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
@@ -376,7 +352,6 @@ func (dm *DeviceManager) RegenerateToken(username string) (string, error) {
 	return token, nil
 }
 
-// DeleteDevice removes a device
 func (dm *DeviceManager) DeleteDevice(username string) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
@@ -395,12 +370,10 @@ func (dm *DeviceManager) DeleteDevice(username string) error {
 	return nil
 }
 
-// DeleteUser is an alias for DeleteDevice for backwards compatibility
 func (dm *DeviceManager) DeleteUser(username string) error {
 	return dm.DeleteDevice(username)
 }
 
-// UpdateDeviceIndexerOverrides sets a device's per-indexer search overrides (key = indexer name).
 func (dm *DeviceManager) UpdateDeviceIndexerOverrides(username string, overrides map[string]config.IndexerSearchConfig) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
@@ -421,4 +394,3 @@ func (dm *DeviceManager) UpdateDeviceIndexerOverrides(username string, overrides
 	}
 	return nil
 }
-

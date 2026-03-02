@@ -13,16 +13,15 @@ import (
 	"streamnzb/pkg/search/parser"
 )
 
-// Candidate represents a filtered search result suitable for deep inspection
 type Candidate struct {
 	Release     *release.Release
 	Metadata    *parser.ParsedRelease
-	Group       string // 4K, 1080p, 720p, SD
+	Group       string
+	SortKey     []int
 	Score       int
-	QuerySource string // "id" or "text" — ID-based results are prioritized
+	QuerySource string
 }
 
-// Service implements smart triage logic
 type Service struct {
 	FilterConfig *config.FilterConfig
 	SortConfig   config.SortConfig
@@ -46,7 +45,6 @@ func compilePatterns(patterns []string) []*regexp.Regexp {
 	return out
 }
 
-// NewService creates a new triage service
 func NewService(filterConfig *config.FilterConfig, sortConfig config.SortConfig) *Service {
 	s := &Service{
 		FilterConfig: filterConfig,
@@ -60,7 +58,6 @@ func NewService(filterConfig *config.FilterConfig, sortConfig config.SortConfig)
 	return s
 }
 
-// Filter processes search results and returns candidates sorted by score
 func (s *Service) Filter(releases []*release.Release) []Candidate {
 	var candidates []Candidate
 
@@ -77,11 +74,8 @@ func (s *Service) Filter(releases []*release.Release) []Candidate {
 		}
 
 		group := parsed.ResolutionGroup()
-		score := s.calculateScore(rel, parsed)
-
-		if rel.QuerySource == "id" {
-			score += 50_000_000
-		}
+		sortKey := s.buildSortKey(rel, parsed)
+		score := keyToScore(sortKey)
 
 		querySource := rel.QuerySource
 		if querySource == "" {
@@ -91,6 +85,7 @@ func (s *Service) Filter(releases []*release.Release) []Candidate {
 			Release:     rel,
 			Metadata:    parsed,
 			Group:       group,
+			SortKey:     sortKey,
 			Score:       score,
 			QuerySource: querySource,
 		})
@@ -99,26 +94,25 @@ func (s *Service) Filter(releases []*release.Release) []Candidate {
 	candidates = s.deduplicateReleases(candidates)
 
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Score > candidates[j].Score
+		a, b := candidates[i].SortKey, candidates[j].SortKey
+		for k := 0; k < len(a) && k < len(b); k++ {
+			if a[k] != b[k] {
+				return a[k] > b[k]
+			}
+		}
+		return len(a) > len(b)
 	})
 
 	return candidates
 }
 
-// shouldInclude implements 3-tier filtering:
-//  1. Included bypass: if the release matches ANY included rule in ANY category, it passes ALL filters.
-//  2. Excluded: if the release matches any excluded rule, it is rejected.
-//  3. Required: if a required list is set and the release doesn't match, it is rejected.
-//  4. Booleans, size, and year are checked last.
 func (s *Service) shouldInclude(rel *release.Release, parsed *parser.ParsedRelease) bool {
 	cfg := s.FilterConfig
 
-	// Phase 1: Included bypass (cross-category)
 	if isIncludedBypass(cfg, parsed, rel) {
 		return true
 	}
 
-	// Phase 2: Excluded checks
 	if checkQualityExcluded(cfg, parsed) ||
 		checkResolutionExcluded(cfg, parsed) ||
 		checkCodecExcluded(cfg, parsed) ||
@@ -132,13 +126,13 @@ func (s *Service) shouldInclude(rel *release.Release, parsed *parser.ParsedRelea
 		checkNetworkExcluded(cfg, parsed) ||
 		checkRegionExcluded(cfg, parsed) ||
 		checkGroupExcluded(cfg, parsed) ||
+		checkAvailNZBExcluded(cfg, rel) ||
 		checkLanguagesExcluded(cfg, parsed, rel) ||
 		checkKeywordsExcluded(cfg, rel) ||
 		checkRegexExcluded(s.compiledRegexExcluded, rel) {
 		return false
 	}
 
-	// Phase 3: Required checks
 	if checkQualityRequired(cfg, parsed) ||
 		checkResolutionRequired(cfg, parsed) ||
 		checkCodecRequired(cfg, parsed) ||
@@ -152,36 +146,44 @@ func (s *Service) shouldInclude(rel *release.Release, parsed *parser.ParsedRelea
 		checkNetworkRequired(cfg, parsed) ||
 		checkRegionRequired(cfg, parsed) ||
 		checkGroupRequired(cfg, parsed) ||
+		checkAvailNZBRequired(cfg, rel) ||
 		checkLanguagesRequired(cfg, parsed, rel) ||
 		checkKeywordsRequired(cfg, rel) ||
 		checkRegexRequired(s.compiledRegexRequired, rel) {
 		return false
 	}
 
-	// Phase 4: Booleans, size, year, age, availnzb, bitrate
 	if !checkBooleans(cfg, parsed) ||
 		!checkSizeWithResolution(cfg, rel, parsed) ||
 		!checkYear(cfg, parsed) ||
 		!checkAge(cfg, rel) ||
-		!checkAvailNZB(cfg, rel) ||
 		!checkBitrate(cfg, rel) {
 		return false
 	}
 	return true
 }
 
-// orderListScore returns points for first match in ordered list: 10 for 1st, scaling to 0 for last. n=1 => 10.
-func orderListScore(n int, firstMatchIndex int) int {
-	if n <= 0 {
-		return 0
+const keyToScoreBase = 10
+
+const keyToScoreMaxExp = 18
+
+func keyToScore(key []int) int {
+	score := 0
+	for i, v := range key {
+		if v < 0 {
+			v = 0
+		}
+		exp := len(key) - 1 - i
+		if exp > keyToScoreMaxExp {
+			exp = keyToScoreMaxExp
+		}
+		if exp <= 0 {
+			score += v
+		} else {
+			score += v * int(math.Pow(float64(keyToScoreBase), float64(exp)))
+		}
 	}
-	if n == 1 {
-		return 10
-	}
-	if firstMatchIndex < 0 || firstMatchIndex >= n {
-		return 0
-	}
-	return 10 * (n - 1 - firstMatchIndex) / (n - 1)
+	return score
 }
 
 func (s *Service) firstMatchResolution(p *parser.ParsedRelease) int {
@@ -296,20 +298,42 @@ func (s *Service) firstMatchLanguages(p *parser.ParsedRelease, rel *release.Rele
 	return -1
 }
 
-func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) int {
-	score := 0
-	add := func(order []string, firstMatchIndex int, weight float64) {
-		if len(order) == 0 {
-			return
-		}
-		pts := orderListScore(len(order), firstMatchIndex)
-		score += int(float64(pts) * weight)
-	}
-
+func (s *Service) buildSortKey(rel *release.Release, p *parser.ParsedRelease) []int {
 	type catContribution struct {
 		order []string
 		idx   int
 	}
+
+	boolMatch := func(matched bool) catContribution {
+		if matched {
+			return catContribution{[]string{"yes"}, 0}
+		}
+		return catContribution{[]string{"yes"}, -1}
+	}
+
+	kwMatched := false
+	if len(s.SortConfig.KeywordsPreferred) > 0 {
+		titleLower := strings.ToLower(rel.Title)
+		for _, kw := range s.SortConfig.KeywordsPreferred {
+			if kw != "" && strings.Contains(titleLower, strings.ToLower(kw)) {
+				kwMatched = true
+				break
+			}
+		}
+	}
+
+	rxMatched := false
+	if len(s.compiledRegexPreferred) > 0 {
+		for _, re := range s.compiledRegexPreferred {
+			if re.MatchString(rel.Title) {
+				rxMatched = true
+				break
+			}
+		}
+	}
+
+	availStatus := getAvailStatus(rel)
+
 	cats := map[string]catContribution{
 		"resolution": {s.SortConfig.PreferredResolution, s.firstMatchResolution(p)},
 		"quality":    {s.SortConfig.PreferredQuality, s.firstMatchQuality(p)},
@@ -325,18 +349,18 @@ func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) 
 		"network":    {s.SortConfig.PreferredNetwork, s.firstMatchSingle(p.Network, s.SortConfig.PreferredNetwork)},
 		"region":     {s.SortConfig.PreferredRegion, s.firstMatchSingle(p.Region, s.SortConfig.PreferredRegion)},
 		"three_d":    {s.SortConfig.PreferredThreeD, s.firstMatchSingle(p.ThreeD, s.SortConfig.PreferredThreeD)},
+		"keywords":   boolMatch(kwMatched),
+		"regex":      boolMatch(rxMatched),
+		"availnzb":   {s.SortConfig.PreferredAvailNZB, s.firstMatchSingle(availStatus, s.SortConfig.PreferredAvailNZB)},
 	}
 
 	defaultCategoryOrder := []string{
 		"resolution", "quality", "codec", "visual_tag", "audio", "channels",
 		"bit_depth", "container", "languages", "group", "edition", "network", "region", "three_d",
+		"keywords", "regex", "availnzb",
 	}
 
-	type weightedCat struct {
-		order []string
-		idx   int
-	}
-	var ordered []weightedCat
+	var ordered []catContribution
 	if len(s.SortConfig.SortCriteriaOrder) > 0 {
 		for _, key := range s.SortConfig.SortCriteriaOrder {
 			key = strings.TrimSpace(strings.ToLower(key))
@@ -347,7 +371,7 @@ func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) 
 			if !ok || len(c.order) == 0 {
 				continue
 			}
-			ordered = append(ordered, weightedCat{c.order, c.idx})
+			ordered = append(ordered, c)
 		}
 	} else {
 		for _, key := range defaultCategoryOrder {
@@ -355,14 +379,45 @@ func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) 
 			if !ok || len(c.order) == 0 {
 				continue
 			}
-			ordered = append(ordered, weightedCat{c.order, c.idx})
+			ordered = append(ordered, c)
 		}
 	}
 
-	n := len(ordered)
-	for i, wc := range ordered {
-		weight := math.Pow(10, float64(n-1-i))
-		add(wc.order, wc.idx, weight)
+	key := make([]int, 0, len(ordered)+3)
+	for _, c := range ordered {
+		n := len(c.order)
+		if n == 0 {
+			continue
+		}
+		idx := c.idx
+		if idx < 0 || idx >= n {
+			key = append(key, 0)
+		} else {
+			key = append(key, n-idx)
+		}
+	}
+
+	sizeGB := float64(rel.Size) / (1024 * 1024 * 1024)
+	if sizeGB > 100 {
+		key = append(key, 9)
+	} else if sizeGB > 50 {
+		key = append(key, 8)
+	} else if sizeGB > 20 {
+		key = append(key, 7)
+	} else if sizeGB > 10 {
+		key = append(key, 6)
+	} else if sizeGB > 5 {
+		key = append(key, 5)
+	} else if sizeGB > 2 {
+		key = append(key, 4)
+	} else if sizeGB > 1 {
+		key = append(key, 3)
+	} else if sizeGB > 0.5 {
+		key = append(key, 2)
+	} else if sizeGB > 0 {
+		key = append(key, 1)
+	} else {
+		key = append(key, 0)
 	}
 
 	if rel.PubDate != "" {
@@ -372,41 +427,19 @@ func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) 
 		}
 		if err == nil {
 			ageHours := time.Since(pubTime).Hours()
-			score += int((100000.0 - ageHours) * s.SortConfig.AgeWeight)
+			key = append(key, int(100000.0-ageHours))
+		} else {
+			key = append(key, 0)
 		}
-	}
-	if rel.Grabs > 0 {
-		score += int(float64(rel.Grabs) * s.SortConfig.GrabWeight)
-	}
-
-	if len(s.SortConfig.KeywordsPreferred) > 0 && s.SortConfig.KeywordsWeight != 0 {
-		titleLower := strings.ToLower(rel.Title)
-		for _, kw := range s.SortConfig.KeywordsPreferred {
-			if kw != "" && strings.Contains(titleLower, strings.ToLower(kw)) {
-				score += int(10000 * s.SortConfig.KeywordsWeight)
-				break
-			}
-		}
+	} else {
+		key = append(key, 0)
 	}
 
-	if len(s.compiledRegexPreferred) > 0 && s.SortConfig.RegexWeight != 0 {
-		for _, re := range s.compiledRegexPreferred {
-			if re.MatchString(rel.Title) {
-				score += int(10000 * s.SortConfig.RegexWeight)
-				break
-			}
-		}
-	}
+	key = append(key, rel.Grabs)
 
-	if s.SortConfig.AvailNZBWeight != 0 && rel.Available != nil && *rel.Available {
-		score += int(10000 * s.SortConfig.AvailNZBWeight)
-	}
-
-	return score
+	return key
 }
 
-// deduplicateReleases removes duplicate releases based on normalized name.
-// Keeps the release with the highest score.
 func (s *Service) deduplicateReleases(candidates []Candidate) []Candidate {
 	seen := make(map[string]*Candidate)
 

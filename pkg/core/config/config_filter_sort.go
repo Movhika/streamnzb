@@ -7,53 +7,49 @@ import (
 	"streamnzb/pkg/core/config/pttoptions"
 )
 
-// FilterConfig holds the 3-tier filter model per PTT category:
-//   - Included (whitelist bypass): if a release matches ANY included rule in ANY category, it passes ALL filters.
-//   - Required: the release MUST match at least one value (OR within the list), or it is rejected.
-//   - Excluded: if the release matches ANY excluded value, it is rejected.
 type FilterConfig struct {
-	AudioIncluded     []string `json:"audio_included,omitempty"`
-	AudioRequired     []string `json:"audio_required"`
-	AudioExcluded     []string `json:"audio_excluded"`
-	BitDepthIncluded  []string `json:"bit_depth_included,omitempty"`
-	BitDepthRequired  []string `json:"bit_depth_required"`
-	BitDepthExcluded  []string `json:"bit_depth_excluded"`
-	ChannelsIncluded  []string `json:"channels_included,omitempty"`
-	ChannelsRequired  []string `json:"channels_required"`
-	ChannelsExcluded  []string `json:"channels_excluded"`
-	CodecIncluded     []string `json:"codec_included,omitempty"`
-	CodecRequired     []string `json:"codec_required"`
-	CodecExcluded     []string `json:"codec_excluded"`
-	ContainerIncluded []string `json:"container_included,omitempty"`
-	ContainerRequired []string `json:"container_required"`
-	ContainerExcluded []string `json:"container_excluded"`
-	EditionIncluded   []string `json:"edition_included,omitempty"`
-	EditionRequired   []string `json:"edition_required"`
-	EditionExcluded   []string `json:"edition_excluded"`
-	HDRIncluded       []string `json:"hdr_included,omitempty"`
-	HDRRequired       []string `json:"hdr_required"`
-	HDRExcluded       []string `json:"hdr_excluded"`
-	LanguagesIncluded []string `json:"languages_included,omitempty"`
-	LanguagesRequired []string `json:"languages_required"`
-	LanguagesExcluded []string `json:"languages_excluded"`
-	NetworkIncluded   []string `json:"network_included,omitempty"`
-	NetworkRequired   []string `json:"network_required"`
-	NetworkExcluded   []string `json:"network_excluded"`
-	QualityIncluded   []string `json:"quality_included,omitempty"`
-	QualityRequired   []string `json:"quality_required"`
-	QualityExcluded   []string `json:"quality_excluded"`
-	RegionIncluded    []string `json:"region_included,omitempty"`
-	RegionRequired    []string `json:"region_required"`
-	RegionExcluded    []string `json:"region_excluded"`
+	AudioIncluded      []string `json:"audio_included,omitempty"`
+	AudioRequired      []string `json:"audio_required"`
+	AudioExcluded      []string `json:"audio_excluded"`
+	BitDepthIncluded   []string `json:"bit_depth_included,omitempty"`
+	BitDepthRequired   []string `json:"bit_depth_required"`
+	BitDepthExcluded   []string `json:"bit_depth_excluded"`
+	ChannelsIncluded   []string `json:"channels_included,omitempty"`
+	ChannelsRequired   []string `json:"channels_required"`
+	ChannelsExcluded   []string `json:"channels_excluded"`
+	CodecIncluded      []string `json:"codec_included,omitempty"`
+	CodecRequired      []string `json:"codec_required"`
+	CodecExcluded      []string `json:"codec_excluded"`
+	ContainerIncluded  []string `json:"container_included,omitempty"`
+	ContainerRequired  []string `json:"container_required"`
+	ContainerExcluded  []string `json:"container_excluded"`
+	EditionIncluded    []string `json:"edition_included,omitempty"`
+	EditionRequired    []string `json:"edition_required"`
+	EditionExcluded    []string `json:"edition_excluded"`
+	HDRIncluded        []string `json:"hdr_included,omitempty"`
+	HDRRequired        []string `json:"hdr_required"`
+	HDRExcluded        []string `json:"hdr_excluded"`
+	LanguagesIncluded  []string `json:"languages_included,omitempty"`
+	LanguagesRequired  []string `json:"languages_required"`
+	LanguagesExcluded  []string `json:"languages_excluded"`
+	NetworkIncluded    []string `json:"network_included,omitempty"`
+	NetworkRequired    []string `json:"network_required"`
+	NetworkExcluded    []string `json:"network_excluded"`
+	QualityIncluded    []string `json:"quality_included,omitempty"`
+	QualityRequired    []string `json:"quality_required"`
+	QualityExcluded    []string `json:"quality_excluded"`
+	RegionIncluded     []string `json:"region_included,omitempty"`
+	RegionRequired     []string `json:"region_required"`
+	RegionExcluded     []string `json:"region_excluded"`
 	ResolutionIncluded []string `json:"resolution_included,omitempty"`
 	ResolutionRequired []string `json:"resolution_required"`
 	ResolutionExcluded []string `json:"resolution_excluded"`
-	ThreeDIncluded    []string `json:"three_d_included,omitempty"`
-	ThreeDRequired    []string `json:"three_d_required"`
-	ThreeDExcluded    []string `json:"three_d_excluded"`
-	GroupIncluded     []string `json:"group_included,omitempty"`
-	GroupRequired     []string `json:"group_required"`
-	GroupExcluded     []string `json:"group_excluded"`
+	ThreeDIncluded     []string `json:"three_d_included,omitempty"`
+	ThreeDRequired     []string `json:"three_d_required"`
+	ThreeDExcluded     []string `json:"three_d_excluded"`
+	GroupIncluded      []string `json:"group_included,omitempty"`
+	GroupRequired      []string `json:"group_required"`
+	GroupExcluded      []string `json:"group_excluded"`
 
 	DubbedExcluded    *bool `json:"dubbed_excluded,omitempty"`
 	HardcodedExcluded *bool `json:"hardcoded_excluded,omitempty"`
@@ -77,7 +73,9 @@ type FilterConfig struct {
 	RegexExcluded []string `json:"regex_excluded,omitempty"`
 	RegexRequired []string `json:"regex_required,omitempty"`
 
-	AvailNZBRequired *bool `json:"availnzb_required,omitempty"`
+	AvailNZBIncluded []string `json:"availnzb_included,omitempty"`
+	AvailNZBRequired []string `json:"availnzb_required,omitempty"`
+	AvailNZBExcluded []string `json:"availnzb_excluded,omitempty"`
 
 	SizePerResolution map[string]SizeRange `json:"size_per_resolution,omitempty"`
 
@@ -85,15 +83,11 @@ type FilterConfig struct {
 	MaxBitrateKbps float64 `json:"max_bitrate_kbps"`
 }
 
-// SizeRange holds min/max size in GB for per-resolution filtering.
 type SizeRange struct {
 	MinGB float64 `json:"min_gb"`
 	MaxGB float64 `json:"max_gb"`
 }
 
-// SortConfig holds preferred lists per category; points scale 10 (first) to 0 (last).
-// When UseCustomScoring is true, each category's 0-10 contribution is multiplied by its *_weight (default 1.0),
-// and release group can use three tiers with separate points instead of one preferred list.
 type SortConfig struct {
 	PreferredResolution []string `json:"preferred_resolution"`
 	PreferredCodec      []string `json:"preferred_codec"`
@@ -109,6 +103,7 @@ type SortConfig struct {
 	PreferredNetwork    []string `json:"preferred_network"`
 	PreferredRegion     []string `json:"preferred_region"`
 	PreferredThreeD     []string `json:"preferred_three_d"`
+	PreferredAvailNZB   []string `json:"preferred_availnzb,omitempty"`
 
 	GrabWeight float64 `json:"grab_weight"`
 	AgeWeight  float64 `json:"age_weight"`
@@ -123,36 +118,30 @@ type SortConfig struct {
 
 	SortCriteriaOrder []string `json:"sort_criteria_order,omitempty"`
 
-	UseCustomScoring *bool `json:"use_custom_scoring,omitempty"`
-	ResolutionWeight  float64 `json:"resolution_weight,omitempty"`
-	CodecWeight       float64 `json:"codec_weight,omitempty"`
-	AudioWeight       float64 `json:"audio_weight,omitempty"`
-	QualityWeight     float64 `json:"quality_weight,omitempty"`
-	VisualTagWeight   float64 `json:"visual_tag_weight,omitempty"`
-	ChannelsWeight    float64 `json:"channels_weight,omitempty"`
-	BitDepthWeight    float64 `json:"bit_depth_weight,omitempty"`
-	ContainerWeight   float64 `json:"container_weight,omitempty"`
-	LanguagesWeight   float64 `json:"languages_weight,omitempty"`
-	GroupWeight       float64 `json:"group_weight,omitempty"`
-	EditionWeight     float64 `json:"edition_weight,omitempty"`
-	NetworkWeight     float64 `json:"network_weight,omitempty"`
-	RegionWeight      float64 `json:"region_weight,omitempty"`
-	ThreeDWeight      float64 `json:"three_d_weight,omitempty"`
-	GroupOrderTier1   []string `json:"group_order_tier1,omitempty"`
-	GroupOrderTier2   []string `json:"group_order_tier2,omitempty"`
-	GroupOrderTier3   []string `json:"group_order_tier3,omitempty"`
-	GroupTier1Points  int      `json:"group_tier1_points,omitempty"`
-	GroupTier2Points  int      `json:"group_tier2_points,omitempty"`
-	GroupTier3Points  int      `json:"group_tier3_points,omitempty"`
+	UseCustomScoring *bool    `json:"use_custom_scoring,omitempty"`
+	ResolutionWeight float64  `json:"resolution_weight,omitempty"`
+	CodecWeight      float64  `json:"codec_weight,omitempty"`
+	AudioWeight      float64  `json:"audio_weight,omitempty"`
+	QualityWeight    float64  `json:"quality_weight,omitempty"`
+	VisualTagWeight  float64  `json:"visual_tag_weight,omitempty"`
+	ChannelsWeight   float64  `json:"channels_weight,omitempty"`
+	BitDepthWeight   float64  `json:"bit_depth_weight,omitempty"`
+	ContainerWeight  float64  `json:"container_weight,omitempty"`
+	LanguagesWeight  float64  `json:"languages_weight,omitempty"`
+	GroupWeight      float64  `json:"group_weight,omitempty"`
+	EditionWeight    float64  `json:"edition_weight,omitempty"`
+	NetworkWeight    float64  `json:"network_weight,omitempty"`
+	RegionWeight     float64  `json:"region_weight,omitempty"`
+	ThreeDWeight     float64  `json:"three_d_weight,omitempty"`
+	GroupOrderTier1  []string `json:"group_order_tier1,omitempty"`
+	GroupOrderTier2  []string `json:"group_order_tier2,omitempty"`
+	GroupOrderTier3  []string `json:"group_order_tier3,omitempty"`
+	GroupTier1Points int      `json:"group_tier1_points,omitempty"`
+	GroupTier2Points int      `json:"group_tier2_points,omitempty"`
+	GroupTier3Points int      `json:"group_tier3_points,omitempty"`
 }
 
-// filterConfigRaw unmarshals all three generations of JSON:
-//
-//	v3 (current): included/required/excluded
-//	v2: include/avoid (maps to required/excluded)
-//	v1 (legacy): allowed/blocked/etc.
 type filterConfigRaw struct {
-	// v3: 3-tier
 	AudioIncluded      []string `json:"audio_included"`
 	AudioRequired      []string `json:"audio_required"`
 	AudioExcluded      []string `json:"audio_excluded"`
@@ -204,7 +193,6 @@ type filterConfigRaw struct {
 	ExtendedRequired  *bool `json:"extended_required,omitempty"`
 	UnratedRequired   *bool `json:"unrated_required,omitempty"`
 
-	// v2: include/avoid (maps to required/excluded)
 	AudioInclude      []string `json:"audio_include"`
 	AudioAvoid        []string `json:"audio_avoid"`
 	BitDepthInclude   []string `json:"bit_depth_include"`
@@ -233,13 +221,13 @@ type filterConfigRaw struct {
 	ThreeDAvoid       []string `json:"three_d_avoid"`
 	GroupInclude      []string `json:"group_include"`
 	GroupAvoid        []string `json:"group_avoid"`
-	DubbedAvoid       *bool   `json:"dubbed_avoid,omitempty"`
-	HardcodedAvoid    *bool   `json:"hardcoded_avoid,omitempty"`
-	ProperInclude     *bool   `json:"proper_include,omitempty"`
-	RepackInclude     *bool   `json:"repack_include,omitempty"`
-	RepackAvoid       *bool   `json:"repack_avoid,omitempty"`
-	ExtendedInclude   *bool   `json:"extended_include,omitempty"`
-	UnratedInclude    *bool   `json:"unrated_include,omitempty"`
+	DubbedAvoid       *bool    `json:"dubbed_avoid,omitempty"`
+	HardcodedAvoid    *bool    `json:"hardcoded_avoid,omitempty"`
+	ProperInclude     *bool    `json:"proper_include,omitempty"`
+	RepackInclude     *bool    `json:"repack_include,omitempty"`
+	RepackAvoid       *bool    `json:"repack_avoid,omitempty"`
+	ExtendedInclude   *bool    `json:"extended_include,omitempty"`
+	UnratedInclude    *bool    `json:"unrated_include,omitempty"`
 
 	MinSizeGB float64 `json:"min_size_gb"`
 	MaxSizeGB float64 `json:"max_size_gb"`
@@ -255,14 +243,16 @@ type filterConfigRaw struct {
 	RegexExcluded []string `json:"regex_excluded,omitempty"`
 	RegexRequired []string `json:"regex_required,omitempty"`
 
-	AvailNZBRequired *bool `json:"availnzb_required,omitempty"`
+	AvailNZBIncluded       []string `json:"availnzb_included,omitempty"`
+	AvailNZBRequired       []string `json:"availnzb_required,omitempty"`
+	AvailNZBExcluded       []string `json:"availnzb_excluded,omitempty"`
+	AvailNZBRequiredLegacy *bool    `json:"availnzb_required_legacy,omitempty"`
 
 	SizePerResolution map[string]SizeRange `json:"size_per_resolution,omitempty"`
 
 	MinBitrateKbps float64 `json:"min_bitrate_kbps"`
 	MaxBitrateKbps float64 `json:"max_bitrate_kbps"`
 
-	// v1 (legacy)
 	AllowedQualities  []string `json:"allowed_qualities"`
 	BlockedQualities  []string `json:"blocked_qualities"`
 	MinResolution     string   `json:"min_resolution"`
@@ -287,15 +277,12 @@ type filterConfigRaw struct {
 	BlockedGroups     []string `json:"blocked_groups"`
 }
 
-// UnmarshalJSON supports v3 (included/required/excluded), v2 (include/avoid),
-// and v1 (legacy allowed/blocked) filter JSON. Newer fields take precedence.
 func (c *FilterConfig) UnmarshalJSON(data []byte) error {
 	var raw filterConfigRaw
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
-	// Included (bypass) — only v3
 	c.AudioIncluded = raw.AudioIncluded
 	c.BitDepthIncluded = raw.BitDepthIncluded
 	c.ChannelsIncluded = raw.ChannelsIncluded
@@ -311,7 +298,6 @@ func (c *FilterConfig) UnmarshalJSON(data []byte) error {
 	c.ThreeDIncluded = raw.ThreeDIncluded
 	c.GroupIncluded = raw.GroupIncluded
 
-	// Required: v3 > v2 > v1
 	c.AudioRequired = firstNonEmpty(raw.AudioRequired, raw.AudioInclude, raw.RequiredAudio, raw.AllowedAudio)
 	c.BitDepthRequired = firstNonEmpty(raw.BitDepthRequired, raw.BitDepthInclude, condSlice(raw.MinBitDepth != "", []string{raw.MinBitDepth}))
 	c.ChannelsRequired = firstNonEmpty(raw.ChannelsRequired, raw.ChannelsInclude, condSlice(raw.MinChannels != "", []string{raw.MinChannels}))
@@ -330,7 +316,6 @@ func (c *FilterConfig) UnmarshalJSON(data []byte) error {
 	c.ThreeDRequired = firstNonEmpty(raw.ThreeDRequired, raw.ThreeDInclude)
 	c.GroupRequired = firstNonEmpty(raw.GroupRequired, raw.GroupInclude)
 
-	// Excluded: v3 > v2 > v1
 	c.AudioExcluded = firstNonEmpty(raw.AudioExcluded, raw.AudioAvoid)
 	c.BitDepthExcluded = firstNonEmpty(raw.BitDepthExcluded, raw.BitDepthAvoid)
 	c.ChannelsExcluded = firstNonEmpty(raw.ChannelsExcluded, raw.ChannelsAvoid)
@@ -352,7 +337,6 @@ func (c *FilterConfig) UnmarshalJSON(data []byte) error {
 	c.ThreeDExcluded = firstNonEmpty(raw.ThreeDExcluded, raw.ThreeDAvoid)
 	c.GroupExcluded = firstNonEmpty(raw.GroupExcluded, raw.GroupAvoid, raw.BlockedGroups)
 
-	// Booleans: v3 > v2 > v1
 	c.DubbedExcluded = firstBoolPtr(raw.DubbedExcluded, raw.DubbedAvoid)
 	if c.DubbedExcluded == nil && raw.BlockDubbed {
 		t := true
@@ -387,12 +371,17 @@ func (c *FilterConfig) UnmarshalJSON(data []byte) error {
 	c.KeywordsRequired = raw.KeywordsRequired
 	c.RegexExcluded = raw.RegexExcluded
 	c.RegexRequired = raw.RegexRequired
+	c.AvailNZBIncluded = raw.AvailNZBIncluded
 	c.AvailNZBRequired = raw.AvailNZBRequired
+	c.AvailNZBExcluded = raw.AvailNZBExcluded
+
+	if len(c.AvailNZBRequired) == 0 && raw.AvailNZBRequiredLegacy != nil && *raw.AvailNZBRequiredLegacy {
+		c.AvailNZBRequired = []string{"available"}
+	}
 	c.SizePerResolution = raw.SizePerResolution
 	c.MinBitrateKbps = raw.MinBitrateKbps
 	c.MaxBitrateKbps = raw.MaxBitrateKbps
 
-	// Normalize language lists to short codes so config stores canonical form (UI may send full names).
 	c.LanguagesIncluded = pttoptions.NormalizeLanguageSlice(c.LanguagesIncluded)
 	c.LanguagesRequired = pttoptions.NormalizeLanguageSlice(c.LanguagesRequired)
 	c.LanguagesExcluded = pttoptions.NormalizeLanguageSlice(c.LanguagesExcluded)
@@ -424,9 +413,7 @@ func firstBoolPtr(ptrs ...*bool) *bool {
 	return nil
 }
 
-// sortConfigRaw for unmarshaling v3 (preferred_*), v2 (*_order), and v1 (weight maps) sort JSON.
 type sortConfigRaw struct {
-	// v3: preferred_*
 	PreferredResolution []string `json:"preferred_resolution"`
 	PreferredCodec      []string `json:"preferred_codec"`
 	PreferredAudio      []string `json:"preferred_audio"`
@@ -441,8 +428,8 @@ type sortConfigRaw struct {
 	PreferredNetwork    []string `json:"preferred_network"`
 	PreferredRegion     []string `json:"preferred_region"`
 	PreferredThreeD     []string `json:"preferred_three_d"`
+	PreferredAvailNZB   []string `json:"preferred_availnzb,omitempty"`
 
-	// v2: *_order
 	ResolutionOrder []string `json:"resolution_order"`
 	CodecOrder      []string `json:"codec_order"`
 	AudioOrder      []string `json:"audio_order"`
@@ -467,21 +454,21 @@ type sortConfigRaw struct {
 	AvailNZBWeight    float64  `json:"availnzb_weight,omitempty"`
 	SortCriteriaOrder []string `json:"sort_criteria_order,omitempty"`
 
-	UseCustomScoring *bool   `json:"use_custom_scoring,omitempty"`
-	ResolutionWeight float64 `json:"resolution_weight,omitempty"`
-	CodecWeight      float64 `json:"codec_weight,omitempty"`
-	AudioWeight      float64 `json:"audio_weight,omitempty"`
-	QualityWeight    float64 `json:"quality_weight,omitempty"`
-	VisualTagWeight  float64 `json:"visual_tag_weight,omitempty"`
-	ChannelsWeight   float64 `json:"channels_weight,omitempty"`
-	BitDepthWeight   float64 `json:"bit_depth_weight,omitempty"`
-	ContainerWeight  float64 `json:"container_weight,omitempty"`
-	LanguagesWeight  float64 `json:"languages_weight,omitempty"`
-	GroupWeight      float64 `json:"group_weight,omitempty"`
-	EditionWeight    float64 `json:"edition_weight,omitempty"`
-	NetworkWeight    float64 `json:"network_weight,omitempty"`
-	RegionWeight     float64 `json:"region_weight,omitempty"`
-	ThreeDWeight     float64 `json:"three_d_weight,omitempty"`
+	UseCustomScoring *bool    `json:"use_custom_scoring,omitempty"`
+	ResolutionWeight float64  `json:"resolution_weight,omitempty"`
+	CodecWeight      float64  `json:"codec_weight,omitempty"`
+	AudioWeight      float64  `json:"audio_weight,omitempty"`
+	QualityWeight    float64  `json:"quality_weight,omitempty"`
+	VisualTagWeight  float64  `json:"visual_tag_weight,omitempty"`
+	ChannelsWeight   float64  `json:"channels_weight,omitempty"`
+	BitDepthWeight   float64  `json:"bit_depth_weight,omitempty"`
+	ContainerWeight  float64  `json:"container_weight,omitempty"`
+	LanguagesWeight  float64  `json:"languages_weight,omitempty"`
+	GroupWeight      float64  `json:"group_weight,omitempty"`
+	EditionWeight    float64  `json:"edition_weight,omitempty"`
+	NetworkWeight    float64  `json:"network_weight,omitempty"`
+	RegionWeight     float64  `json:"region_weight,omitempty"`
+	ThreeDWeight     float64  `json:"three_d_weight,omitempty"`
 	GroupOrderTier1  []string `json:"group_order_tier1,omitempty"`
 	GroupOrderTier2  []string `json:"group_order_tier2,omitempty"`
 	GroupOrderTier3  []string `json:"group_order_tier3,omitempty"`
@@ -489,17 +476,15 @@ type sortConfigRaw struct {
 	GroupTier2Points int      `json:"group_tier2_points,omitempty"`
 	GroupTier3Points int      `json:"group_tier3_points,omitempty"`
 
-	// v1 (legacy)
-	ResolutionWeights map[string]int `json:"resolution_weights"`
-	CodecWeights      map[string]int `json:"codec_weights"`
-	AudioWeights      map[string]int `json:"audio_weights"`
-	QualityWeights    map[string]int `json:"quality_weights"`
-	VisualTagWeights  map[string]int `json:"visual_tag_weights"`
-	LegacyPreferredGroups    []string `json:"preferred_groups"`
-	LegacyPreferredLanguages []string `json:"preferred_languages"`
+	ResolutionWeights        map[string]int `json:"resolution_weights"`
+	CodecWeights             map[string]int `json:"codec_weights"`
+	AudioWeights             map[string]int `json:"audio_weights"`
+	QualityWeights           map[string]int `json:"quality_weights"`
+	VisualTagWeights         map[string]int `json:"visual_tag_weights"`
+	LegacyPreferredGroups    []string       `json:"preferred_groups"`
+	LegacyPreferredLanguages []string       `json:"preferred_languages_legacy"`
 }
 
-// UnmarshalJSON supports v3 (preferred_*), v2 (*_order), and v1 (weight maps) sort JSON.
 func (c *SortConfig) UnmarshalJSON(data []byte) error {
 	var raw sortConfigRaw
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -535,6 +520,7 @@ func (c *SortConfig) UnmarshalJSON(data []byte) error {
 	c.PreferredNetwork = firstNonEmpty(raw.PreferredNetwork, raw.NetworkOrder)
 	c.PreferredRegion = firstNonEmpty(raw.PreferredRegion, raw.RegionOrder)
 	c.PreferredThreeD = firstNonEmpty(raw.PreferredThreeD, raw.ThreeDOrder)
+	c.PreferredAvailNZB = raw.PreferredAvailNZB
 
 	if raw.GrabWeight != 0 {
 		c.GrabWeight = raw.GrabWeight
@@ -587,7 +573,6 @@ func (c *SortConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// mapKeysByValueDesc returns keys sorted by value descending (highest first).
 func mapKeysByValueDesc(m map[string]int) []string {
 	type kv struct {
 		k string

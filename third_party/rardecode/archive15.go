@@ -14,24 +14,20 @@ import (
 )
 
 const (
-	// block types
 	blockArc     = 0x73
 	blockFile    = 0x74
 	blockComment = 0x75
 	blockService = 0x7a
 	blockEnd     = 0x7b
 
-	// block flags
 	blockHasData = 0x8000
 
-	// archive block flags
 	arcVolume    = 0x0001
 	arcComment   = 0x0002
 	arcSolid     = 0x0008
 	arcNewNaming = 0x0010
 	arcEncrypted = 0x0080
 
-	// file block flags
 	fileSplitBefore = 0x0001
 	fileSplitAfter  = 0x0002
 	fileEncrypted   = 0x0004
@@ -43,11 +39,10 @@ const (
 	fileVersion     = 0x0800
 	fileExtTime     = 0x1000
 
-	// end block flags
 	endArcNotLast = 0x0001
 
-	saltSize    = 8 // size of salt for calculating AES keys
-	cacheSize30 = 4 // number of AES keys to cache
+	saltSize    = 8
+	cacheSize30 = 4
 	hashRounds  = 0x40000
 )
 
@@ -56,20 +51,19 @@ var (
 )
 
 type blockHeader15 struct {
-	htype    byte // block header type
+	htype    byte
 	flags    uint16
-	data     readBuf // header data
-	dataSize int64   // size of extra block data
+	data     readBuf
+	dataSize int64
 }
 
-// archive15 implements archiveBlockReader for RAR 1.5 file format archives
 type archive15 struct {
-	multi     bool // archive is multi-volume
-	solid     bool // archive is a solid archive
+	multi     bool
+	solid     bool
 	encrypted bool
 	oldNaming bool
-	pass      []uint16              // password in UTF-16
-	keyCache  [cacheSize30]struct { // cache of previously calculated decryption keys
+	pass      []uint16
+	keyCache  [cacheSize30]struct {
 		salt []byte
 		key  []byte
 		iv   []byte
@@ -80,7 +74,6 @@ func (a *archive15) useOldNaming() bool {
 	return a.oldNaming
 }
 
-// Calculates the key and iv for AES decryption given a password and salt.
 func calcAes30Params(pass []uint16, salt []byte) (key, iv []byte) {
 	p := make([]byte, 0, len(pass)*2+len(salt))
 	for _, v := range pass {
@@ -93,7 +86,7 @@ func calcAes30Params(pass []uint16, salt []byte) (key, iv []byte) {
 	s := make([]byte, hash.Size())
 	b := s[:3]
 	for i := 0; i < hashRounds; i++ {
-		// ignore hash Write errors, should always succeed
+
 		_, _ = hash.Write(p)
 		b[0], b[1], b[2] = byte(i), byte(i>>8), byte(i>>16)
 		_, _ = hash.Write(b)
@@ -111,7 +104,6 @@ func calcAes30Params(pass []uint16, salt []byte) (key, iv []byte) {
 	return key, iv
 }
 
-// parseDosTime converts a 32bit DOS time value to time.Time
 func parseDosTime(t uint32) time.Time {
 	n := int(t)
 	sec := n & 0x1f << 1
@@ -123,22 +115,21 @@ func parseDosTime(t uint32) time.Time {
 	return time.Date(yr, mon, day, hr, min, sec, 0, time.Local)
 }
 
-// decodeName decodes a non-unicode filename from a file header.
 func decodeName(buf []byte) string {
 	i := bytes.IndexByte(buf, 0)
 	if i < 0 {
-		return string(buf) // filename is UTF-8
+		return string(buf)
 	}
 
 	name := buf[:i]
 	encName := readBuf(buf[i+1:])
 	if len(encName) < 2 {
-		return "" // invalid encoding
+		return ""
 	}
 	highByte := uint16(encName.byte()) << 8
 	flags := encName.byte()
 	flagBits := 8
-	var wchars []uint16 // decoded characters are UTF-16
+	var wchars []uint16
 	for len(wchars) < len(name) && len(encName) > 0 {
 		if flagBits == 0 {
 			flags = encName.byte()
@@ -183,10 +174,9 @@ func decodeName(buf []byte) string {
 	return string(utf16.Decode(wchars))
 }
 
-// readExtTimes reads and parses the optional extra time field from the file header.
 func readExtTimes(f *fileBlockHeader, b *readBuf) {
 	if len(*b) < 2 {
-		return // invalid, not enough data
+		return
 	}
 	flags := b.uint16()
 
@@ -197,9 +187,9 @@ func readExtTimes(f *fileBlockHeader, b *readBuf) {
 		if n&0x8 == 0 {
 			continue
 		}
-		if i != 0 { // ModificationTime already read so skip
+		if i != 0 {
 			if len(*b) < 4 {
-				return // invalid, not enough data
+				return
 			}
 			*t = parseDosTime(b.uint32())
 		}
@@ -211,9 +201,9 @@ func readExtTimes(f *fileBlockHeader, b *readBuf) {
 			continue
 		}
 		if len(*b) < int(n) {
-			return // invalid, not enough data
+			return
 		}
-		// add extra time data in 100's of nanoseconds
+
 		d := time.Duration(0)
 		for j := 3 - n; j < n; j++ {
 			d |= time.Duration(b.byte()) << (j * 8)
@@ -224,7 +214,7 @@ func readExtTimes(f *fileBlockHeader, b *readBuf) {
 }
 
 func (a *archive15) getKeys(salt []byte) (key, iv []byte) {
-	// check cache of keys
+
 	for _, v := range a.keyCache {
 		if bytes.Equal(v.salt[:], salt) {
 			return v.key, v.iv
@@ -232,9 +222,8 @@ func (a *archive15) getKeys(salt []byte) (key, iv []byte) {
 	}
 	key, iv = calcAes30Params(a.pass, salt)
 
-	// save a copy in the cache
 	copy(a.keyCache[1:], a.keyCache[:])
-	a.keyCache[0].salt = slices.Clone(salt) // copy so byte slice can be reused
+	a.keyCache[0].salt = slices.Clone(salt)
 	a.keyCache[0].key = key
 	a.keyCache[0].iv = iv
 
@@ -270,15 +259,15 @@ func (a *archive15) parseFileHeader(h *blockHeader15) (*fileBlockHeader, error) 
 	f.sum = slices.Clone(b.bytes(4))
 
 	f.ModificationTime = parseDosTime(b.uint32())
-	unpackver := b.byte()     // decoder version
-	method := b.byte() - 0x30 // decryption method
+	unpackver := b.byte()
+	method := b.byte() - 0x30
 	namesize := int(b.uint16())
 	f.Attributes = int64(b.uint32())
 	if h.flags&fileLargeData > 0 {
 		if len(b) < 8 {
 			return nil, ErrCorruptFileHeader
 		}
-		_ = b.uint32() // already read large PackedSize in readBlockHeader
+		_ = b.uint32()
 		f.UnPackedSize |= int64(b.uint32()) << 32
 		f.UnKnownSize = f.UnPackedSize == -1
 	} else if int32(f.UnPackedSize) == -1 {
@@ -294,11 +283,11 @@ func (a *archive15) parseFileHeader(h *blockHeader15) (*fileBlockHeader, error) 
 	} else {
 		f.Name = decodeName(name)
 	}
-	// Rar 4.x uses '\' as file separator
+
 	f.Name = strings.Replace(f.Name, "\\", "/", -1)
 
 	if h.flags&fileVersion > 0 {
-		// file version is stored as ';n' appended to file name
+
 		i := strings.LastIndex(f.Name, ";")
 		if i > 0 {
 			j, err := strconv.Atoi(f.Name[i+1:])
@@ -315,9 +304,9 @@ func (a *archive15) parseFileHeader(h *blockHeader15) (*fileBlockHeader, error) 
 			return nil, ErrCorruptFileHeader
 		}
 		salt = slices.Clone(b.bytes(saltSize))
-		// Store salt and KDF count for metadata retrieval
+
 		f.salt = salt
-		f.kdfCount = hashRounds // RAR3/4 uses fixed 0x40000 iterations
+		f.kdfCount = hashRounds
 	}
 	if h.flags&fileExtTime > 0 {
 		readExtTimes(f, &b)
@@ -326,7 +315,7 @@ func (a *archive15) parseFileHeader(h *blockHeader15) (*fileBlockHeader, error) 
 	if !f.first {
 		return f, nil
 	}
-	// fields only needed for first block in a file
+
 	if f.Encrypted && len(salt) == saltSize && a.pass != nil {
 		f.key, f.iv = a.getKeys(salt)
 	}
@@ -357,8 +346,6 @@ func (a *archive15) parseArcBlock(h *blockHeader15) error {
 	return nil
 }
 
-// readBlockHeader returns the next block header in the archive.
-// It will return io.EOF if there were no bytes read.
 func (a *archive15) readBlockHeader(r byteReader) (*blockHeader15, error) {
 	if a.encrypted {
 		if a.pass == nil {
@@ -390,7 +377,7 @@ func (a *archive15) readBlockHeader(r byteReader) (*blockHeader15, error) {
 	h.flags = b.uint16()
 	size := int(b.uint16())
 	if h.htype == blockArc && h.flags&arcComment > 0 {
-		// comment block embedded into archive block
+
 		if size < 13 {
 			return nil, ErrCorruptBlockHeader
 		}
@@ -438,7 +425,7 @@ func (a *archive15) readBlockHeader(r byteReader) (*blockHeader15, error) {
 }
 
 func (a *archive15) init(br *bufVolumeReader) (int, error) {
-	a.encrypted = false // reset encryption when opening new volume file
+	a.encrypted = false
 	h, err := a.readBlockHeader(br)
 	if err != nil {
 		if err == io.EOF {
@@ -452,10 +439,9 @@ func (a *archive15) init(br *bufVolumeReader) (int, error) {
 	return -1, err
 }
 
-// nextBlock advances to the next file block in the archive
 func (a *archive15) nextBlock(br *bufVolumeReader) (*fileBlockHeader, error) {
 	for {
-		// could return an io.EOF here as 1.5 archives may not have an end block.
+
 		h, err := a.readBlockHeader(br)
 		if err != nil {
 			if err == io.EOF {
@@ -473,7 +459,7 @@ func (a *archive15) nextBlock(br *bufVolumeReader) (*fileBlockHeader, error) {
 			return nil, ErrMultiVolume
 		default:
 			if h.dataSize > 0 {
-				err = br.Discard(h.dataSize) // skip over block data
+				err = br.Discard(h.dataSize)
 				if err != nil {
 					return nil, err
 				}
@@ -482,11 +468,10 @@ func (a *archive15) nextBlock(br *bufVolumeReader) (*fileBlockHeader, error) {
 	}
 }
 
-// newArchive15 creates a new archiveBlockReader for a Version 1.5 archive
 func newArchive15(password *string) *archive15 {
 	a := &archive15{}
 	if password != nil {
-		a.pass = utf16.Encode([]rune(*password)) // convert to UTF-16
+		a.pass = utf16.Encode([]rune(*password))
 	}
 	return a
 }

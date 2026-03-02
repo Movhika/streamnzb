@@ -5,13 +5,12 @@ import (
 	"net"
 	"strings"
 
-	"streamnzb/pkg/usenet/nntp"
+	"streamnzb/pkg/usenet/pool"
 )
 
-// Session represents a single NNTP client session
 type Session struct {
 	conn     net.Conn
-	pools    []*nntp.ClientPool
+	usenet   *pool.Pool
 	authUser string
 	authPass string
 
@@ -20,27 +19,24 @@ type Session struct {
 	shouldQuit    bool
 }
 
-// NewSession creates a new NNTP session
-func NewSession(conn net.Conn, pools []*nntp.ClientPool, authUser, authPass string) *Session {
+func NewSession(conn net.Conn, usenet *pool.Pool, authUser, authPass string) *Session {
 	return &Session{
 		conn:          conn,
-		pools:         pools,
+		usenet:        usenet,
 		authUser:      authUser,
 		authPass:      authPass,
-		authenticated: authUser == "", // Auto-auth if no credentials required
+		authenticated: authUser == "",
 	}
 }
 
-// WriteLine writes a line to the client
 func (s *Session) WriteLine(line string) error {
 	_, err := fmt.Fprintf(s.conn, "%s\r\n", line)
 	return err
 }
 
-// WriteMultiLine writes multiple lines ending with a dot
 func (s *Session) WriteMultiLine(lines []string) error {
 	for _, line := range lines {
-		// Escape lines starting with dot
+
 		if strings.HasPrefix(line, ".") {
 			line = "." + line
 		}
@@ -48,23 +44,20 @@ func (s *Session) WriteMultiLine(lines []string) error {
 			return err
 		}
 	}
-	// End with single dot
+
 	return s.WriteLine(".")
 }
 
-// ShouldQuit returns whether the session should terminate
 func (s *Session) ShouldQuit() bool {
 	return s.shouldQuit
 }
 
-// CurrentGroup returns the currently selected newsgroup
 func (s *Session) CurrentGroup() string {
 	return s.currentGroup
 }
 
-// HandleCommand processes an NNTP command
 func (s *Session) HandleCommand(cmd string, args []string) error {
-	// Commands that don't require auth
+
 	switch cmd {
 	case "QUIT":
 		return s.handleQuit(args)
@@ -74,12 +67,10 @@ func (s *Session) HandleCommand(cmd string, args []string) error {
 		return s.handleAuthInfo(args)
 	}
 
-	// Check authentication for other commands
 	if !s.authenticated {
 		return s.WriteLine("480 Authentication required")
 	}
 
-	// Authenticated commands
 	switch cmd {
 	case "GROUP":
 		return s.handleGroup(args)
@@ -96,7 +87,7 @@ func (s *Session) HandleCommand(cmd string, args []string) error {
 	case "DATE":
 		return s.handleDate(args)
 	case "MODE":
-		// MODE READER - we are already in reader mode
+
 		if len(args) >= 1 && strings.ToUpper(args[0]) == "READER" {
 			return s.WriteLine("201 StreamNZB proxy (reader mode)")
 		}

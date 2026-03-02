@@ -22,17 +22,13 @@ var (
 	ErrCorruptDecodeHeader = errors.New("rardecode: corrupt decode header")
 )
 
-// decoder50 implements the decoder interface for RAR 5 compression.
-// Decode input it broken up into 1 or more blocks. Each block starts with
-// a header containing block length and optional code length tables to initialize
-// the huffman decoders with.
 type decoder50 struct {
-	br         rar5BitReader // bit reader for current data block
+	br         rar5BitReader
 	buf        [tableSize7]byte
 	codeLength []byte
 	offsetSize int
 
-	lastBlock bool // current block is last block in compressed file
+	lastBlock bool
 
 	mainDecoder      huffmanDecoder
 	offsetDecoder    huffmanDecoder
@@ -91,17 +87,16 @@ func (d *decoder50) readBlockHeader() error {
 		sum ^= n
 		blockBytes |= int(n) << (i * 8)
 	}
-	if sum != hsum { // bad header checksum
+	if sum != hsum {
 		return ErrCorruptDecodeHeader
 	}
 	blockBits += (blockBytes - 1) * 8
 
-	// reset the bits limit
 	d.br.setLimit(blockBits)
 	d.lastBlock = flags&0x40 > 0
 
 	if flags&0x80 > 0 {
-		// read new code length tables and reinitialize huffman decoders
+
 		cl := d.codeLength[:]
 		err = readCodeLengthTable(&d.br, cl, false)
 		if err != nil {
@@ -134,10 +129,8 @@ func slotToLength(br bitReader, n int) (int, error) {
 	return n, nil
 }
 
-// readFilter5Data reads an encoded integer used in V5 filters.
 func readFilter5Data(br bitReader) (int, error) {
-	// TODO: should data really be uint? (for 32bit ints).
-	// It will be masked later anyway by decode window mask.
+
 	bytes, err := br.readBits(2)
 	if err != nil {
 		return 0, err
@@ -227,8 +220,7 @@ func (d *decoder50) decodeOffset(dr *decodeReader, i int) error {
 			bitCount -= 4
 			if bitCount > 0 {
 				if bits.UintSize == 32 {
-					// bitReader can only read at most intSize-8 bits.
-					// Split read into two parts.
+
 					if bitCount > 24 {
 						n, err := d.br.readBits(24)
 						if err != nil {
@@ -279,7 +271,7 @@ func (d *decoder50) fill(dr *decodeReader) error {
 		if err == nil {
 			switch {
 			case sym < 256:
-				// literal
+
 				dr.writeByte(byte(sym))
 				continue
 			case sym >= 262:
@@ -287,14 +279,14 @@ func (d *decoder50) fill(dr *decodeReader) error {
 			case sym >= 258:
 				err = d.decodeLength(dr, sym-258)
 			case sym == 257:
-				// use previous offset and length
+
 				dr.copyBytes(d.length, d.offset[0])
 				continue
-			default: // sym == 256:
+			default:
 				err = d.readFilter(dr)
 			}
 		} else if err == io.EOF {
-			// reached end of the block
+
 			if d.lastBlock {
 				return io.EOF
 			}

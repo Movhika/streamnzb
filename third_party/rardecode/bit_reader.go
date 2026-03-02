@@ -6,21 +6,19 @@ import (
 )
 
 type bitReader interface {
-	readBits(n uint8) (int, error) // read n bits of data
-	unreadBits(n uint8)            // revert the reading of the last n bits read
+	readBits(n uint8) (int, error)
+	unreadBits(n uint8)
 }
 
-// rar5BitReader is a bitReader that reads bytes from a byteReader and stops with io.EOF after l bits.
 type rar5BitReader struct {
 	r byteReader
-	v int   // cache of bits read from r
-	l int   // number of bits (not cached) that can be read from r
-	n uint8 // number of unread bits in v
+	v int
+	l int
+	n uint8
 }
 
 func (r *rar5BitReader) unreadBits(n uint8) { r.n += n }
 
-// ReadByte reads and returns a single byte. If no byte is available, returns an error.
 func (r *rar5BitReader) ReadByte() (byte, error) {
 	if r.n == 0 {
 		return r.r.ReadByte()
@@ -33,24 +31,21 @@ func (r *rar5BitReader) reset(br byteReader) {
 	r.r = br
 }
 
-// setLimit sets the maximum bit count that can be read.
 func (r *rar5BitReader) setLimit(n int) {
 	r.l = n
 	r.n = 0
 }
 
-// readBits returns n bits from the underlying byteReader.
-// n must be less than integer size - 8.
 func (r *rar5BitReader) readBits(n uint8) (int, error) {
 	for n > r.n {
 		if r.l == 0 {
-			// reached bits limit
+
 			return 0, io.EOF
 		}
 		c, err := r.r.ReadByte()
 		if err != nil {
 			if err == io.EOF {
-				// io.EOF before we reached bit limit
+
 				err = ErrDecoderOutOfData
 			}
 			return 0, err
@@ -59,7 +54,7 @@ func (r *rar5BitReader) readBits(n uint8) (int, error) {
 		r.n += 8
 		r.l -= 8
 		if r.l < 0 {
-			// overshot, discard the extra bits
+
 			bits := uint8(-r.l)
 			r.l = 0
 			r.v >>= bits
@@ -70,8 +65,6 @@ func (r *rar5BitReader) readBits(n uint8) (int, error) {
 	return (r.v >> r.n) & ((1 << n) - 1), nil
 }
 
-// rarBitReader wraps an io.ByteReader to perform various bit and byte
-// reading utility functions used in RAR file processing.
 type rarBitReader struct {
 	r byteReader
 	v int
@@ -84,8 +77,6 @@ func (r *rarBitReader) reset(br byteReader) {
 	r.v = 0
 }
 
-// readBits returns n bits from the underlying byteReader.
-// n must be less than integer size - 8.
 func (r *rarBitReader) readBits(n uint8) (int, error) {
 	for n > r.n {
 		b, err := r.r.ReadByte()
@@ -103,12 +94,10 @@ func (r *rarBitReader) unreadBits(n uint8) {
 	r.n += n
 }
 
-// alignByte aligns the current bit reading input to the next byte boundary.
 func (r *rarBitReader) alignByte() {
 	r.n -= r.n % 8
 }
 
-// readUint32 reads a RAR V3 encoded uint32
 func (r *rarBitReader) readUint32() (uint32, error) {
 	n, err := r.readBits(2)
 	if err != nil {
@@ -117,9 +106,7 @@ func (r *rarBitReader) readUint32() (uint32, error) {
 	if n != 1 {
 		if bits.UintSize == 32 {
 			if n == 3 {
-				// 32bit platforms may not be able to read 32 bits as r.v
-				// will need up to 7 extra bits for overflow from reading a byte.
-				// Split it into two reads.
+
 				n, err = r.readBits(16)
 				if err != nil {
 					return 0, err

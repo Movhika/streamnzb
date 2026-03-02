@@ -11,7 +11,6 @@ import (
 	"streamnzb/pkg/session"
 )
 
-// TMDBResolver resolves movie/TV titles for text search.
 type TMDBResolver interface {
 	GetMovieTitle(imdbID, tmdbID string) (string, error)
 	GetMovieTitleAndYear(imdbID, tmdbID string) (title, year string, err error)
@@ -19,15 +18,12 @@ type TMDBResolver interface {
 	GetTVShowName(tmdbID, imdbID string) (string, error)
 }
 
-// SearchConfig provides global defaults for text search when PerIndexerQuery is not set.
 type SearchConfig interface {
 	GetIncludeYearInSearch() bool
 	GetSearchTitleLanguage() string
 	GetSearchTitleNormalize() bool
 }
 
-// RunIndexerSearches runs ID search and text search in parallel, merges and dedupes, then filters
-// by content (title matches, and if parsed year is present it must match).
 func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string, cfg SearchConfig) ([]*release.Release, error) {
 	idReq := req
 	idReq.Query = ""
@@ -137,7 +133,6 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 	}
 	indexer.NormalizeSearchResponse(idResp)
 
-	// Merge: ID results first (tagged), then text results
 	combined := make([]*release.Release, 0, len(idResp.Releases)+len(textReleases))
 	for _, rel := range idResp.Releases {
 		if rel != nil {

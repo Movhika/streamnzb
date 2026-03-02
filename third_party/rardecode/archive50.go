@@ -14,37 +14,30 @@ import (
 )
 
 const (
-	// block types
 	block5Arc  = 1
 	block5File = 2
-	// block5Service = 3
+
 	block5Encrypt = 4
 	block5End     = 5
 
-	// block flags
 	block5HasExtra     = 0x0001
 	block5HasData      = 0x0002
 	block5DataNotFirst = 0x0008
 	block5DataNotLast  = 0x0010
 
-	// end block flags
 	endArc5NotLast = 0x0001
 
-	// archive encryption block flags
-	enc5CheckPresent = 0x0001 // password check data is present
+	enc5CheckPresent = 0x0001
 
-	// main archive block flags
 	arc5MultiVol = 0x0001
 	arc5VolNum   = 0x0002
 	arc5Solid    = 0x0004
 
-	// file block flags
 	file5IsDir          = 0x0001
 	file5HasUnixMtime   = 0x0002
 	file5HasCRC32       = 0x0004
 	file5UnpSizeUnknown = 0x0008
 
-	// file compression flags
 	file5CompAlgorithm = 0x0000003F
 	file5CompSolid     = 0x00000040
 	file5CompMethod    = 0x00000380
@@ -52,23 +45,21 @@ const (
 	file5CompDictFract = 0x000F8000
 	file5CompV5Compat  = 0x00100000
 
-	// file encryption record flags
-	file5EncCheckPresent = 0x0001 // password check data is present
-	file5EncUseMac       = 0x0002 // use MAC instead of plain checksum
+	file5EncCheckPresent = 0x0001
+	file5EncUseMac       = 0x0002
 
-	// precision time flags
-	file5ExtraTimeIsUnixTime = 0x01 // is unix time_t
-	file5ExtraTimeHasMTime   = 0x02 // has modification time
-	file5ExtraTimeHasCTime   = 0x04 // has creation time
-	file5ExtraTimeHasATime   = 0x08 // has access time
-	file5ExtraTimeHasUnixNS  = 0x10 // unix nanosecond time format
+	file5ExtraTimeIsUnixTime = 0x01
+	file5ExtraTimeHasMTime   = 0x02
+	file5ExtraTimeHasCTime   = 0x04
+	file5ExtraTimeHasATime   = 0x08
+	file5ExtraTimeHasUnixNS  = 0x10
 
 	cacheSize50   = 4
 	maxPbkdf2Salt = 64
 	pwCheckSize   = 8
 	maxKdfCount   = 24
 
-	maxDictSize = 0x1000000000 // maximum dictionary size 64GB
+	maxDictSize = 0x1000000000
 )
 
 var (
@@ -82,20 +73,18 @@ var (
 )
 
 type extra struct {
-	ftype uint64  // field type
-	data  readBuf // field data
+	ftype uint64
+	data  readBuf
 }
 
 type blockHeader50 struct {
-	htype    uint64 // block type
+	htype    uint64
 	flags    uint64
-	data     readBuf // block header data
-	extra    []extra // extra fields
-	dataSize int64   // size of block data
+	data     readBuf
+	extra    []extra
+	dataSize int64
 }
 
-// leHash32 wraps a hash.Hash32 to return the result of Sum in little
-// endian format.
 type leHash32 struct {
 	hash.Hash32
 }
@@ -109,13 +98,12 @@ func newLittleEndianCRC32() hash.Hash {
 	return leHash32{crc32.NewIEEE()}
 }
 
-// archive50 implements archiveBlockReader for RAR 5 file format archives
 type archive50 struct {
 	pass     []byte
-	blockKey []byte                // key used to encrypt blocks
-	multi    bool                  // archive is multi-volume
-	solid    bool                  // is a solid archive
-	keyCache [cacheSize50]struct { // encryption key cache
+	blockKey []byte
+	multi    bool
+	solid    bool
+	keyCache [cacheSize50]struct {
 		kdfCount int
 		salt     []byte
 		keys     [][]byte
@@ -126,11 +114,6 @@ func (a *archive50) useOldNaming() bool {
 	return false
 }
 
-// calcKeys50 calculates the keys used in RAR 5 archive processing.
-// The returned slice of byte slices contains 3 keys.
-// Key 0 is used for block or file decryption.
-// Key 1 is optionally used for file checksum calculation.
-// Key 2 is optionally used for password checking.
 func calcKeys50(pass, salt []byte, kdfCount int) [][]byte {
 	if len(salt) > maxPbkdf2Salt {
 		salt = salt[:maxPbkdf2Salt]
@@ -167,7 +150,7 @@ func calcKeys50(pass, salt []byte, kdfCount int) [][]byte {
 		pwcheck[i&(pwCheckSize-1)] ^= v
 	}
 	pwcheck = pwcheck[:pwCheckSize]
-	// add checksum to end of pwcheck
+
 	sum := sha256.Sum256(pwcheck)
 	pwcheck = append(pwcheck, sum[:4]...)
 	keys[2] = pwcheck
@@ -175,8 +158,6 @@ func calcKeys50(pass, salt []byte, kdfCount int) [][]byte {
 	return keys
 }
 
-// getKeys returns the the corresponding encryption keys for the given kdfcount and salt.
-// It will check the password if check is provided.
 func (a *archive50) getKeys(kdfCount int, salt, check []byte) ([][]byte, error) {
 	var keys [][]byte
 
@@ -185,7 +166,6 @@ func (a *archive50) getKeys(kdfCount int, salt, check []byte) ([][]byte, error) 
 	}
 	kdfCount = 1 << uint(kdfCount)
 
-	// check cache of keys for match
 	for _, v := range a.keyCache {
 		if kdfCount == v.kdfCount && bytes.Equal(salt, v.salt) {
 			keys = v.keys
@@ -193,24 +173,21 @@ func (a *archive50) getKeys(kdfCount int, salt, check []byte) ([][]byte, error) 
 		}
 	}
 	if keys == nil {
-		// not found, calculate keys
+
 		keys = calcKeys50(a.pass, salt, kdfCount)
 
-		// store in cache
 		copy(a.keyCache[1:], a.keyCache[:])
 		a.keyCache[0].kdfCount = kdfCount
 		a.keyCache[0].salt = slices.Clone(salt)
 		a.keyCache[0].keys = keys
 	}
 
-	// check password
 	if check != nil && !bytes.Equal(check, keys[2]) {
 		return nil, ErrBadPassword
 	}
 	return keys, nil
 }
 
-// parseFileEncryptionRecord processes the optional file encryption record from a file header.
 func (a *archive50) parseFileEncryptionRecord(b readBuf, f *fileBlockHeader) error {
 	f.Encrypted = true
 	if ver := b.uvarint(); ver != 0 {
@@ -224,9 +201,8 @@ func (a *archive50) parseFileEncryptionRecord(b readBuf, f *fileBlockHeader) err
 	salt := slices.Clone(b.bytes(16))
 	f.iv = slices.Clone(b.bytes(16))
 
-	// Store salt and KDF count for metadata retrieval
 	f.salt = salt
-	f.kdfCount = 1 << uint(kdfCount) // Convert to actual iteration count (2^kdfCount)
+	f.kdfCount = 1 << uint(kdfCount)
 
 	var check []byte
 	if flags&file5EncCheckPresent > 0 {
@@ -236,8 +212,7 @@ func (a *archive50) parseFileEncryptionRecord(b readBuf, f *fileBlockHeader) err
 		check = slices.Clone(b.bytes(12))
 	}
 	useMac := flags&file5EncUseMac > 0
-	// only need to generate keys for first block or
-	// last block if it has an optional hash key
+
 	if a.pass == nil || !(f.first || (f.last && useMac)) {
 		return nil
 	}
@@ -256,7 +231,7 @@ func readWinFiletime(b *readBuf) (time.Time, error) {
 	if len(*b) < 8 {
 		return time.Time{}, ErrCorruptFileHeader
 	}
-	// 100-nanosecond intervals since January 1, 1601
+
 	t := b.uint64() - 116444736000000000
 	t *= 100
 	sec, nsec := bits.Div64(0, t, uint64(time.Second))
@@ -281,7 +256,6 @@ func readUnixNanoseconds(b *readBuf) (time.Duration, error) {
 	return d, nil
 }
 
-// parseFilePrecisionTimeRecord processes the optional high precision time record from a file header.
 func (a *archive50) parseFilePrecisionTimeRecord(b *readBuf, f *fileBlockHeader) error {
 	var err error
 	flags := b.uvarint()
@@ -349,7 +323,7 @@ func (a *archive50) parseFileHeader(h *blockHeader50) (*fileBlockHeader, error) 
 	f.first = h.flags&block5DataNotFirst == 0
 	f.last = h.flags&block5DataNotLast == 0
 
-	flags := h.data.uvarint() // file flags
+	flags := h.data.uvarint()
 	f.IsDir = flags&file5IsDir > 0
 	f.UnKnownSize = flags&file5UnpSizeUnknown > 0
 	f.UnPackedSize = int64(h.data.uvarint())
@@ -371,10 +345,10 @@ func (a *archive50) parseFileHeader(h *blockHeader50) (*fileBlockHeader, error) 
 		}
 	}
 
-	flags = h.data.uvarint() // compression flags
+	flags = h.data.uvarint()
 	f.Solid = flags&file5CompSolid > 0
 	f.arcSolid = a.solid
-	method := (flags >> 7) & 7 // compression method (0 == none)
+	method := (flags >> 7) & 7
 	if f.first && method != 0 {
 		unpackver := flags & file5CompAlgorithm
 		switch unpackver {
@@ -407,25 +381,24 @@ func (a *archive50) parseFileHeader(h *blockHeader50) (*fileBlockHeader, error) 
 	}
 	f.Name = string(h.data.bytes(nlen))
 
-	// parse optional extra records
 	for _, e := range h.extra {
 		var err error
 		switch e.ftype {
-		case 1: // encryption
+		case 1:
 			if encErr := a.parseFileEncryptionRecord(e.data, f); encErr != nil {
 				f.errs = append(f.errs, encErr)
 			}
 		case 2:
-			// TODO: hash
+
 		case 3:
 			err = a.parseFilePrecisionTimeRecord(&e.data, f)
-		case 4: // version
-			_ = e.data.uvarint() // ignore flags field
+		case 4:
+			_ = e.data.uvarint()
 			f.Version = int(e.data.uvarint())
 		case 5:
-			// TODO: redirection
+
 		case 6:
-			// TODO: owner
+
 		}
 		if err != nil {
 			return nil, err
@@ -434,7 +407,6 @@ func (a *archive50) parseFileHeader(h *blockHeader50) (*fileBlockHeader, error) 
 	return f, nil
 }
 
-// parseEncryptionBlock calculates the key for block encryption.
 func (a *archive50) parseEncryptionBlock(b readBuf) error {
 	if a.pass == nil {
 		return ErrArchiveEncrypted
@@ -477,7 +449,7 @@ func (a *archive50) parseArcBlock(h *blockHeader50) int {
 
 func (a *archive50) readBlockHeader(r byteReader) (*blockHeader50, error) {
 	if a.blockKey != nil {
-		// block is encrypted
+
 		if a.pass == nil {
 			return nil, ErrArchiveEncrypted
 		}
@@ -491,7 +463,7 @@ func (a *archive50) readBlockHeader(r byteReader) (*blockHeader50, error) {
 			return nil, err
 		}
 	}
-	// find the header size
+
 	sizeBuf := make([]byte, 7)
 	_, err := io.ReadFull(r, sizeBuf)
 	if err != nil {
@@ -499,16 +471,13 @@ func (a *archive50) readBlockHeader(r byteReader) (*blockHeader50, error) {
 	}
 	b := readBuf(sizeBuf)
 	crc := b.uint32()
-	size := int(b.uvarint()) // header size
-	// Validate header size to prevent panics with malformed archives.
-	// The minimum valid size must allow buf[3:] to work, meaning:
-	// 3 + size - len(b) >= 3, which simplifies to: size >= len(b)
+	size := int(b.uvarint())
+
 	if size < len(b) {
 		return nil, ErrCorruptBlockHeader
 	}
-	// Prevent excessive memory allocation from corrupt headers.
-	// RAR5 block headers should not exceed a reasonable size.
-	const maxHeaderSize = 1 << 20 // 1MB
+
+	const maxHeaderSize = 1 << 20
 	if size > maxHeaderSize {
 		return nil, ErrCorruptBlockHeader
 	}
@@ -520,7 +489,6 @@ func (a *archive50) readBlockHeader(r byteReader) (*blockHeader50, error) {
 		return nil, err
 	}
 
-	// check header crc
 	hash := crc32.NewIEEE()
 	_, _ = hash.Write(buf)
 	if crc != hash.Sum32() {
@@ -544,7 +512,6 @@ func (a *archive50) readBlockHeader(r byteReader) (*blockHeader50, error) {
 	}
 	h.data = b.bytes(len(b) - extraSize)
 
-	// read header extra records
 	for len(b) > 0 {
 		size = int(b.uvarint())
 		if len(b) < size {
@@ -570,7 +537,7 @@ func (a *archive50) mustReadBlockHeader(r byteReader) (*blockHeader50, error) {
 }
 
 func (a *archive50) init(br *bufVolumeReader) (int, error) {
-	a.blockKey = nil // reset encryption when opening new volume file
+	a.blockKey = nil
 	volnum := -1
 	h, err := a.mustReadBlockHeader(br)
 	if err != nil {
@@ -593,10 +560,9 @@ func (a *archive50) init(br *bufVolumeReader) (int, error) {
 	return volnum, nil
 }
 
-// nextBlock advances to the next file block in the archive
 func (a *archive50) nextBlock(br *bufVolumeReader) (*fileBlockHeader, error) {
 	for {
-		// get next block header
+
 		h, err := a.mustReadBlockHeader(br)
 		if err != nil {
 			return nil, err
@@ -612,7 +578,7 @@ func (a *archive50) nextBlock(br *bufVolumeReader) (*fileBlockHeader, error) {
 			return nil, ErrMultiVolume
 		default:
 			if h.dataSize > 0 {
-				err = br.Discard(h.dataSize) // skip over block data
+				err = br.Discard(h.dataSize)
 				if err != nil {
 					return nil, err
 				}
@@ -621,7 +587,6 @@ func (a *archive50) nextBlock(br *bufVolumeReader) (*fileBlockHeader, error) {
 	}
 }
 
-// newArchive50 creates a new archiveBlockReader for a Version 5 archive.
 func newArchive50(password *string) *archive50 {
 	a := &archive50{}
 	if password != nil {

@@ -9,13 +9,12 @@ import (
 	"github.com/MunifTanjim/go-ptt"
 )
 
-// ParsedRelease contains parsed metadata from a release title (go-ptt Result + normalized Codec).
 type ParsedRelease struct {
 	Title      string
 	Year       int
 	Resolution string
 	Quality    string
-	Codec      string   // Canonical: AVC, HEVC, MPEG-2, DivX, Xvid
+	Codec      string
 	Audio      []string
 	Channels   []string
 	HDR        []string
@@ -36,9 +35,8 @@ type ParsedRelease struct {
 	Dubbed    bool
 	Hardcoded bool
 
-	// Extra PTT fields for filter/sort
 	Edition      string
-	Date         string   // YYYY-MM-DD
+	Date         string
 	Commentary   bool
 	Complete     bool
 	Convert      bool
@@ -56,7 +54,6 @@ type ParsedRelease struct {
 	Volumes      []int
 }
 
-// ParseReleaseTitle parses a release title using go-ptt and normalizes Codec to canonical (AVC, HEVC, etc.).
 func ParseReleaseTitle(title string) *ParsedRelease {
 	info := ptt.Parse(title)
 
@@ -66,43 +63,43 @@ func ParseReleaseTitle(title string) *ParsedRelease {
 	}
 
 	parsed := &ParsedRelease{
-		Title:       info.Title,
-		Resolution:  info.Resolution,
-		Quality:     info.Quality,
-		Codec:       codec,
-		Audio:       info.Audio,
-		Channels:    info.Channels,
-		HDR:         info.HDR,
-		Container:   info.Container,
-		Group:       info.Group,
-		Languages:   info.Languages,
-		Network:     info.Network,
-		Repack:      info.Repack,
-		Proper:      info.Proper,
-		Extended:    info.Extended,
-		Unrated:     info.Unrated,
-		ThreeD:      info.ThreeD,
-		Size:        info.Size,
-		BitDepth:    info.BitDepth,
-		Dubbed:      info.Dubbed,
-		Hardcoded:   info.Hardcoded,
-		Edition:     info.Edition,
-		Date:        info.Date,
-		Commentary:  info.Commentary,
-		Complete:    info.Complete,
-		Convert:     info.Convert,
-		Documentary: info.Documentary,
-		Remastered:  info.Remastered,
-		Retail:      info.Retail,
-		Subbed:      info.Subbed,
-		Uncensored:  info.Uncensored,
-		Upscaled:    info.Upscaled,
-		Region:      info.Region,
+		Title:        info.Title,
+		Resolution:   info.Resolution,
+		Quality:      info.Quality,
+		Codec:        codec,
+		Audio:        info.Audio,
+		Channels:     info.Channels,
+		HDR:          info.HDR,
+		Container:    info.Container,
+		Group:        info.Group,
+		Languages:    info.Languages,
+		Network:      info.Network,
+		Repack:       info.Repack,
+		Proper:       info.Proper,
+		Extended:     info.Extended,
+		Unrated:      info.Unrated,
+		ThreeD:       info.ThreeD,
+		Size:         info.Size,
+		BitDepth:     info.BitDepth,
+		Dubbed:       info.Dubbed,
+		Hardcoded:    info.Hardcoded,
+		Edition:      info.Edition,
+		Date:         info.Date,
+		Commentary:   info.Commentary,
+		Complete:     info.Complete,
+		Convert:      info.Convert,
+		Documentary:  info.Documentary,
+		Remastered:   info.Remastered,
+		Retail:       info.Retail,
+		Subbed:       info.Subbed,
+		Uncensored:   info.Uncensored,
+		Upscaled:     info.Upscaled,
+		Region:       info.Region,
 		ReleaseTypes: info.ReleaseTypes,
-		EpisodeCode: info.EpisodeCode,
-		Site:        info.Site,
-		Extension:   info.Extension,
-		Volumes:     info.Volumes,
+		EpisodeCode:  info.EpisodeCode,
+		Site:         info.Site,
+		Extension:    info.Extension,
+		Volumes:      info.Volumes,
 	}
 
 	if info.Year != "" {
@@ -120,7 +117,6 @@ func ParseReleaseTitle(title string) *ParsedRelease {
 	return parsed
 }
 
-// ResolutionGroup returns the resolution group (4k, 1080p, 720p, sd) from parsed metadata.
 func (p *ParsedRelease) ResolutionGroup() string {
 	if p == nil {
 		return "sd"

@@ -7,8 +7,8 @@ const (
 )
 
 type lz20Decoder struct {
-	length int    // previous length
-	offset [4]int // history of previous offsets
+	length int
+	offset [4]int
 
 	mainDecoder   huffmanDecoder
 	offsetDecoder huffmanDecoder
@@ -125,7 +125,7 @@ func (d *lz20Decoder) fill(dr *decodeReader, size int64) (int64, error) {
 		}
 
 		switch {
-		case sym < 256: // literal
+		case sym < 256:
 			dr.writeByte(byte(sym))
 			n++
 			continue
@@ -133,7 +133,7 @@ func (d *lz20Decoder) fill(dr *decodeReader, size int64) (int64, error) {
 			err = d.decodeOffset(sym - 270)
 		case sym == 269:
 			return n, errEndOfBlock
-		case sym == 256: // use previous offset and length
+		case sym == 256:
 			copy(d.offset[1:], d.offset[:])
 		case sym < 261:
 			err = d.decodeLength(sym - 257)

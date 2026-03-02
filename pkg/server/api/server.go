@@ -1,3 +1,4 @@
+// Package api provides the HTTP API and WebSocket server for streamnzb.
 package api
 
 import (
@@ -25,12 +26,11 @@ import (
 	"streamnzb/pkg/usenet/validation"
 )
 
-// Server handles API requests and serves the frontend
 type Server struct {
 	mu             sync.RWMutex
 	config         *config.Config
-	providerPools  map[string]*nntp.ClientPool // Map for easy lookup/management
-	streamingPools []*nntp.ClientPool          // Slice for session manager/proxy (superset or same underlying pools)
+	providerPools  map[string]*nntp.ClientPool
+	streamingPools []*nntp.ClientPool
 	sessionMgr     *session.Manager
 	strmServer     *stremio.Server
 	proxyServer    *proxy.Server
@@ -45,7 +45,6 @@ type Server struct {
 	tmdbAPIKey     string
 	tvdbAPIKey     string
 
-	// WebSocket Client Registry
 	clients   map[*Client]bool
 	clientsMu sync.Mutex
 	logCh     chan string
@@ -55,18 +54,16 @@ type Client struct {
 	conn   *websocket.Conn
 	send   chan WSMessage
 	device *auth.Device
-	// user is an alias for device for backwards compatibility
+
 	user *auth.Device
 }
 
-// NewServer creates a new API server
 func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, streamManager *stream.Manager, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
 	return NewServerWithApp(cfg, pools, sessMgr, strmServer, indexer, deviceManager, streamManager, nil, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey)
 }
 
-// NewServerWithApp creates a new API server with App for granular reload
 func NewServerWithApp(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, streamManager *stream.Manager, a *app.App, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
-	// Build streaming pools list from map (initial)
+
 	var list []*nntp.ClientPool
 	for _, p := range pools {
 		list = append(list, p)
@@ -90,14 +87,11 @@ func NewServerWithApp(cfg *config.Config, pools map[string]*nntp.ClientPool, ses
 		logCh:          make(chan string, 100),
 	}
 
-	// Start log broadcaster
 	logger.SetBroadcast(s.logCh)
 	go s.broadcastLogs()
 
 	return s
 }
-
-// ... (SetProxyServer and Reload remain same)
 
 func (s *Server) broadcastLogs() {
 	for msgStr := range s.logCh {
@@ -108,21 +102,19 @@ func (s *Server) broadcastLogs() {
 			select {
 			case client.send <- msg:
 			default:
-				// Drop message if client buffer is full
+
 			}
 		}
 		s.clientsMu.Unlock()
 	}
 }
 
-// AddClient registers a new websocket client
 func (s *Server) AddClient(client *Client) {
 	s.clientsMu.Lock()
 	s.clients[client] = true
 	s.clientsMu.Unlock()
 }
 
-// RemoveClient unregisters a websocket client
 func (s *Server) RemoveClient(client *Client) {
 	s.clientsMu.Lock()
 	delete(s.clients, client)
@@ -130,8 +122,6 @@ func (s *Server) RemoveClient(client *Client) {
 	close(client.send)
 }
 
-// SetProxyServer sets the proxy server instance
-// SetIndexerCaps sets the initial indexer capabilities (from bootstrap).
 func (s *Server) SetIndexerCaps(caps map[string]*indexer.Caps) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -144,10 +134,6 @@ func (s *Server) SetProxyServer(p *proxy.Server) {
 	s.proxyServer = p
 }
 
-// ReloadFromComponents updates server components. When fullReload is false (config-only),
-// NNTP pools and proxy are not touched - active streams continue uninterrupted.
-// The lock is held only for the pointer swap; slow work (proxy stop, pool shutdown)
-// runs after release so collectStats and WebSocket handlers don't block during reload.
 func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 	var oldProxy *proxy.Server
 	var oldPools map[string]*nntp.ClientPool
@@ -157,7 +143,6 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 		oldProxy = s.proxyServer
 		oldPools = s.providerPools
 
-		// Swap in new state (collectStats can run once we unlock)
 		s.providerPools = comp.ProviderPools
 		s.indexer = comp.Indexer
 		s.streamingPools = make([]*nntp.ClientPool, 0, len(comp.ProviderPools))
@@ -165,9 +150,10 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 			s.streamingPools = append(s.streamingPools, p)
 		}
 		s.sessionMgr.UpdatePools(s.streamingPools)
+		s.sessionMgr.UpdateUsenetPool(comp.UsenetPool)
 
 		logger.Info("Restarting NNTP Proxy...", "host", comp.Config.ProxyHost, "port", comp.Config.ProxyPort)
-		newProxy, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, s.streamingPools, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
+		newProxy, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, comp.UsenetPool, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
 		if err != nil {
 			logger.Error("Failed to create new proxy during reload", "err", err)
 		} else {
@@ -181,7 +167,6 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 	}
 	s.mu.Unlock()
 
-	// Slow work after unlock so collectStats doesn't block during reload
 	if fullReload {
 		if oldProxy != nil {
 			logger.Info("Stopping NNTP Proxy for reload...")
@@ -221,7 +206,6 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 	}
 }
 
-// Reload updates the server components at runtime (full reload). Prefer ReloadFromComponents for granular reload.
 func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, indexers indexer.Indexer,
 	validator *validation.Checker, triage *triage.Service, avail *availnzb.Client, availNZBIndexerHosts []string,
 	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client) {
@@ -229,7 +213,7 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 		Config:               cfg,
 		Indexer:              indexers,
 		ProviderPools:        pools,
-		StreamingPools:       nil, // will be built in ReloadFromComponents
+		StreamingPools:       nil,
 		AvailNZBIndexerHosts: availNZBIndexerHosts,
 		Validator:            validator,
 		Triage:               triage,
@@ -281,16 +265,13 @@ func (s *Server) cleanupProviderUsageFromConfig(cfg *config.Config) {
 	usageMgr.SyncUsage(configuredNames)
 }
 
-// Handler returns the HTTP handler for the API
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Public routes (no auth required)
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/check", s.handleAuthCheck)
 	mux.HandleFunc("/api/info", s.handleInfo)
 
-	// Protected routes (require auth)
 	authMiddleware := auth.AuthMiddleware(s.deviceManager, func() string { return s.config.GetAdminUsername() }, func() string { return s.config.AdminToken })
 	mux.Handle("/api/ws", authMiddleware(http.HandlerFunc(s.handleWebSocket)))
 	mux.Handle("/api/config", authMiddleware(http.HandlerFunc(s.handleConfig)))

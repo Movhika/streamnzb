@@ -9,7 +9,6 @@ import (
 	"streamnzb/pkg/search/parser"
 )
 
-// Test Quality Filtering (3-tier: required / excluded)
 func TestCheckQuality(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -63,7 +62,6 @@ func TestCheckQuality(t *testing.T) {
 	}
 }
 
-// Test Audio Filtering (3-tier: required / excluded)
 func TestCheckAudio(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -140,7 +138,6 @@ func TestCheckAudio(t *testing.T) {
 	}
 }
 
-// Test HDR Filtering (3-tier: required / excluded)
 func TestCheckHDR(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -210,7 +207,6 @@ func TestCheckHDR(t *testing.T) {
 	}
 }
 
-// Test Language Filtering (3-tier: required / excluded)
 func TestCheckLanguages(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -307,7 +303,6 @@ func TestCheckLanguages(t *testing.T) {
 	}
 }
 
-// Test Other Filters (CAM, Proper, Repack)
 func TestCheckOther(t *testing.T) {
 	ptrBool := func(b bool) *bool { return &b }
 	tests := []struct {
@@ -379,7 +374,6 @@ func TestCheckOther(t *testing.T) {
 	}
 }
 
-// Test Group Filtering (3-tier: required / excluded)
 func TestCheckGroup(t *testing.T) {
 	tests := []struct {
 		name       string

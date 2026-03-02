@@ -16,39 +16,34 @@ var (
 	ErrMultipleDecoders = errors.New("rardecode: multiple decoders in a single archive not supported")
 )
 
-// filter functions take a byte slice, the current output offset and
-// returns transformed data.
 type filter func(b []byte, offset int64) ([]byte, error)
 
-// filterBlock is a block of data to be processed by a filter.
 type filterBlock struct {
-	length int    // length of block
-	offset int    // bytes to be read before start of block
-	filter filter // filter function
+	length int
+	offset int
+	filter filter
 }
 
-// decoder is the interface for decoding compressed data
 type decoder interface {
-	init(r byteReader, reset bool, size int64, ver int) // initialize decoder for current file
-	fill(dr *decodeReader) error                        // fill window with decoded data
-	version() int                                       // decoder version
+	init(r byteReader, reset bool, size int64, ver int)
+	fill(dr *decodeReader) error
+	version() int
 }
 
-// decodeReader implements io.Reader for decoding compressed data in RAR archives.
 type decodeReader struct {
 	archiveFile
-	tot    int64          // total bytes read from window
-	outbuf []byte         // buffered output
-	buf    []byte         // filter buffer
-	fl     []*filterBlock // list of filters each with offset relative to previous in list
-	dec    decoder        // decoder being used to unpack file
-	err    error          // current decoder error output
-	solid  bool           // archive is solid
+	tot    int64
+	outbuf []byte
+	buf    []byte
+	fl     []*filterBlock
+	dec    decoder
+	err    error
+	solid  bool
 
-	win  []byte // sliding window buffer
-	size int    // win length
-	r    int    // index in win for reads (beginning)
-	w    int    // index in win for writes (end)
+	win  []byte
+	size int
+	r    int
+	w    int
 }
 
 func (d *decodeReader) init(f archiveFile, ver int, size int, reset, arcSolid bool, unPackedSize int64) error {
@@ -61,7 +56,6 @@ func (d *decodeReader) init(f archiveFile, ver int, size int, reset, arcSolid bo
 	}
 	d.archiveFile = f
 
-	// initialize window
 	size = max(size, minWindowSize)
 	if size > len(d.win) {
 		b := make([]byte, size)
@@ -80,7 +74,6 @@ func (d *decodeReader) init(f archiveFile, ver int, size int, reset, arcSolid bo
 	}
 	d.r = d.w
 
-	// initialize decoder
 	if d.dec == nil {
 		switch ver {
 		case decode29Ver:
@@ -99,17 +92,13 @@ func (d *decodeReader) init(f archiveFile, ver int, size int, reset, arcSolid bo
 	return nil
 }
 
-// notFull returns if the window is not full
 func (d *decodeReader) notFull() bool { return d.w < d.size }
 
-// writeByte writes c to the end of the window
 func (d *decodeReader) writeByte(c byte) {
 	d.win[d.w] = c
 	d.w++
 }
 
-// copyBytes copies len bytes at off distance from the end
-// to the end of the window.
 func (d *decodeReader) copyBytes(length, offset int) {
 	length %= d.size
 	if length < 0 {
@@ -147,22 +136,21 @@ func (d *decodeReader) copyBytes(length, offset int) {
 	}
 }
 
-// queueFilter adds a filterBlock to the end decodeReader's filters.
 func (d *decodeReader) queueFilter(f *filterBlock) error {
 	if len(d.fl) >= maxQueuedFilters {
 		return ErrTooManyFilters
 	}
-	// make offset relative to read index (from write index)
+
 	f.offset += d.w - d.r
-	// make offset relative to previous filter in list
+
 	for _, fb := range d.fl {
 		if f.offset < fb.offset {
-			// filter block must not start before previous filter
+
 			return ErrInvalidFilter
 		}
 		f.offset -= fb.offset
 	}
-	// offset & length must be < window size
+
 	f.offset %= d.size
 	if f.offset < 0 {
 		f.offset += d.size
@@ -181,29 +169,27 @@ func (d *decodeReader) readErr() error {
 	return err
 }
 
-// fill the decodeReader window
 func (d *decodeReader) fill() error {
 	if d.err != nil {
 		return d.readErr()
 	}
 	if d.w == d.size {
-		// wrap to beginning of buffer
+
 		d.r = 0
 		d.w = 0
 	}
-	d.err = d.dec.fill(d) // fill window using decoder
+	d.err = d.dec.fill(d)
 	if d.w == d.r {
 		return d.readErr()
 	}
 	return nil
 }
 
-// bufBytes returns n bytes from the window in a new buffer.
 func (d *decodeReader) bufBytes(n int) ([]byte, error) {
 	if cap(d.buf) < n {
 		d.buf = make([]byte, n)
 	}
-	// copy into buffer
+
 	ns := 0
 	for {
 		nn := copy(d.buf[ns:n], d.win[d.r:d.w])
@@ -219,20 +205,17 @@ func (d *decodeReader) bufBytes(n int) ([]byte, error) {
 	return d.buf[:n], nil
 }
 
-// processFilters processes any filters valid at the current read index
-// and returns the output in outbuf.
 func (d *decodeReader) processFilters() ([]byte, error) {
 	f := d.fl[0]
 	flen := f.length
 
-	// get filter input
 	b, err := d.bufBytes(flen)
 	if err != nil {
 		return nil, err
 	}
 	for {
 		d.fl = d.fl[1:]
-		// run filter passing buffer and total bytes read so far
+
 		b, err = f.filter(b, d.tot)
 		if err != nil {
 			return nil, err
@@ -241,10 +224,10 @@ func (d *decodeReader) processFilters() ([]byte, error) {
 			d.fl = nil
 			return b, nil
 		}
-		// get next filter
+
 		f = d.fl[0]
 		if f.offset != 0 {
-			// next filter not at current offset
+
 			f.offset -= flen
 			return b, nil
 		}
@@ -254,9 +237,8 @@ func (d *decodeReader) processFilters() ([]byte, error) {
 	}
 }
 
-// decode fills the window, processes filters and sets outbuf to the current valid output.
 func (d *decodeReader) decode() error {
-	// fill window if needed
+
 	if d.w == d.r {
 		err := d.fill()
 		if err != nil {
@@ -265,7 +247,6 @@ func (d *decodeReader) decode() error {
 	}
 	n := d.w - d.r
 
-	// return current unread bytes if there are no filters
 	if len(d.fl) == 0 {
 		d.outbuf = d.win[d.r:d.w]
 		d.r = d.w
@@ -273,13 +254,12 @@ func (d *decodeReader) decode() error {
 		return nil
 	}
 
-	// check filters
 	f := d.fl[0]
 	if f.offset < 0 {
 		return ErrInvalidFilter
 	}
 	if f.offset > 0 {
-		// filter not at current read index, output bytes before it
+
 		n = min(f.offset, n)
 		d.outbuf = d.win[d.r : d.r+n]
 		d.r += n
@@ -288,21 +268,19 @@ func (d *decodeReader) decode() error {
 		return nil
 	}
 
-	// process filters at current index
 	var err error
 	d.outbuf, err = d.processFilters()
 	if err != nil {
 		return err
 	}
 	if cap(d.outbuf) > cap(d.buf) {
-		// filter returned a larger buffer, cache it
+
 		d.buf = d.outbuf
 	}
 	d.tot += int64(len(d.outbuf))
 	return nil
 }
 
-// Read decodes data and stores it in p.
 func (d *decodeReader) Read(p []byte) (int, error) {
 	if len(d.outbuf) == 0 {
 		err := d.decode()

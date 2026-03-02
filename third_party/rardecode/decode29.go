@@ -12,33 +12,26 @@ const (
 )
 
 var (
-	// Errors marking the end of the decoding block and/or file
 	errEndOfFile         = errors.New("rardecode: end of file")
 	errEndOfBlock        = errors.New("rardecode: end of block")
 	errEndOfBlockAndFile = errors.New("rardecode: end of block and file")
 )
 
-// decoder29 implements the decoder interface for RAR 3.0 compression (unpack version 29)
-// Decode input is broken up into 1 or more blocks. The start of each block specifies
-// the decoding algorithm (ppm or lz) and optional data to initialize with.
-// Block length is not stored, it is determined only after decoding an end of file and/or
-// block marker in the data.
 type decoder29 struct {
 	br      *rarBitReader
-	hdrRead bool       // block header has been read
-	isPPM   bool       // current block is PPM
-	eof     bool       // at file eof
-	fnum    int        // current filter number (index into filters)
-	flen    []int      // filter block length history
-	filters []v3Filter // list of current filters used by archive encoding
+	hdrRead bool
+	isPPM   bool
+	eof     bool
+	fnum    int
+	flen    []int
+	filters []v3Filter
 
-	lz  *lz29Decoder  // lz decoder
-	ppm *ppm29Decoder // ppm decoder
+	lz  *lz29Decoder
+	ppm *ppm29Decoder
 }
 
 func (d *decoder29) version() int { return decode29Ver }
 
-// init intializes the decoder for decoding a new file.
 func (d *decoder29) init(r byteReader, reset bool, size int64, ver int) {
 	if d.br == nil {
 		d.br = newRarBitReader(r)
@@ -64,7 +57,6 @@ func (d *decoder29) initFilters() {
 	d.filters = nil
 }
 
-// readVMCode reads the raw bytes for the code/commands used in a vm filter
 func readVMCode(br *rarBitReader) ([]byte, error) {
 	n, err := br.readUint32()
 	if err != nil {
@@ -82,7 +74,7 @@ func readVMCode(br *rarBitReader) ([]byte, error) {
 	for _, c := range buf[1:] {
 		x ^= c
 	}
-	// simple xor checksum on data
+
 	if x != buf[0] {
 		return nil, ErrInvalidFilter
 	}
@@ -94,8 +86,6 @@ func (d *decoder29) parseVMFilter(buf []byte) (*filterBlock, error) {
 	br := newRarBitReader(bytes.NewReader(buf[1:]))
 	fb := new(filterBlock)
 
-	// Find the filter number which is an index into d.filters.
-	// If filter number == len(d.filters) it is a new filter to be added.
 	if flags&0x80 > 0 {
 		n, err := br.readUint32()
 		if err != nil {
@@ -115,7 +105,6 @@ func (d *decoder29) parseVMFilter(buf []byte) (*filterBlock, error) {
 		d.fnum = int(n)
 	}
 
-	// filter offset
 	n, err := br.readUint32()
 	if err != nil {
 		return nil, err
@@ -125,7 +114,6 @@ func (d *decoder29) parseVMFilter(buf []byte) (*filterBlock, error) {
 	}
 	fb.offset = int(n)
 
-	// filter length
 	if d.fnum == len(d.flen) {
 		d.flen = append(d.flen, 0)
 	}
@@ -134,12 +122,11 @@ func (d *decoder29) parseVMFilter(buf []byte) (*filterBlock, error) {
 		if err != nil {
 			return nil, err
 		}
-		//fb.length = int(n)
+
 		d.flen[d.fnum] = int(n)
 	}
 	fb.length = d.flen[d.fnum]
 
-	// initial register values
 	r := make(map[int]uint32)
 	if flags&0x10 > 0 {
 		bits, err := br.readBits(vmRegs - 1)
@@ -157,7 +144,6 @@ func (d *decoder29) parseVMFilter(buf []byte) (*filterBlock, error) {
 		}
 	}
 
-	// filter is new so read the code for it
 	if d.fnum == len(d.filters) {
 		code, err := readVMCode(br)
 		if err != nil {
@@ -171,7 +157,6 @@ func (d *decoder29) parseVMFilter(buf []byte) (*filterBlock, error) {
 		d.flen = append(d.flen, fb.length)
 	}
 
-	// read global data
 	var g []byte
 	if flags&0x08 > 0 {
 		n, err := br.readUint32()
@@ -188,7 +173,6 @@ func (d *decoder29) parseVMFilter(buf []byte) (*filterBlock, error) {
 		}
 	}
 
-	// create filter function
 	f := d.filters[d.fnum]
 	fb.filter = func(buf []byte, offset int64) ([]byte, error) {
 		return f(r, g, buf, offset)
@@ -197,7 +181,6 @@ func (d *decoder29) parseVMFilter(buf []byte) (*filterBlock, error) {
 	return fb, nil
 }
 
-// readBlockHeader determines and initializes the current decoder for a new decode block.
 func (d *decoder29) readBlockHeader() error {
 	d.br.alignByte()
 	n, err := d.br.readBits(1)
@@ -242,7 +225,7 @@ func (d *decoder29) fill(dr *decodeReader) error {
 			b, err = d.lz.fill(dr)
 		}
 		if len(b) > 0 && err == nil {
-			// parse raw data for filter and add to list of filters
+
 			var f *filterBlock
 			f, err = d.parseVMFilter(b)
 			if f != nil {

@@ -12,7 +12,6 @@ import (
 
 const apiDevicesPrefix = "/api/devices"
 
-// handleDevices routes /api/devices, /api/devices/configs, and /api/devices/:username.
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, apiDevicesPrefix)
 	path = strings.Trim(path, "/")
@@ -35,7 +34,6 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	s.handleDeviceByUsername(w, r)
 }
 
-// handleDevicesList returns all devices (GET /api/devices). Admin only.
 func (s *Server) handleDevicesList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -59,7 +57,6 @@ func (s *Server) handleDevicesList(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-// handleDevicesCreate creates a device (POST /api/devices). Admin only.
 func (s *Server) handleDevicesCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -91,7 +88,6 @@ func (s *Server) handleDevicesCreate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDeviceByUsername handles GET/DELETE /api/devices/:username and POST /api/devices/:username/regenerate-token.
 func (s *Server) handleDeviceByUsername(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, apiDevicesPrefix)
 	path = strings.Trim(path, "/")
@@ -164,7 +160,6 @@ func (s *Server) handleDeviceByUsername(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// handlePutDeviceConfigs saves per-device configs (PUT /api/devices/configs). Admin only.
 func (s *Server) handlePutDeviceConfigs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

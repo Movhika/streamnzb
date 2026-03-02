@@ -48,8 +48,7 @@ const defaultFilters = {
   min_size_gb: 0, max_size_gb: 0, min_year: 0, max_year: 0,
   min_age_hours: 0, max_age_hours: 0,
   keywords_excluded: [], keywords_required: [],
-  regex_excluded: [], regex_required: [],
-  availnzb_required: undefined,
+  availnzb_included: [], availnzb_required: [], availnzb_excluded: [],
   size_per_resolution: {},
   min_bitrate_kbps: 0, max_bitrate_kbps: 0
 }
@@ -67,7 +66,6 @@ const defaultSorting = {
   keywords_weight: 0,
   regex_preferred: [],
   regex_weight: 0,
-  availnzb_weight: 0,
   preferred_audio: [],
   preferred_visual_tag: [],
   preferred_channels: [],
@@ -78,7 +76,8 @@ const defaultSorting = {
   preferred_edition: [],
   preferred_network: [],
   preferred_region: [],
-  preferred_three_d: []
+  preferred_three_d: [],
+  preferred_availnzb: []
 }
 
 function toItems(options, labelMap = {}) {
@@ -99,6 +98,10 @@ const aioStyleCategories = [
   { key: 'edition', label: 'Edition', includedField: 'filters.edition_included', orderField: 'sorting.preferred_edition', excludedField: 'filters.edition_excluded', items: toItems(EditionOptions) },
   { key: 'network', label: 'Network', includedField: 'filters.network_included', orderField: 'sorting.preferred_network', excludedField: 'filters.network_excluded', items: toItems(NetworkOptions) },
   { key: 'region', label: 'Region', includedField: 'filters.region_included', orderField: 'sorting.preferred_region', excludedField: 'filters.region_excluded', items: toItems(RegionOptions) },
+  { type: 'freeText', key: 'group', label: 'Release groups', includedField: 'filters.group_included', orderField: 'sorting.preferred_group', excludedField: 'filters.group_excluded', firstColumnLabel: 'Included (bypass)' },
+  { type: 'freeText', key: 'keywords', label: 'Keywords', includedField: 'filters.keywords_required', orderField: 'sorting.keywords_preferred', excludedField: 'filters.keywords_excluded', firstColumnLabel: 'Required' },
+  { type: 'freeText', key: 'regex', label: 'Regex patterns', includedField: 'filters.regex_required', orderField: 'sorting.regex_preferred', excludedField: 'filters.regex_excluded', firstColumnLabel: 'Required' },
+  { key: 'availnzb', label: 'AvailNZB status', includedField: 'filters.availnzb_included', orderField: 'sorting.preferred_availnzb', excludedField: 'filters.availnzb_excluded', items: [{ key: 'available', label: 'Available' }, { key: 'unavailable', label: 'Unavailable' }, { key: 'unknown', label: 'Unknown' }] },
   { type: 'size', minField: 'filters.min_size_gb', maxField: 'filters.max_size_gb' },
 ]
 

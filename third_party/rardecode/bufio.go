@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	maxSfxSize   = 0x100000 // maximum number of bytes to read when searching for RAR signature
+	maxSfxSize   = 0x100000
 	sigPrefix    = "Rar!\x1A\x07"
 	sigPrefixLen = len(sigPrefix)
 
@@ -119,14 +119,12 @@ func (br *bufVolumeReader) Discard(n int64) error {
 		br.off += n
 		return nil
 	}
-	// empty buffer
+
 	n -= buffered
 	br.i = 0
 	br.n = 0
 	br.off += buffered
 
-	// Optimization: prefer seeking for large discards
-	// This is especially beneficial when skipping large files in metadata-only mode
 	if br.sr != nil {
 		_, err := br.sr.Seek(n, io.SeekCurrent)
 		if err != nil {
@@ -136,11 +134,9 @@ func (br *bufVolumeReader) Discard(n int64) error {
 		return nil
 	}
 
-	// For non-seekable streams, use io.CopyN but prefer larger buffer for big skips
-	// This reduces the number of syscalls for large discards
-	if n > 1<<20 { // 1MB threshold
-		// Use a larger temporary buffer for more efficient discarding
-		const largeDiscardBufSize = 1 << 16 // 64KB
+	if n > 1<<20 {
+
+		const largeDiscardBufSize = 1 << 16
 		buf := make([]byte, largeDiscardBufSize)
 		for n > 0 {
 			toRead := n
@@ -152,7 +148,7 @@ func (br *bufVolumeReader) Discard(n int64) error {
 			n -= int64(read)
 			if err != nil {
 				if err == io.EOF || err == io.ErrUnexpectedEOF {
-					// Partial read at end is acceptable
+
 					return nil
 				}
 				return err
@@ -161,7 +157,6 @@ func (br *bufVolumeReader) Discard(n int64) error {
 		return nil
 	}
 
-	// For smaller discards, use standard io.CopyN
 	written, err := io.CopyN(io.Discard, br.r, n)
 	br.off += written
 	return err
@@ -199,8 +194,6 @@ func (br *bufVolumeReader) writeToN(w io.Writer, n int64) (int64, error) {
 	return br.off - startOffset, nil
 }
 
-// findSig searches for the RAR signature and version at the beginning of a file.
-// It searches no more than maxSfxSize bytes from the file start.
 func (br *bufVolumeReader) findSig() (int, error) {
 	for br.off <= maxSfxSize {
 		if br.i == br.n {
@@ -211,14 +204,14 @@ func (br *bufVolumeReader) findSig() (int, error) {
 		}
 		n := bytes.IndexByte(br.buf[br.i:br.n], sigPrefix[0])
 		if n < 0 {
-			// Signature byte not found in current buffer, skip entire remaining buffer
+
 			br.off += int64(br.n - br.i)
 			br.i = br.n
 			continue
 		}
 		br.i += n
 		br.off += int64(n)
-		// ensure enough bytes available in buffer
+
 		buffered := br.n - br.i
 		if buffered < sigPrefixLen+2 {
 			br.n = copy(br.buf, br.buf[br.i:br.n])

@@ -128,7 +128,6 @@ func (n *fsNode) dirEntryList() []fs.DirEntry {
 	return list
 }
 
-// RarFS implements the fs.FS interface for accessing files in a rar archive.
 type RarFS struct {
 	vm    *volumeManager
 	ftree map[string]*fsNode
@@ -138,7 +137,6 @@ func (rfs *RarFS) openArchiveFile(blocks *fileBlockList) (fs.File, error) {
 	return rfs.vm.openArchiveFile(blocks)
 }
 
-// Open opens the named file.
 func (rfs *RarFS) Open(name string) (fs.File, error) {
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
@@ -161,7 +159,6 @@ func (rfs *RarFS) Open(name string) (fs.File, error) {
 	return f, nil
 }
 
-// ReadDir reads the named directory and returns a list of directory entries sorted by filename.
 func (rfs *RarFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
@@ -176,7 +173,6 @@ func (rfs *RarFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	return node.dirEntryList(), nil
 }
 
-// ReadFile reads the named file from the file system fs and returns its contents.
 func (rfs *RarFS) ReadFile(name string) ([]byte, error) {
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrInvalid}
@@ -204,34 +200,6 @@ func (rfs *RarFS) ReadFile(name string) ([]byte, error) {
 	return buf, err
 }
 
-/*
-func (rfs *RarFS) Check(name string) error {
-	if !fs.ValidPath(name) {
-		return &fs.PathError{Op: "check", Path: name, Err: fs.ErrInvalid}
-	}
-	node := rfs.ftree[name]
-	if node == nil {
-		return &fs.PathError{Op: "check", Path: name, Err: fs.ErrNotExist}
-	}
-	if node.isDir() {
-		return &fs.PathError{Op: "check", Path: name, Err: fs.ErrInvalid}
-	}
-	if !node.hasFileHash() {
-		return nil
-	}
-	f, err := rfs.openArchiveFile(node.blocks)
-	if err != nil {
-		return &fs.PathError{Op: "check", Path: name, Err: err}
-	}
-	_, err = io.Copy(io.Discard, f)
-	if err != nil {
-		return &fs.PathError{Op: "check", Path: name, Err: err}
-	}
-	return nil
-}
-*/
-
-// Stat returns a FileInfo describing the named file from the filesystem.
 func (rfs *RarFS) Stat(name string) (fs.FileInfo, error) {
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
@@ -243,7 +211,6 @@ func (rfs *RarFS) Stat(name string) (fs.FileInfo, error) {
 	return node.fileInfo(), nil
 }
 
-// Sub returns an FS corresponding to the subtree rooted at fsys's dir.
 func (rfs *RarFS) Sub(dir string) (fs.FS, error) {
 	if dir == "." {
 		return rfs, nil
@@ -279,17 +246,15 @@ func listFileBlocks(name string, opts []Option) (*volumeManager, []*fileBlockLis
 		options.skipCheck = false
 	}
 
-	// Try parallel reading if enabled
 	if options.parallelRead {
-		// Attempt parallel reading - will gracefully fall back to sequential on error
+
 		vm, fileBlocks, err := listFileBlocksParallel(name, opts)
 		if err == nil {
 			return vm, fileBlocks, nil
 		}
-		// If parallel reading fails, continue with sequential fallback
+
 	}
 
-	// Sequential reading (original implementation)
 	v, err := openVolume(name, options)
 	if err != nil {
 		return nil, nil, err
@@ -345,7 +310,7 @@ func OpenFS(name string, opts ...Option) (*RarFS, error) {
 		}
 		rfs.ftree[fname] = &fsNode{blocks: blocks}
 		prev := rfs.ftree[fname]
-		// add parent file nodes
+
 		for fname != "." {
 			fname = path.Dir(fname)
 			node = rfs.ftree[fname]

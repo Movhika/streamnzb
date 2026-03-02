@@ -12,17 +12,16 @@ import (
 	"streamnzb/pkg/services/metadata/tmdb"
 )
 
-// tmdbSearchResult is the JSON shape returned by GET /api/tmdb/search
 type tmdbSearchResult struct {
-	ID        string `json:"id"`         // For movie: tmdb id; for series: "tmdb:123"
+	ID        string `json:"id"`
 	TMDBID    int    `json:"tmdb_id"`
 	Title     string `json:"title"`
 	Year      string `json:"year,omitempty"`
-	MediaType string `json:"media_type"` // "movie" or "tv"
+	MediaType string `json:"media_type"`
 	IMDbID    string `json:"imdb_id,omitempty"`
 	TVDBID    int    `json:"tvdb_id,omitempty"`
-	PosterURL string `json:"poster_url,omitempty"` // Small poster for dropdown (w92)
-	Overview  string `json:"overview,omitempty"`   // Short description
+	PosterURL string `json:"poster_url,omitempty"`
+	Overview  string `json:"overview,omitempty"`
 }
 
 func (s *Server) handleTMDBSearch(w http.ResponseWriter, r *http.Request) {
@@ -97,10 +96,9 @@ func (s *Server) handleTMDBSearch(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
-// tmdbTVDetailsResponse is the JSON shape for GET /api/tmdb/tv/:id/details
 type tmdbTVDetailsResponse struct {
-	Name    string                   `json:"name"`
-	Seasons []tmdbTVSeasonInfo      `json:"seasons"`
+	Name    string             `json:"name"`
+	Seasons []tmdbTVSeasonInfo `json:"seasons"`
 }
 
 type tmdbTVSeasonInfo struct {
@@ -109,10 +107,9 @@ type tmdbTVSeasonInfo struct {
 	Name         string `json:"name"`
 }
 
-// tmdbTVSeasonResponse is the JSON shape for GET /api/tmdb/tv/:id/seasons/:num
 type tmdbTVSeasonResponse struct {
-	SeasonNumber int                   `json:"season_number"`
-	Episodes     []tmdbTVEpisodeInfo   `json:"episodes"`
+	SeasonNumber int                 `json:"season_number"`
+	Episodes     []tmdbTVEpisodeInfo `json:"episodes"`
 }
 
 type tmdbTVEpisodeInfo struct {
@@ -122,7 +119,6 @@ type tmdbTVEpisodeInfo struct {
 	AirDate       string `json:"air_date,omitempty"`
 }
 
-// handleTMDBTV handles GET /api/tmdb/tv/:id/details and GET /api/tmdb/tv/:id/seasons/:season
 func (s *Server) handleTMDBTV(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -150,7 +146,7 @@ func (s *Server) handleTMDBTV(w http.ResponseWriter, r *http.Request) {
 	client := tmdb.NewClient(s.tmdbAPIKey)
 
 	if len(parts) == 1 || (len(parts) == 2 && parts[1] == "details") {
-		// GET /api/tmdb/tv/123/details or /api/tmdb/tv/123
+
 		details, err := client.GetTVDetails(tmdbID)
 		if err != nil {
 			logger.Debug("TMDB TV details failed", "id", tmdbID, "err", err)
@@ -170,7 +166,7 @@ func (s *Server) handleTMDBTV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) >= 3 && parts[1] == "seasons" {
-		// GET /api/tmdb/tv/123/seasons/2
+
 		seasonNum, err := strconv.Atoi(parts[2])
 		if err != nil || seasonNum < 0 {
 			http.Error(w, "invalid season number", http.StatusBadRequest)
@@ -198,7 +194,6 @@ func (s *Server) handleTMDBTV(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-// parseStreamRequest validates GET, auth, and type/id query params. On failure writes the response and returns ok false.
 func (s *Server) parseStreamRequest(w http.ResponseWriter, r *http.Request) (contentType, id string, device *auth.Device, ok bool) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -252,7 +247,6 @@ func (s *Server) handleStreamsAvail(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"streams": streams})
 }
 
-// handleSearchReleases returns all releases (indexer + AvailNZB) for a title with availability and per-stream tags.
 func (s *Server) handleSearchReleases(w http.ResponseWriter, r *http.Request) {
 	contentType, id, _, ok := s.parseStreamRequest(w, r)
 	if !ok {

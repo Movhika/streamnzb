@@ -6,13 +6,12 @@ import (
 	"io"
 )
 
-// cipherBlockReader implements Block Mode decryption of an io.Reader object.
 type cipherBlockReader struct {
 	br     byteReader
 	mode   cipher.BlockMode
-	inbuf  []byte // raw input blocks not yet decrypted
-	outbuf []byte // output buffer used when output slice < block size
-	block  []byte // input/output buffer for a single block
+	inbuf  []byte
+	outbuf []byte
+	block  []byte
 }
 
 func (cr *cipherBlockReader) fillOutbuf() error {
@@ -38,9 +37,6 @@ func (cr *cipherBlockReader) ReadByte() (byte, error) {
 	return b, nil
 }
 
-// Read reads and decrypts data into p.
-// If the input is not a multiple of the cipher block size,
-// the trailing bytes will be ignored.
 func (cr *cipherBlockReader) Read(p []byte) (int, error) {
 	var n int
 	if len(cr.outbuf) > 0 {
@@ -50,7 +46,7 @@ func (cr *cipherBlockReader) Read(p []byte) (int, error) {
 	}
 	blockSize := cr.mode.BlockSize()
 	if len(p) < blockSize {
-		// use cr.block as buffer
+
 		err := cr.fillOutbuf()
 		if err != nil {
 			return 0, err
@@ -59,7 +55,7 @@ func (cr *cipherBlockReader) Read(p []byte) (int, error) {
 		cr.outbuf = cr.outbuf[n:]
 		return n, nil
 	}
-	// use p as buffer (but round down to multiple of block size)
+
 	p = p[:len(p)-(len(p)%blockSize)]
 	l := len(cr.inbuf)
 	if l > 0 {
@@ -125,7 +121,6 @@ func newCipherBlockReader(r byteReader, mode cipher.BlockMode) *cipherBlockReade
 	}
 }
 
-// newAesDecryptReader returns a cipherBlockReader that decrypts input from a given io.Reader using AES.
 func newAesDecryptReader(r byteReader, key, iv []byte) (*cipherBlockReader, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {

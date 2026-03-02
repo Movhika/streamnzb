@@ -2,39 +2,31 @@ package unpack
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 
 	"streamnzb/pkg/core/logger"
-	"streamnzb/pkg/media/loader"
 )
 
-// ReadSeekCloser combines Reader, Seeker and Closer.
+var ErrTooManyZeroFills = errors.New("too many failed segments")
+
 type ReadSeekCloser interface {
 	io.Reader
 	io.Seeker
 	io.Closer
 }
 
-// DirectBlueprint caches the result of direct/obfuscated file detection
-// so subsequent play requests skip the full detection pipeline.
 type DirectBlueprint struct {
 	FileName  string
 	FileIndex int
 }
 
-// FailedBlueprint is a sentinel cached after a scan failure so that
-// retry requests skip re-scanning and fail immediately.
 type FailedBlueprint struct {
 	Err error
 }
 
-// GetMediaStream finds a video file inside the provided NZB files and returns
-// a seekable stream. ctx controls the lifetime of the returned stream.
-// cachedBP is an optional cached blueprint to avoid re-scanning headers.
-// password is the archive password from the NZB head (e.g. <meta type="password">), if any.
-func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interface{}, password string) (ReadSeekCloser, string, int64, interface{}, error) {
-	// Fast path: use cached blueprint
+func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interface{}, password string) (ReadSeekCloser, string, int64, interface{}, error) {
 	if cachedBP != nil {
 		switch bp := cachedBP.(type) {
 		case *ArchiveBlueprint:
@@ -43,7 +35,14 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 			return s, name, size, bp, err
 		case *SevenZipBlueprint:
 			logger.Debug("Using cached 7z blueprint", "file", bp.MainFileName)
-			s, n, sz, err := Open7zStreamFromBlueprint(ctx, files, bp, password)
+			archiveFiles, err := Identify7zParts(files)
+			if err != nil {
+				return nil, "", 0, nil, err
+			}
+			if len(archiveFiles) == 0 {
+				return nil, "", 0, nil, errors.New("7z set empty for cached blueprint")
+			}
+			s, n, sz, err := Open7zStreamFromBlueprint(ctx, archiveFiles, bp, password)
 			return s, n, sz, bp, err
 		case *DirectBlueprint:
 			if bp.FileIndex < len(files) {
@@ -60,25 +59,11 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 		}
 	}
 
-	// 1. RAR detection
-	var rarFiles []*loader.File
-	for _, f := range files {
-		name := ExtractFilename(f.Name())
-		lower := strings.ToLower(name)
-		if strings.HasSuffix(lower, ExtPar2) || strings.Contains(lower, ".7z.") {
-			continue
-		}
-		if strings.HasSuffix(lower, ExtRar) || strings.Contains(lower, ".part") || IsRarPart(lower) || IsSplitArchivePart(lower) {
-			rarFiles = append(rarFiles, f)
-		}
-	}
-
+	rarFiles := filterRarFiles(files)
 	if len(rarFiles) > 0 {
 		logger.Trace("Detected RAR archive", "volumes", len(rarFiles))
 		unpackables := make([]UnpackableFile, len(files))
-		for i, f := range files {
-			unpackables[i] = f
-		}
+		copy(unpackables, files)
 		bp, err := ScanArchive(unpackables, password)
 		if err != nil {
 			logger.Warn("ScanArchive failed, falling back to other methods", "err", err)
@@ -91,21 +76,18 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 		}
 	}
 
-	// 2. 7z detection
-	for _, f := range files {
-		name := ExtractFilename(f.Name())
-		if strings.HasSuffix(strings.ToLower(name), Ext7z) || strings.Contains(strings.ToLower(name), ".7z.001") {
-			logger.Info("Detected 7z archive", "name", name)
-			newBp, err := CreateSevenZipBlueprint(files, name, password)
-			if err != nil {
-				return nil, "", 0, nil, err
-			}
-			s, n, sz, err := Open7zStreamFromBlueprint(ctx, files, newBp, password)
-			return s, n, sz, newBp, err
+	archiveFiles, err := Identify7zParts(files)
+	if err == nil && len(archiveFiles) > 0 {
+		firstVolName := ExtractFilename(archiveFiles[0].Name())
+		logger.Info("Detected 7z archive", "name", firstVolName, "parts", len(archiveFiles))
+		newBp, err := CreateSevenZipBlueprint(archiveFiles, firstVolName, password)
+		if err != nil {
+			return nil, "", 0, nil, err
 		}
+		s, n, sz, err := Open7zStreamFromBlueprint(ctx, archiveFiles, newBp, password)
+		return s, n, sz, newBp, err
 	}
 
-	// 3. Direct video files
 	for i, f := range files {
 		name := ExtractFilename(f.Name())
 		if IsVideoFile(name) {
@@ -113,13 +95,11 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 			if err != nil {
 				return nil, "", 0, nil, err
 			}
-			bp := &DirectBlueprint{FileName: name, FileIndex: i}
-			return stream, name, f.Size(), bp, nil
+			return stream, name, f.Size(), &DirectBlueprint{FileName: name, FileIndex: i}, nil
 		}
 	}
 
-	// 4. Obfuscated / unknown: find largest non-archive file
-	var largestFile *loader.File
+	var largestFile UnpackableFile
 	var largestIdx int
 	for i, f := range files {
 		name := strings.ToLower(ExtractFilename(f.Name()))
@@ -137,31 +117,25 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 
 	if largestFile != nil && largestFile.Size() > 50*1024*1024 {
 		logger.Warn("No clear media found, probing largest file", "name", largestFile.Name(), "size", largestFile.Size())
-
 		unpackables := make([]UnpackableFile, len(files))
-		for i, f := range files {
-			unpackables[i] = f
-		}
-
+		copy(unpackables, files)
 		logger.Info("Attempting heuristic RAR scan on unknown files")
 		bp, err := ScanArchive(unpackables, password)
 		if err == nil {
-			logger.Info("Heuristic scan found RAR archive")
 			s, name, size, err := StreamFromBlueprint(ctx, bp, password)
 			if err == nil {
+				logger.Info("Heuristic scan found RAR archive")
 				return s, name, size, bp, nil
 			}
 		} else {
 			logger.Warn("Heuristic RAR scan failed, falling back to direct stream", "err", err)
 		}
-
 		extractedName := ExtractFilename(largestFile.Name())
 		stream, err := largestFile.OpenStreamCtx(ctx)
 		if err != nil {
 			return nil, "", 0, nil, err
 		}
-		directBP := &DirectBlueprint{FileName: extractedName, FileIndex: largestIdx}
-		return stream, extractedName, largestFile.Size(), directBP, nil
+		return stream, extractedName, largestFile.Size(), &DirectBlueprint{FileName: extractedName, FileIndex: largestIdx}, nil
 	}
 
 	logger.Warn("GetMediaStream found no suitable media", "files", len(files), "rar_candidates", len(rarFiles))

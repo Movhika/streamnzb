@@ -18,17 +18,15 @@ import (
 	"time"
 )
 
-// Client represents a Newznab API client for a single indexer
 type Client struct {
 	baseURL string
-	apiPath string // API path (e.g., "/api" or "/api/v1")
+	apiPath string
 	apiKey  string
 	name    string
 	client  *http.Client
-	cfg     config.IndexerConfig // full config for per-indexer search overrides
-	caps    *indexer.Caps        // populated by GetCaps(); nil until fetched
+	cfg     config.IndexerConfig
+	caps    *indexer.Caps
 
-	// Usage tracking
 	apiLimit          int
 	apiUsed           int
 	apiRemaining      int
@@ -39,18 +37,15 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
-// Ensure Client implements indexer.Indexer and IndexerWithCaps at compile time.
 var _ indexer.Indexer = (*Client)(nil)
 var _ indexer.IndexerWithCaps = (*Client)(nil)
 
-// APIError represents a Newznab API error response
 type APIError struct {
 	XMLName     xml.Name `xml:"error"`
 	Code        int      `xml:"code,attr"`
 	Description string   `xml:"description,attr"`
 }
 
-// Name returns the name of this indexer
 func (c *Client) Name() string {
 	if c.name != "" {
 		return c.name
@@ -58,7 +53,6 @@ func (c *Client) Name() string {
 	return "Newznab"
 }
 
-// Type returns the config type of this indexer ("newznab", "aggregator", "nzbhydra", "prowlarr", etc.).
 func (c *Client) Type() string {
 	if c.cfg.Type != "" {
 		return c.cfg.Type
@@ -66,7 +60,6 @@ func (c *Client) Type() string {
 	return "newznab"
 }
 
-// GetUsage returns the current usage stats
 func (c *Client) GetUsage() indexer.Usage {
 	c.mu.RLock()
 	u := indexer.Usage{
@@ -86,9 +79,8 @@ func (c *Client) GetUsage() indexer.Usage {
 	return u
 }
 
-// NewClient creates a new Newznab client
 func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
-	// Create HTTP client with TLS skip verify for self-signed certs (common in local setups)
+
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
@@ -99,12 +91,11 @@ func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
 		IdleConnTimeout:     90 * time.Second,
 	}
 
-	// Default API path to "/api" if not specified
 	apiPath := cfg.APIPath
 	if apiPath == "" {
 		apiPath = "/api"
 	}
-	// Ensure it starts with "/"
+
 	if !strings.HasPrefix(apiPath, "/") {
 		apiPath = "/" + apiPath
 	}
@@ -128,7 +119,6 @@ func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
 		usageManager:      um,
 	}
 
-	// Load initial usage if manager is provided
 	if um != nil {
 		usage := um.GetIndexerUsage(cfg.Name)
 		c.apiUsed = usage.APIHitsUsed
@@ -137,7 +127,6 @@ func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
 		c.apiRemaining = cfg.APIHitsDay - usage.APIHitsUsed
 		c.downloadRemaining = cfg.DownloadsDay - usage.DownloadsUsed
 
-		// Ensure remaining isn't negative if limits were lowered
 		if c.apiRemaining < 0 && cfg.APIHitsDay > 0 {
 			c.apiRemaining = 0
 		}
@@ -149,7 +138,6 @@ func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
 	return c
 }
 
-// checkAPILimit returns error if API limit is reached
 func (c *Client) checkAPILimit() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -159,7 +147,6 @@ func (c *Client) checkAPILimit() error {
 	return nil
 }
 
-// checkDownloadLimit returns error if download limit is reached
 func (c *Client) checkDownloadLimit() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -169,12 +156,10 @@ func (c *Client) checkDownloadLimit() error {
 	return nil
 }
 
-// updateUsageFromHeaders updates remaining counts from Newznab headers
 func (c *Client) updateUsageFromHeaders(h http.Header) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Newznab Standard Headers
 	if val := h.Get("X-RateLimit-Daily-Limit"); val != "" {
 		if limit, err := strconv.Atoi(val); err == nil {
 			c.apiLimit = limit
@@ -186,7 +171,6 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 		}
 	}
 
-	// Grab limits (Downloads)
 	if val := h.Get("X-DNZBLimit-Daily-Limit"); val != "" {
 		if limit, err := strconv.Atoi(val); err == nil {
 			c.downloadLimit = limit
@@ -198,7 +182,6 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 		}
 	}
 
-	// Some indexers use non-standard headers
 	if val := h.Get("x-api-remaining"); val != "" && h.Get("X-RateLimit-Daily-Remaining") == "" {
 		if remaining, err := strconv.Atoi(val); err == nil {
 			c.apiRemaining = remaining
@@ -210,9 +193,6 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 		}
 	}
 
-	// Update persistent storage from header-derived absolute values.
-	// Only call UpdateUsage when we have authoritative limits from headers;
-	// unlimited accounts track incrementally via IncrementUsed in Search/DownloadNZB.
 	if c.usageManager != nil && (c.apiLimit > 0 || c.downloadLimit > 0) {
 		if c.apiLimit > 0 {
 			c.apiUsed = c.apiLimit - c.apiRemaining
@@ -224,7 +204,6 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 	}
 }
 
-// Ping checks if the indexer is reachable
 func (c *Client) Ping() error {
 	apiURL := fmt.Sprintf("%s%s?t=caps&apikey=%s", c.baseURL, c.apiPath, c.apiKey)
 	req, err := http.NewRequest("GET", apiURL, nil)
@@ -244,8 +223,6 @@ func (c *Client) Ping() error {
 	return nil
 }
 
-// GetCaps fetches the indexer's capabilities (categories, search types, limits).
-// Results are cached on the client for use in Search().
 func (c *Client) GetCaps() (*indexer.Caps, error) {
 	apiURL := fmt.Sprintf("%s%s?t=caps", c.baseURL, c.apiPath)
 	if c.apiKey != "" {
@@ -294,11 +271,10 @@ func (c *Client) GetCaps() (*indexer.Caps, error) {
 	return caps, nil
 }
 
-// checkNewznabError checks for Newznab error responses and returns appropriate errors
 func (c *Client) checkNewznabError(bodyBytes []byte) error {
 	var apiErr APIError
 	if err := xml.Unmarshal(bodyBytes, &apiErr); err == nil && apiErr.Description != "" {
-		// Parse error code to determine error type
+
 		switch {
 		case apiErr.Code >= 100 && apiErr.Code <= 199:
 			return fmt.Errorf("%s authentication error (code %d): %s", c.Name(), apiErr.Code, apiErr.Description)
@@ -315,8 +291,6 @@ func (c *Client) checkNewznabError(bodyBytes []byte) error {
 	return nil
 }
 
-// Search queries the Newznab indexer
-// The indexer handles pagination internally, we just request what we need
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
 	if err := c.checkAPILimit(); err != nil {
 		return nil, err
@@ -337,9 +311,8 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	params.Set("apikey", c.apiKey)
 	params.Set("o", "xml")
 	params.Set("limit", fmt.Sprintf("%d", limit))
-	params.Set("offset", "0") // Start from beginning
+	params.Set("offset", "0")
 
-	// Determine search type from caps (with fallback)
 	c.mu.RLock()
 	caps := c.caps
 	c.mu.RUnlock()
@@ -347,10 +320,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	isMovieSearch := strings.HasPrefix(req.Cat, "2")
 	isTVSearch := strings.HasPrefix(req.Cat, "5")
 
-	// For TV: use t=search for string queries (per Newznab base search); t=tvsearch for ID/structured (tvdbid, season/ep).
 	useTVSearchParams := false
 	if isMovieSearch && (caps == nil || caps.Searching.MovieSearch) {
-		// ID-only movie search uses t=movie with imdbid only; text search uses t=search
+
 		if req.Query == "" && req.IMDbID != "" {
 			params.Set("t", "movie")
 		} else {
@@ -384,7 +356,6 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		params.Set("q", query)
 	}
 
-	// Only send IDs that Newznab uses: imdbid for movie; tvdbid+season+ep for tvsearch (no imdbid on tvsearch)
 	if isMovieSearch && req.IMDbID != "" {
 		imdbID := strings.TrimPrefix(req.IMDbID, "tt")
 		params.Set("imdbid", imdbID)
@@ -414,7 +385,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if o := req.OptionalOverrides; o != nil && o.UseSeasonEpisodeParams != nil {
 		useSeasonEp = o.UseSeasonEpisodeParams
 	}
-	// season/ep are tvsearch params; omit for t=search (string query) to avoid strict matching on indexers
+
 	if useTVSearchParams && (useSeasonEp == nil || *useSeasonEp) {
 		if req.Season != "" {
 			params.Set("season", req.Season)
@@ -447,7 +418,6 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 
 	c.updateUsageFromHeaders(resp.Header)
 
-	// For unlimited accounts (no header-derived limits), persist incrementally
 	if c.usageManager != nil && c.apiLimit == 0 {
 		c.usageManager.IncrementUsed(c.name, 1, 0)
 	}
@@ -457,16 +427,14 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, fmt.Errorf("failed to read %s response: %w", c.Name(), err)
 	}
 
-	// Check for HTTP errors
 	if resp.StatusCode != http.StatusOK {
-		// Try to parse Newznab error response
+
 		if err := c.checkNewznabError(bodyBytes); err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%s returned status %d: %s", c.Name(), resp.StatusCode, string(bodyBytes))
 	}
 
-	// Check for Newznab API errors in successful HTTP responses
 	if err := c.checkNewznabError(bodyBytes); err != nil {
 		return nil, err
 	}
@@ -476,12 +444,10 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, fmt.Errorf("failed to parse %s response: %w", c.Name(), err)
 	}
 
-	// Populate SourceIndexer and fix metadata for each item
 	for i := range result.Channel.Items {
 		item := &result.Channel.Items[i]
 		item.SourceIndexer = c
 
-		// Fallback size extraction
 		if item.Size <= 0 {
 			if item.Enclosure.Length > 0 {
 				item.Size = item.Enclosure.Length
@@ -491,7 +457,6 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		}
 	}
 
-	// Truncate to requested limit if indexer returned more
 	if len(result.Channel.Items) > limit {
 		result.Channel.Items = result.Channel.Items[:limit]
 	}
@@ -532,7 +497,6 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 
 	c.updateUsageFromHeaders(resp.Header)
 
-	// For unlimited accounts (no header-derived limits), persist incrementally
 	if c.usageManager != nil && c.apiLimit == 0 && c.downloadLimit == 0 {
 		c.usageManager.IncrementUsed(c.name, 1, 1)
 	} else if c.usageManager != nil && c.apiLimit == 0 {

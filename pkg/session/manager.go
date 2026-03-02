@@ -16,41 +16,35 @@ import (
 	"streamnzb/pkg/media/nzb"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/usenet/nntp"
+	"streamnzb/pkg/usenet/pool"
 )
 
-// Session represents an active streaming session
 type Session struct {
 	ID    string
-	NZB   *nzb.NZB       // Parsed NZB (may be nil if deferred)
-	Files []*loader.File // All files related to the content (e.g. RAR volumes)
-	File  *loader.File   // Helper for single-file content, or first file of archive
-	// Cache for archive structure
-	Blueprint   interface{} // type *unpack.ArchiveBlueprint (interface to avoid strict cycle, though safe)
+	NZB   *nzb.NZB
+	Files []*loader.File
+	File  *loader.File
+
+	Blueprint   interface{}
 	CreatedAt   time.Time
 	LastAccess  time.Time
 	ActivePlays int32
-	Clients     map[string]time.Time // IP -> Connected time
+	Clients     map[string]time.Time
 	mu          sync.Mutex
 
-	// Lifecycle
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// Release metadata (from release.Release) - used for AvailNZB reporting and deferred download
 	Release *release.Release
 
-	// ContentIDs for AvailNZB reporting (movie/TV context from catalog request)
 	ContentIDs *AvailReportMeta
 
-	// Deferred download: URL to fetch NZB (may have apikey added by caller); indexer for DownloadNZB
 	downloadURL string
 	indexer     indexer.Indexer
 
-	// FallbackStreamURLs: play URLs of streams after this one in priority order (for auto-failover)
 	FallbackStreamURLs []string
 }
 
-// ReleaseURL returns the indexer details URL for AvailNZB reporting
 func (s *Session) ReleaseURL() string {
 	if s.Release != nil && s.Release.DetailsURL != "" {
 		return s.Release.DetailsURL
@@ -58,7 +52,6 @@ func (s *Session) ReleaseURL() string {
 	return s.downloadURL
 }
 
-// ReportSize returns size in bytes for AvailNZB (from NZB if loaded, else Release)
 func (s *Session) ReportSize() int64 {
 	if s.NZB != nil {
 		return s.NZB.TotalSize()
@@ -69,7 +62,6 @@ func (s *Session) ReportSize() int64 {
 	return 0
 }
 
-// ReportReleaseName returns the release title for AvailNZB
 func (s *Session) ReportReleaseName() string {
 	if s.Release != nil {
 		return s.Release.Title
@@ -77,7 +69,6 @@ func (s *Session) ReportReleaseName() string {
 	return ""
 }
 
-// FirstFallbackStreamURL returns the first fallback play URL if any (next stream in priority list).
 func (s *Session) FirstFallbackStreamURL() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,53 +78,48 @@ func (s *Session) FirstFallbackStreamURL() string {
 	return s.FallbackStreamURLs[0]
 }
 
-// SetFallbackStreams sets the list of play URLs for streams after this one (priority order).
 func (s *Session) SetFallbackStreams(urls []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.FallbackStreamURLs = urls
 }
 
-// knownGoodSlotEntry holds a slot path that successfully served; used to short-circuit repeated
-// requests for earlier slots when the client (e.g. Stremio) uses the original play URL for Range requests.
 type knownGoodSlotEntry struct {
 	slotPath  string
 	expiresAt time.Time
 }
 
-// Manager manages active streaming sessions
 type Manager struct {
-	sessions        map[string]*Session
-	pools           []*nntp.ClientPool
-	estimator       *loader.SegmentSizeEstimator
-	ttl             time.Duration
-	mu              sync.RWMutex
-	failoverOrder   sync.Map // key deviceToken (string) -> []string (slot path "stream:s:type:id:idx" or legacy stream ID)
-	knownGoodSlots  sync.Map // key streamKey (streamId:contentType:id) -> *knownGoodSlotEntry
+	sessions         map[string]*Session
+	pools            []*nntp.ClientPool
+	usenetPool       *pool.Pool
+	estimator        *loader.SegmentSizeEstimator
+	ttl              time.Duration
+	mu               sync.RWMutex
+	failoverOrder    sync.Map
+	knownGoodSlots   sync.Map
+	failedStreamSlots sync.Map
 }
 
-// SetBlueprint caches the archive blueprint
 func (s *Session) SetBlueprint(bp interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Blueprint = bp
 }
 
-func NewManager(pools []*nntp.ClientPool, ttl time.Duration) *Manager {
+func NewManager(pools []*nntp.ClientPool, usenetPool *pool.Pool, ttl time.Duration) *Manager {
 	m := &Manager{
-		sessions:  make(map[string]*Session),
-		pools:     pools,
-		estimator: loader.NewSegmentSizeEstimator(),
-		ttl:       ttl,
+		sessions:   make(map[string]*Session),
+		pools:      pools,
+		usenetPool: usenetPool,
+		estimator:  loader.NewSegmentSizeEstimator(),
+		ttl:        ttl,
 	}
 
-	// Start cleanup goroutine
 	go m.cleanupLoop()
-
 	return m
 }
 
-// AvailReportMeta holds optional content IDs for availability reporting (movie or TV).
 type AvailReportMeta struct {
 	ImdbID  string
 	TvdbID  string
@@ -141,9 +127,6 @@ type AvailReportMeta struct {
 	Episode int
 }
 
-// CreateSession creates a new session for the given NZB.
-// rel provides release metadata for AvailNZB; contentIDs holds catalog context (ImdbID, TvdbID, etc.).
-// Heavy work (GetContentFiles, NewFile) is done outside the manager lock.
 func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release.Release, contentIDs *AvailReportMeta) (*Session, error) {
 	logger.Trace("session CreateSession start", "id", sessionID)
 	m.mu.Lock()
@@ -164,13 +147,19 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 	}
 	m.mu.RLock()
 	pools := m.pools
+	usenetPool := m.usenetPool
 	estimator := m.estimator
 	m.mu.RUnlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var loaderFiles []*loader.File
 	for _, info := range contentFiles {
-		lf := loader.NewFile(ctx, info.File, pools, estimator)
+		var lf *loader.File
+		if usenetPool != nil {
+			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool)
+		} else {
+			lf = loader.NewFile(ctx, info.File, pools, estimator, nil)
+		}
 		loaderFiles = append(loaderFiles, lf)
 	}
 
@@ -202,8 +191,6 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 	return session, nil
 }
 
-// CreateDeferredSession creates a session placeholder without downloading the NZB yet.
-// downloadURL is the NZB fetch URL (caller adds apikey if needed). rel provides metadata; idx is used for DownloadNZB.
 func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *release.Release, idx indexer.Indexer, contentIDs *AvailReportMeta) (*Session, error) {
 	logger.Trace("session CreateDeferredSession start", "id", sessionID)
 	m.mu.Lock()
@@ -236,8 +223,6 @@ func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *rele
 	return session, nil
 }
 
-// isAggregatorIndexer returns true if the indexer reports an aggregator type (aggregator, nzbhydra, prowlarr).
-// Uses the indexer's Type() when available (e.g. newznab client), not the indexer name.
 func isAggregatorIndexer(idx indexer.Indexer) bool {
 	t, ok := idx.(interface{ Type() string })
 	if !ok || t == nil {
@@ -247,8 +232,6 @@ func isAggregatorIndexer(idx indexer.Indexer) bool {
 	return typ == "aggregator" || typ == "nzbhydra" || typ == "prowlarr"
 }
 
-// GetOrDownloadNZB returns the NZB, downloading it if necessary.
-// I/O is done outside the session lock so GetActiveSessions is not blocked.
 func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	s.mu.Lock()
 	if s.NZB != nil {
@@ -277,7 +260,7 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	defer cancel()
 
 	hasAPIKey := urlHasAPIKey(nzbURL)
-	// has apikey or indexer type is aggregator (Prowlarr/NZBHydra/type=aggregator) — use type, not name
+
 	if hasAPIKey || isAggregatorIndexer(idx) {
 		logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)
 		data, err = idx.DownloadNZB(downloadCtx, nzbURL)
@@ -310,12 +293,18 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 
 	manager.mu.RLock()
 	pools := manager.pools
+	usenetPool := manager.usenetPool
 	estimator := manager.estimator
 	manager.mu.RUnlock()
 
 	var loaderFiles []*loader.File
 	for _, info := range contentFiles {
-		lf := loader.NewFile(ctx, info.File, pools, estimator)
+		var lf *loader.File
+		if usenetPool != nil {
+			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool)
+		} else {
+			lf = loader.NewFile(ctx, info.File, pools, estimator, nil)
+		}
 		loaderFiles = append(loaderFiles, lf)
 	}
 
@@ -330,7 +319,6 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	return s.NZB, nil
 }
 
-// SetFallbackStreams sets fallback play URLs for a session (next streams in priority order).
 func (m *Manager) SetFallbackStreams(sessionID string, urls []string) {
 	m.mu.RLock()
 	session, ok := m.sessions[sessionID]
@@ -341,8 +329,6 @@ func (m *Manager) SetFallbackStreams(sessionID string, urls []string) {
 	session.SetFallbackStreams(urls)
 }
 
-// SetDeviceFailoverOrder stores the ordered failover entries for a device (e.g. from AIOStreams POST).
-// Each entry is either a full slot path "stream:streamId:contentType:id:index" or a legacy stream ID.
 func (m *Manager) SetDeviceFailoverOrder(deviceToken string, order []string) {
 	if len(order) == 0 {
 		return
@@ -352,7 +338,6 @@ func (m *Manager) SetDeviceFailoverOrder(deviceToken string, order []string) {
 	m.failoverOrder.Store(deviceToken, cp)
 }
 
-// GetDeviceFailoverOrder returns the ordered failover entries for a device, or nil if none set.
 func (m *Manager) GetDeviceFailoverOrder(deviceToken string) []string {
 	val, ok := m.failoverOrder.Load(deviceToken)
 	if !ok || val == nil {
@@ -365,14 +350,11 @@ func (m *Manager) GetDeviceFailoverOrder(deviceToken string) []string {
 	return order
 }
 
-// SetKnownGoodSlot records a slot path that successfully served media for the given requested slot.
-// Used to short-circuit repeated requests for earlier slots when the client uses the original URL for Range/retries.
 func (m *Manager) SetKnownGoodSlot(requestedSlot, successfulSlot string) {
 	expiresAt := time.Now().Add(m.ttl)
 	m.knownGoodSlots.Store(requestedSlot, &knownGoodSlotEntry{slotPath: successfulSlot, expiresAt: expiresAt})
 }
 
-// GetKnownGoodSlot returns a slot path that successfully served for the requested slot if valid and not expired.
 func (m *Manager) GetKnownGoodSlot(requestedSlot string) (slotPath string, ok bool) {
 	val, ok := m.knownGoodSlots.Load(requestedSlot)
 	if !ok || val == nil {
@@ -385,7 +367,26 @@ func (m *Manager) GetKnownGoodSlot(requestedSlot string) (slotPath string, ok bo
 	return ent.slotPath, true
 }
 
-// GetSession retrieves an existing session
+func (m *Manager) ClearKnownGoodForSlot(slot string) {
+	m.knownGoodSlots.Range(func(key, value interface{}) bool {
+		if ent, ok := value.(*knownGoodSlotEntry); ok && ent != nil && ent.slotPath == slot {
+			m.knownGoodSlots.Delete(key)
+		}
+		return true
+	})
+}
+
+func (m *Manager) MarkSlotFailedDuringStream(sessionID string) {
+	m.failedStreamSlots.Store(sessionID, struct{}{})
+	m.ClearKnownGoodForSlot(sessionID)
+	m.DeleteSession(sessionID)
+}
+
+func (m *Manager) IsStreamSlotFailed(sessionID string) bool {
+	_, ok := m.failedStreamSlots.Load(sessionID)
+	return ok
+}
+
 func (m *Manager) GetSession(sessionID string) (*Session, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -395,7 +396,6 @@ func (m *Manager) GetSession(sessionID string) (*Session, error) {
 		return nil, fmt.Errorf("session not found: %s", sessionID)
 	}
 
-	// Update last access time
 	session.mu.Lock()
 	session.LastAccess = time.Now()
 	session.mu.Unlock()
@@ -403,7 +403,6 @@ func (m *Manager) GetSession(sessionID string) (*Session, error) {
 	return session, nil
 }
 
-// DeleteSession removes a session
 func (m *Manager) DeleteSession(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -414,7 +413,6 @@ func (m *Manager) DeleteSession(sessionID string) {
 	}
 }
 
-// Close explicitly stops all active streams and allows the session to be cleaned up
 func (s *Session) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -423,7 +421,6 @@ func (s *Session) Close() {
 	}
 }
 
-// cleanupLoop periodically removes expired sessions
 func (m *Manager) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -433,10 +430,6 @@ func (m *Manager) cleanupLoop() {
 	}
 }
 
-// cleanup removes sessions that haven't been accessed within TTL.
-// We must not call session.Close() while holding session.mu: Close() locks the same
-// mutex, causing deadlock (sync.Mutex is not reentrant). So we remove from map
-// under lock, then unlock, then Close().
 func (m *Manager) cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -464,7 +457,6 @@ func (m *Manager) cleanup() {
 	})
 }
 
-// StartPlayback increments the active play count for a session and tracks IP
 func (m *Manager) StartPlayback(id, ip string) {
 	s, err := m.GetSession(id)
 	if err == nil {
@@ -475,7 +467,6 @@ func (m *Manager) StartPlayback(id, ip string) {
 	}
 }
 
-// EndPlayback decrements the active play count for a session and removes IP
 func (m *Manager) EndPlayback(id, ip string) {
 	s, err := m.GetSession(id)
 	if err == nil {
@@ -483,13 +474,12 @@ func (m *Manager) EndPlayback(id, ip string) {
 		if s.ActivePlays > 0 {
 			s.ActivePlays--
 		}
-		// Update last seen for the IP to ensure it stays for grace period
+
 		s.Clients[ip] = time.Now()
 		s.mu.Unlock()
 	}
 }
 
-// KeepAlive updates the last access time for a session and client
 func (m *Manager) KeepAlive(id, ip string) {
 	s, err := m.GetSession(id)
 	if err == nil {
@@ -500,7 +490,6 @@ func (m *Manager) KeepAlive(id, ip string) {
 	}
 }
 
-// ActiveSessionInfo provides details about a currently playing session
 type ActiveSessionInfo struct {
 	ID        string   `json:"id"`
 	Title     string   `json:"title"`
@@ -508,9 +497,6 @@ type ActiveSessionInfo struct {
 	StartTime string   `json:"start_time"`
 }
 
-// GetActiveSessions returns a list of sessions that are currently playing.
-// We snapshot session refs under RLock then release, so CreateSession/CreateDeferredSession
-// are not blocked while we lock each session (avoids blocking stream validation and WebSocket).
 func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 	logger.Trace("session GetActiveSessions start")
 	m.mu.RLock()
@@ -522,12 +508,11 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 
 	var result []ActiveSessionInfo
 	for _, s := range snapshot {
-		// Use TryLock so we never block: if a session is busy (e.g. KeepAlive during stream Read),
-		// skip it this round rather than hanging the dashboard/WebSocket stats.
+
 		if !s.mu.TryLock() {
 			continue
 		}
-		// Purge IPs that haven't been seen for 60 seconds
+
 		for ip, lastSeen := range s.Clients {
 			if time.Since(lastSeen) > 60*time.Second {
 				delete(s.Clients, ip)
@@ -563,11 +548,16 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 	return result
 }
 
-// UpdatePools swaps the provider pools at runtime
 func (m *Manager) UpdatePools(pools []*nntp.ClientPool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pools = pools
+}
+
+func (m *Manager) UpdateUsenetPool(up *pool.Pool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.usenetPool = up
 }
 
 func urlHasAPIKey(rawURL string) bool {

@@ -10,13 +10,11 @@ import (
 	"streamnzb/pkg/core/paths"
 )
 
-// configPayload is the response for GET /api/config; includes env_overrides for admin.
 type configPayload struct {
 	config.Config
 	EnvOverrides []string `json:"env_overrides,omitempty"`
 }
 
-// handleConfig routes GET and PUT /api/config.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		s.handleGetConfig(w, r)
@@ -29,8 +27,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
-// handleGetConfig returns config for the authenticated device (GET /api/config).
-// Ensures admin_username is never returned empty so the UI does not overwrite with "" on refetch (e.g. after WS reconnect).
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -58,7 +54,6 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handlePutConfig saves global config (PUT /api/config). Admin only.
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

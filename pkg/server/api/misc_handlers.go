@@ -12,7 +12,6 @@ import (
 	"streamnzb/pkg/indexer"
 )
 
-// handleGetIndexerCaps returns cached indexer capabilities (GET /api/indexer/caps).
 func (s *Server) handleGetIndexerCaps(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -28,7 +27,6 @@ func (s *Server) handleGetIndexerCaps(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(caps)
 }
 
-// handleRefreshIndexerCaps re-fetches capabilities and returns new caps (POST /api/indexer/caps/refresh). Admin only.
 func (s *Server) handleRefreshIndexerCaps(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -68,7 +66,6 @@ func (s *Server) handleRefreshIndexerCaps(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(caps)
 }
 
-// handleCloseSession closes a session by id (POST /api/sessions/close). Body: {"id": "..."}. Admin only.
 func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -92,7 +89,6 @@ func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }
 
-// handleRestart restarts the server process (POST /api/restart). Admin only.
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -104,7 +100,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() {
-		// Allow response to be sent first
+
 		exe, _ := os.Executable()
 		cmd := exec.Command(exe)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

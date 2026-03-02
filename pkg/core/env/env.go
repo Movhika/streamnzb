@@ -1,5 +1,3 @@
-// Package env consolidates all environment variable reading for the application.
-// Config overrides are applied only at startup (see config.Load).
 package env
 
 import (
@@ -9,7 +7,6 @@ import (
 	"strings"
 )
 
-// Environment variable names (single source of truth)
 const (
 	ADDONPort             = "ADDON_PORT"
 	ADDONBaseURL          = "ADDON_BASE_URL"
@@ -29,7 +26,6 @@ const (
 	IndexerGrabHeaderEnv  = "INDEXER_GRAB_HEADER"
 )
 
-// Config JSON keys returned by OverrideKeys (for UI warnings)
 const (
 	KeyAddonPort      = "addon_port"
 	KeyAddonBaseURL   = "addon_base_url"
@@ -49,18 +45,12 @@ const (
 
 const AdminUsernameEnv = "ADMIN_USERNAME"
 
-// DefaultIndexerUserAgent is the User-Agent used for indexer requests when
-// INDEXER_QUERY_HEADER and INDEXER_GRAB_HEADER are unset. Main sets this to
-// "StreamNZB/" + Version at startup.
 var DefaultIndexerUserAgent = "StreamNZB/dev"
 
-// TZ returns the TZ environment variable (e.g. for logger timezone).
 func TZ() string {
 	return os.Getenv(TZVar)
 }
 
-// IndexerQueryHeader returns User-Agent for indexer search/query requests.
-// Uses INDEXER_QUERY_HEADER if set, otherwise DefaultIndexerUserAgent.
 func IndexerQueryHeader() string {
 	if v := os.Getenv(IndexerQueryHeaderEnv); v != "" {
 		return v
@@ -68,8 +58,6 @@ func IndexerQueryHeader() string {
 	return DefaultIndexerUserAgent
 }
 
-// IndexerGrabHeader returns User-Agent for indexer NZB download/grab requests.
-// Uses INDEXER_GRAB_HEADER if set, otherwise DefaultIndexerUserAgent.
 func IndexerGrabHeader() string {
 	if v := os.Getenv(IndexerGrabHeaderEnv); v != "" {
 		return v
@@ -77,7 +65,6 @@ func IndexerGrabHeader() string {
 	return DefaultIndexerUserAgent
 }
 
-// LogLevel returns LOG_LEVEL with default "INFO" (for early logger init before config).
 func LogLevel() string {
 	if v := os.Getenv(LOGLevel); v != "" {
 		return v
@@ -85,7 +72,6 @@ func LogLevel() string {
 	return "INFO"
 }
 
-// Provider and Indexer mirror config types so this package does not depend on config.
 type Provider struct {
 	Name        string
 	Host        string
@@ -105,28 +91,23 @@ type Indexer struct {
 	Enabled *bool
 }
 
-// ConfigOverrides holds all config values that can be set via environment variables.
-// Used at startup by config.Load to apply overrides.
 type ConfigOverrides struct {
-	AddonPort            int
-	AddonBaseURL         string
-	LogLevel             string
-	AvailNZBURL          string
-	AvailNZBAPIKey       string
-	TMDBAPIKey           string
-	TVDBAPIKey           string
-	ProxyPort            int
-	ProxyHost            string
-	ProxyAuthUser        string
-	ProxyAuthPass        string
-	AdminUsername        string
-	Providers            []Provider
-	Indexers             []Indexer
+	AddonPort      int
+	AddonBaseURL   string
+	LogLevel       string
+	AvailNZBURL    string
+	AvailNZBAPIKey string
+	TMDBAPIKey     string
+	TVDBAPIKey     string
+	ProxyPort      int
+	ProxyHost      string
+	ProxyAuthUser  string
+	ProxyAuthPass  string
+	AdminUsername  string
+	Providers      []Provider
+	Indexers       []Indexer
 }
 
-// ReadConfigOverrides reads all relevant environment variables once and returns
-// overrides to apply to config plus the list of config JSON keys that were set
-// (for UI "overwritten on restart" warnings).
 func ReadConfigOverrides() (ConfigOverrides, []string) {
 	var o ConfigOverrides
 	var keys []string
@@ -145,8 +126,7 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 		o.LogLevel = v
 		keys = append(keys, KeyLogLevel)
 	}
-	// Note: AvailNZBURL, AvailNZBAPIKey, TMDBAPIKey, TVDBAPIKey are not read from env vars.
-	// They are build-time constants set via ldflags and should never be modifiable at runtime.
+
 	if v := os.Getenv(NNTPProxyPort); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
 			o.ProxyPort = port
@@ -182,8 +162,6 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 	return o, keys
 }
 
-// OverrideKeys returns the config JSON keys that have environment overrides set.
-// Used by the API to tell the UI which settings show "overwritten on restart" warnings.
 func OverrideKeys() []string {
 	_, keys := ReadConfigOverrides()
 	return keys
@@ -197,8 +175,8 @@ func readProvidersFromEnv() []Provider {
 		if host == "" {
 			continue
 		}
-		priority := getEnvInt(prefix+"PRIORITY", i)   // Default priority matches provider number
-		enabled := getEnvBool(prefix+"ENABLED", true) // Default to enabled
+		priority := getEnvInt(prefix+"PRIORITY", i)
+		enabled := getEnvBool(prefix+"ENABLED", true)
 		list = append(list, Provider{
 			Name:        getEnv(prefix+"NAME", fmt.Sprintf("Provider %d", i)),
 			Host:        host,

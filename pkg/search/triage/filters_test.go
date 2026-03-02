@@ -8,7 +8,6 @@ import (
 	"streamnzb/pkg/search/parser"
 )
 
-// Test Resolution Filtering (3-tier: required / excluded)
 func TestCheckResolution(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -84,7 +83,6 @@ func TestCheckResolution(t *testing.T) {
 	}
 }
 
-// Test Codec Filtering (3-tier: required / excluded)
 func TestCheckCodec(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -160,7 +158,6 @@ func TestCheckCodec(t *testing.T) {
 	}
 }
 
-// Test File Size Filtering
 func TestCheckSize(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -183,31 +180,31 @@ func TestCheckSize(t *testing.T) {
 		{
 			name:       "Valid size passes",
 			cfg:        &config.FilterConfig{},
-			rel:        &release.Release{Size: 1024 * 1024 * 1024}, // 1 GB
+			rel:        &release.Release{Size: 1024 * 1024 * 1024},
 			shouldPass: true,
 		},
 		{
 			name:       "Too small rejected with min size",
 			cfg:        &config.FilterConfig{MinSizeGB: 2.0},
-			rel:        &release.Release{Size: 1024 * 1024 * 1024}, // 1 GB
+			rel:        &release.Release{Size: 1024 * 1024 * 1024},
 			shouldPass: false,
 		},
 		{
 			name:       "Meets min size passes",
 			cfg:        &config.FilterConfig{MinSizeGB: 1.0},
-			rel:        &release.Release{Size: 1024 * 1024 * 1024}, // 1 GB
+			rel:        &release.Release{Size: 1024 * 1024 * 1024},
 			shouldPass: true,
 		},
 		{
 			name:       "Too large rejected with max size",
 			cfg:        &config.FilterConfig{MaxSizeGB: 5.0},
-			rel:        &release.Release{Size: 10 * 1024 * 1024 * 1024}, // 10 GB
+			rel:        &release.Release{Size: 10 * 1024 * 1024 * 1024},
 			shouldPass: false,
 		},
 		{
 			name:       "Within max size passes",
 			cfg:        &config.FilterConfig{MaxSizeGB: 10.0},
-			rel:        &release.Release{Size: 5 * 1024 * 1024 * 1024}, // 5 GB
+			rel:        &release.Release{Size: 5 * 1024 * 1024 * 1024},
 			shouldPass: true,
 		},
 	}

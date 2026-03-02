@@ -25,34 +25,28 @@ import (
 )
 
 var (
-	// AvailNZB configuration set at build time via -ldflags
 	AvailNZBURL    = ""
 	AvailNZBAPIKey = ""
 
-	// TMDB Key via ldflags
 	TMDBKey = ""
-	// TVDB Key via ldflags
+
 	TVDBKey = ""
 
-	// Version set at build time via -ldflags (from release-please tag, e.g. v1.0.0)
 	Version = "dev"
 )
 
 func main() {
-	// Load environment variables for logger and bootstrap
+
 	if err := godotenv.Load(); err != nil {
 		fmt.Println("No .env file found, using environment variables")
 	}
 
-	// Default User-Agent for indexer requests (overridable via INDEXER_QUERY_HEADER / INDEXER_GRAB_HEADER)
 	env.DefaultIndexerUserAgent = "StreamNZB/" + Version
 
-	// Initialize Logger early so bootstrap can use it
 	logger.Init(env.LogLevel())
 
 	logger.Info("Starting StreamNZB", "version", Version)
 
-	// Bootstrap application
 	cfg, err := config.Load()
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("configuration error: %w", err))
@@ -86,7 +80,6 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to get state manager: %v", err))
 	}
 
-	// Migrate admin from state.json to config.json (one-time)
 	{
 		var stateAdmin struct {
 			PasswordHash       string `json:"password_hash"`
@@ -111,7 +104,6 @@ func main() {
 		}
 	}
 
-	// Migrate devices and streams from state.json to config.json (one-time)
 	{
 		if len(cfg.Devices) == 0 {
 			var stateDevices map[string]*auth.Device
@@ -173,7 +165,6 @@ func main() {
 		}
 	}
 
-	// Centralized app container - builds all components
 	application := app.New()
 	comp, err := application.Build(cfg, app.BuildOpts{
 		AvailNZBURL:    availNZBUrl,
@@ -187,7 +178,7 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to build components: %w", err))
 	}
 
-	sessionManager := session.NewManager(comp.StreamingPools, 30*time.Minute)
+	sessionManager := session.NewManager(comp.StreamingPools, comp.UsenetPool, 30*time.Minute)
 	logger.Info("Session manager initialized", "ttl", 30*time.Minute)
 
 	saveConfig := func() error { return cfg.Save() }
@@ -211,7 +202,7 @@ func main() {
 		AvailClient:          comp.AvailClient,
 		AvailNZBIndexerHosts: comp.AvailNZBIndexerHosts,
 		TMDBClient:           comp.TMDBClient,
-		TVDBClient:            comp.TVDBClient,
+		TVDBClient:           comp.TVDBClient,
 		DeviceManager:        deviceManager,
 		StreamManager:        streamManager,
 		Version:              Version,
@@ -223,23 +214,16 @@ func main() {
 	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, streamManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
 	apiServer.SetIndexerCaps(comp.IndexerCaps)
 
-	// Set embedded web handler
 	stremioServer.SetWebHandler(web.Handler())
 	stremioServer.SetAPIHandler(apiServer.Handler())
 
-	// Setup HTTP routes
 	mux := http.NewServeMux()
 	stremioServer.SetupRoutes(mux)
 
-	// Mount API routes (apiServer.Handler returns a mux with /api/...)
-	// Since both are muxes, we need to merge or mount carefully.
-	// StremioServer mounts "/" at the end.
-	// We should mount /api/ before /.
 	mux.Handle("/api/", apiServer.Handler())
 
-	// Start NNTP proxy (always enabled)
 	{
-		proxyServer, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, comp.StreamingPools, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
+		proxyServer, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, comp.UsenetPool, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
 		if err != nil {
 			initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize NNTP proxy: %v", err))
 		}
@@ -254,7 +238,6 @@ func main() {
 		}()
 	}
 
-	// Start Stremio server
 	addr := fmt.Sprintf(":%d", comp.Config.AddonPort)
 
 	logger.Info("Stremio addon server starting", "base_url", comp.Config.AddonBaseURL, "port", comp.Config.AddonPort)

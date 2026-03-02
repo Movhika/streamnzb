@@ -10,8 +10,8 @@ type audioVar struct {
 }
 
 type audio20Decoder struct {
-	chans     int // number of audio channels
-	curChan   int // current audio channel
+	chans     int
+	curChan   int
 	chanDelta int
 
 	decoders [4]huffmanDecoder

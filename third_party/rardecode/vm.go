@@ -6,15 +6,14 @@ import (
 )
 
 const (
-	// vm flag bits
-	flagC = 1          // Carry
-	flagZ = 2          // Zero
-	flagS = 0x80000000 // Sign
+	flagC = 1
+	flagZ = 2
+	flagS = 0x80000000
 
-	maxCommands = 25000000 // maximum number of commands that can be run in a program
+	maxCommands = 25000000
 
-	vmRegs = 8       // number if registers
-	vmSize = 0x40000 // memory size
+	vmRegs = 8
+	vmSize = 0x40000
 	vmMask = vmSize - 1
 )
 
@@ -23,11 +22,11 @@ var (
 )
 
 type vm struct {
-	ip    uint32         // instruction pointer
-	ipMod bool           // ip was modified
-	fl    uint32         // flag bits
-	r     [vmRegs]uint32 // registers
-	m     []byte         // memory
+	ip    uint32
+	ipMod bool
+	fl    uint32
+	r     [vmRegs]uint32
+	m     []byte
 }
 
 func (v *vm) setIP(ip uint32) {
@@ -35,26 +34,24 @@ func (v *vm) setIP(ip uint32) {
 	v.ipMod = true
 }
 
-// execute runs a list of commands on the vm.
 func (v *vm) execute(cmd []command) {
-	v.ip = 0 // reset instruction pointer
+	v.ip = 0
 	for n := 0; n < maxCommands; n++ {
 		ip := v.ip
 		if ip >= uint32(len(cmd)) {
 			return
 		}
 		ins := cmd[ip]
-		ins.f(v, ins.bm, ins.op) // run cpu instruction
+		ins.f(v, ins.bm, ins.op)
 		if v.ipMod {
-			// command modified ip, don't increment
+
 			v.ipMod = false
 		} else {
-			v.ip++ // increment ip for next command
+			v.ip++
 		}
 	}
 }
 
-// newVM creates a new RAR virtual machine using the byte slice as memory.
 func newVM(mem []byte) *vm {
 	v := new(vm)
 
@@ -76,13 +73,11 @@ type operand interface {
 	set(v *vm, byteMode bool, n uint32)
 }
 
-// Immediate Operand
 type opI uint32
 
 func (op opI) get(v *vm, bm bool) uint32    { return uint32(op) }
 func (op opI) set(v *vm, bm bool, n uint32) {}
 
-// Direct Operand
 type opD uint32
 
 func (op opD) get(v *vm, byteMode bool) uint32 {
@@ -100,7 +95,6 @@ func (op opD) set(v *vm, byteMode bool, n uint32) {
 	}
 }
 
-// Register  Operand
 type opR uint32
 
 func (op opR) get(v *vm, byteMode bool) uint32 {
@@ -118,7 +112,6 @@ func (op opR) set(v *vm, byteMode bool, n uint32) {
 	}
 }
 
-// Register Indirect Operand
 type opRI uint32
 
 func (op opRI) get(v *vm, byteMode bool) uint32 {
@@ -137,7 +130,6 @@ func (op opRI) set(v *vm, byteMode bool, n uint32) {
 	}
 }
 
-// Base Plus Index Indirect Operand
 type opBI struct {
 	r uint32
 	i uint32
@@ -163,16 +155,16 @@ type commandFunc func(v *vm, byteMode bool, op []operand)
 
 type command struct {
 	f  commandFunc
-	bm bool // is byte mode
+	bm bool
 	op []operand
 }
 
 var (
 	ops = []struct {
 		f        commandFunc
-		byteMode bool // supports byte mode
-		nops     int  // number of operands
-		jop      bool // is a jump op
+		byteMode bool
+		nops     int
+		jop      bool
 	}{
 		{mov, true, 2, false},
 		{cmp, true, 2, false},
@@ -406,7 +398,7 @@ func call(v *vm, bm bool, op []operand) {
 func ret(v *vm, bm bool, op []operand) {
 	r7 := v.r[7]
 	if r7 >= vmSize {
-		v.setIP(0xFFFFFFFF) // trigger end of program
+		v.setIP(0xFFFFFFFF)
 	} else {
 		v.setIP(binary.LittleEndian.Uint32(v.m[r7:]))
 		v.r[7] += 4
@@ -565,7 +557,7 @@ func sbb(v *vm, bm bool, op []operand) {
 }
 
 func print(v *vm, bm bool, op []operand) {
-	// TODO: ignore print for the moment
+
 }
 
 func decodeArg(br *rarBitReader, byteMode bool) (operand, error) {
@@ -573,7 +565,7 @@ func decodeArg(br *rarBitReader, byteMode bool) (operand, error) {
 	if err != nil {
 		return nil, err
 	}
-	if n > 0 { // Register
+	if n > 0 {
 		n, err = br.readBits(3)
 		return opR(n), err
 	}
@@ -581,7 +573,7 @@ func decodeArg(br *rarBitReader, byteMode bool) (operand, error) {
 	if err != nil {
 		return nil, err
 	}
-	if n == 0 { // Immediate
+	if n == 0 {
 		if byteMode {
 			n, err = br.readBits(8)
 		} else {
@@ -596,7 +588,7 @@ func decodeArg(br *rarBitReader, byteMode bool) (operand, error) {
 		return nil, err
 	}
 	if n == 0 {
-		// Register Indirect
+
 		n, err = br.readBits(3)
 		return opRI(n), err
 	}
@@ -605,7 +597,7 @@ func decodeArg(br *rarBitReader, byteMode bool) (operand, error) {
 		return nil, err
 	}
 	if n == 0 {
-		// Base + Index Indirect
+
 		n, err = br.readBits(3)
 		if err != nil {
 			return nil, err
@@ -614,7 +606,7 @@ func decodeArg(br *rarBitReader, byteMode bool) (operand, error) {
 		i, err = br.readUint32()
 		return opBI{r: uint32(n), i: i}, err
 	}
-	// Direct addressing
+
 	m, err := br.readUint32()
 	return opD(m & vmMask), err
 }

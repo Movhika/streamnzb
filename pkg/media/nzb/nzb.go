@@ -45,7 +45,6 @@ type Segment struct {
 	ID     string `xml:",chardata"`
 }
 
-// FileInfo contains parsed information about an NZB file
 type FileInfo struct {
 	File       *File
 	Filename   string
@@ -67,8 +66,6 @@ func Parse(r io.Reader) (*NZB, error) {
 	return &nzb, nil
 }
 
-// Password returns the archive password from the NZB head, if present.
-// Newznab-style NZBs may include <meta type="password">value</meta> in the head.
 func (n *NZB) Password() string {
 	for _, m := range n.Head.Meta {
 		if strings.EqualFold(m.Type, "password") {
@@ -78,7 +75,6 @@ func (n *NZB) Password() string {
 	return ""
 }
 
-// Hash generates a unique hash for this NZB (for caching)
 func (n *NZB) Hash() string {
 	if len(n.Files) == 0 {
 		return ""
@@ -93,13 +89,11 @@ func (n *NZB) Hash() string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-// CalculateID computes the SHA-1 hash of the first Message-ID for AvailNZB.
 func (n *NZB) CalculateID() string {
 	if len(n.Files) == 0 || len(n.Files[0].Segments) == 0 {
 		return ""
 	}
 
-	// Use the first segment ID of the first file as the primary Message-ID
 	msgID := n.Files[0].Segments[0].ID
 	msgID = strings.Trim(msgID, "<>")
 	h := sha1.New()
@@ -107,7 +101,6 @@ func (n *NZB) CalculateID() string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// TotalSize returns the total size of all files in bytes
 func (n *NZB) TotalSize() int64 {
 	var total int64
 	for _, file := range n.Files {
@@ -118,7 +111,6 @@ func (n *NZB) TotalSize() int64 {
 	return total
 }
 
-// GetFileInfo returns parsed information about all files in the NZB
 func (n *NZB) GetFileInfo() []*FileInfo {
 	infos := make([]*FileInfo, 0, len(n.Files))
 
@@ -131,8 +123,6 @@ func (n *NZB) GetFileInfo() []*FileInfo {
 	return infos
 }
 
-// GetLargestContentFile returns the single largest content file (video or archive), excluding samples/extras.
-// Used for compression detection: the biggest file is the main content to inspect.
 func (n *NZB) GetLargestContentFile() *FileInfo {
 	infos := n.GetFileInfo()
 	var largest *FileInfo
@@ -154,9 +144,6 @@ func (n *NZB) GetLargestContentFile() *FileInfo {
 	return largest
 }
 
-// GetPlaybackFile returns the NZB file most relevant to playback validation.
-// For RAR: the first volume (its headers must be readable for ScanArchive).
-// For everything else: the largest content file (the video or archive).
 func (n *NZB) GetPlaybackFile() *FileInfo {
 	ct := n.CompressionType()
 	if ct == "rar" {
@@ -172,22 +159,19 @@ func (n *NZB) GetPlaybackFile() *FileInfo {
 	return n.GetLargestContentFile()
 }
 
-// GetContentFiles returns all files related to the main content (e.g. all rar volumes)
 func (n *NZB) GetContentFiles() []*FileInfo {
 	infos := n.GetFileInfo()
 
-	// 1. Identify "Main" file logic extended to groups
 	var mainPattern string
 	var maxSize int64
 
-	// First pass: Find the "main" content (largest video or archive)
 	for _, info := range infos {
 		if info.IsSample || info.IsExtra {
 			continue
 		}
 
 		if info.Size > maxSize {
-			// Check if it's a valid content type
+
 			if info.IsVideo || info.Extension == ".rar" || info.Extension == ".7z" ||
 				isArchivePart(info.Extension) || isRarVolume(info.Extension) ||
 				isSplitArchivePart(info.Extension) || isRarSplitPart(info.Extension, info.Filename) {
@@ -197,7 +181,6 @@ func (n *NZB) GetContentFiles() []*FileInfo {
 		}
 	}
 
-	// If no main content found, fallback to largest file overall
 	if mainPattern == "" {
 		for _, info := range infos {
 			if info.IsSample || info.IsExtra {
@@ -210,7 +193,6 @@ func (n *NZB) GetContentFiles() []*FileInfo {
 		}
 	}
 
-	// 2. Collect all files matching the main pattern
 	var contentFiles []*FileInfo
 	if mainPattern != "" {
 		for _, info := range infos {
@@ -227,7 +209,6 @@ func (n *NZB) GetContentFiles() []*FileInfo {
 	return contentFiles
 }
 
-// logGetContentFilesEmpty logs debug info when GetContentFiles returns empty
 func logGetContentFilesEmpty(infos []*FileInfo, mainPattern string) {
 	total := len(infos)
 	samples := 0
@@ -252,21 +233,13 @@ func logGetContentFilesEmpty(infos []*FileInfo, mainPattern string) {
 		"sample_filenames", subjects)
 }
 
-// getFilePattern simplifies filename to find related parts (e.g. "movie.part01.rar" -> "movie")
 func getFilePattern(filename string) string {
-	// Very simple grouping: remove numeric suffixes and extensions
-	// "Release.Name.part01.rar" -> "release.name"
-	// "Release.Name.r00" -> "release.name"
-	// "Release.Name.mkv" -> "release.name"
 
 	s := strings.ToLower(filename)
 
-	// Remove extensions
 	ext := filepath.Ext(s)
 	s = strings.TrimSuffix(s, ext)
 
-	// Remove common multipart suffixes
-	// part01, vol01, .r01
 	if idx := strings.LastIndex(s, ".part"); idx != -1 {
 		s = s[:idx]
 	}
@@ -274,34 +247,27 @@ func getFilePattern(filename string) string {
 		s = s[:idx]
 	}
 
-	// Handle .7z.001 style
 	s = strings.TrimSuffix(s, ".7z")
 
 	return strings.Trim(s, " .-_")
 }
 
-// IsRARRelease returns true if the main content of the release is RAR-based.
 func (n *NZB) IsRARRelease() bool {
 	return n.CompressionType() == "rar"
 }
 
-// CompressionType returns the release compression type for AvailNZB: "rar", "7z", or "direct".
-// Looks at the full release: RAR only if we find .rar or .r00-style files; .001-style is RAR only
-// when the release also contains definitive RAR files (avoids 7z false positives).
 func (n *NZB) CompressionType() string {
 	contentFiles := n.GetContentFiles()
 	if len(contentFiles) == 0 {
 		return "direct"
 	}
 
-	// 1. Scan entire release for definitive 7z (.7z or .7z.001 in any filename)
 	for _, info := range contentFiles {
 		if info.Extension == ".7z" || strings.Contains(strings.ToLower(info.Filename), ".7z.001") {
 			return "7z"
 		}
 	}
 
-	// 2. Scan entire release for definitive RAR (.rar or .r00-style)
 	hasRarFiles := false
 	for _, info := range contentFiles {
 		ext := strings.ToLower(info.Extension)
@@ -311,12 +277,10 @@ func (n *NZB) CompressionType() string {
 		}
 	}
 
-	// 3. If we have .rar/.r00 anywhere, it's RAR (including when largest is .001-style)
 	if hasRarFiles {
 		return "rar"
 	}
 
-	// 4. No .rar/.r00 in release - .001-style is ambiguous, treat as direct (likely 7z)
 	largest := n.GetLargestContentFile()
 	if largest == nil {
 		return "direct"
@@ -325,12 +289,10 @@ func (n *NZB) CompressionType() string {
 	return ct
 }
 
-// compressionTypeFromFileWithReason returns compression type and a short reason for debugging.
 func compressionTypeFromFileWithReason(filename, ext string) (string, string) {
 	ext = strings.ToLower(ext)
 	filenameLower := strings.ToLower(filename)
 
-	// 7z first: .7z, .7z.001 (ext would be .001 but filename contains .7z.001)
 	if ext == ".7z" || strings.Contains(filenameLower, ".7z.001") {
 		return "7z", "ext=.7z or contains .7z.001"
 	}
@@ -338,7 +300,6 @@ func compressionTypeFromFileWithReason(filename, ext string) (string, string) {
 		return "7z", "suffix .7z.001/.7z.0001"
 	}
 
-	// RAR: .rar, .r00-.r99, .r001+ (RAR-specific patterns only).
 	if ext == ".rar" {
 		return "rar", "ext=.rar"
 	}
@@ -349,7 +310,6 @@ func compressionTypeFromFileWithReason(filename, ext string) (string, string) {
 	return "direct", ""
 }
 
-// isRarVolume matches .r00, .r01, .r99, .r001, .r100, .r999, etc.
 func isRarVolume(ext string) bool {
 	if len(ext) < 4 || !strings.HasPrefix(ext, ".r") {
 		return false
@@ -362,7 +322,6 @@ func isRarVolume(ext string) bool {
 	return true
 }
 
-// isRarSplitPart matches .001, .002, .0001 etc. when not 7z (caller checks 7z first).
 func isRarSplitPart(ext, filename string) bool {
 	if len(ext) < 3 || ext[0] != '.' {
 		return false
@@ -375,7 +334,6 @@ func isRarSplitPart(ext, filename string) bool {
 	return true
 }
 
-// GetMainVideoFile returns the main video file from the NZB (Deprecated: use GetContentFiles)
 func (n *NZB) GetMainVideoFile() *FileInfo {
 	files := n.GetContentFiles()
 	if len(files) > 0 {
@@ -384,26 +342,21 @@ func (n *NZB) GetMainVideoFile() *FileInfo {
 	return nil
 }
 
-// analyzeFile extracts information from a file's subject line
 func analyzeFile(file *File) *FileInfo {
-	// Extract filename from subject or poster. Some indexers (e.g. NZBgeek) put
-	// the Usenet subject line in poster instead of subject; fall back to poster.
+
 	subject := file.Subject
 	if subject == "" {
 		subject = file.Poster
 	}
 	filename := fileutil.ExtractFilename(subject)
 
-	// Calculate total size
 	var size int64
 	for _, seg := range file.Segments {
 		size += seg.Bytes
 	}
 
-	// Get extension
 	ext := strings.ToLower(filepath.Ext(filename))
 
-	// Parse the filename for metadata
 	parsed := ptt.Parse(filename)
 
 	info := &FileInfo{
@@ -414,7 +367,6 @@ func analyzeFile(file *File) *FileInfo {
 		ParsedInfo: parsed,
 	}
 
-	// Determine file type
 	info.IsVideo = fileutil.IsVideoOrArchiveExtension(ext)
 	info.IsSample = isSampleFile(filename)
 	info.IsExtra = isExtraFile(filename, ext)
@@ -422,7 +374,6 @@ func analyzeFile(file *File) *FileInfo {
 	return info
 }
 
-// isArchivePart returns true for .r00, .r01, .r99 (RAR volume naming).
 func isArchivePart(ext string) bool {
 	if len(ext) == 4 && strings.HasPrefix(ext, ".r") {
 		for _, c := range ext[2:] {
@@ -435,8 +386,6 @@ func isArchivePart(ext string) bool {
 	return false
 }
 
-// isSplitArchivePart matches .001, .002, .117, etc. (RAR/7z split volume naming).
-// 7z is checked before this in CompressionType so .7z.001 files are not misclassified.
 func isSplitArchivePart(ext string) bool {
 	if len(ext) != 4 {
 		return false
@@ -447,20 +396,18 @@ func isSplitArchivePart(ext string) bool {
 		ext[3] >= '0' && ext[3] <= '9'
 }
 
-// isSampleFile checks if the filename indicates a sample
 func isSampleFile(filename string) bool {
 	lower := strings.ToLower(filename)
 	return strings.Contains(lower, "sample") ||
 		strings.Contains(lower, "preview")
 }
 
-// isExtraFile checks if the file is an extra (subtitle, NFO, etc.)
 func isExtraFile(filename string, ext string) bool {
 	extraExts := map[string]bool{
 		".nfo": true, ".txt": true, ".srt": true, ".sub": true,
 		".idx": true, ".ass": true, ".ssa": true, ".vtt": true,
 		".jpg": true, ".png": true, ".gif": true,
-		// Parity files
+
 		".par2": true,
 	}
 

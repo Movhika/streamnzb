@@ -185,6 +185,11 @@ export function SearchPage({ authToken }) {
     fetchReleases('series', id)
   }, [selected, selectedSeason, selectedEpisode, fetchReleases])
 
+  const streams = releasesData?.streams ?? []
+
+  // Auto-select the first stream for sorting when data arrives
+  const activeSortStream = sortByStreamId ?? streams[0]?.id ?? null
+
   const filteredAndSortedReleases = releasesData?.releases
     ? (() => {
         let list = [...releasesData.releases]
@@ -197,18 +202,19 @@ export function SearchPage({ authToken }) {
             return tag?.fits
           })
         }
-        if (sortByStreamId) {
+        if (activeSortStream) {
+          const availOrder = { Available: 2, Unknown: 1, Unavailable: 0 }
           list.sort((a, b) => {
-            const sa = a.stream_tags?.find((t) => t.stream_id === sortByStreamId)?.score ?? 0
-            const sb = b.stream_tags?.find((t) => t.stream_id === sortByStreamId)?.score ?? 0
-            return sb - sa
+            const sa = a.stream_tags?.find((t) => t.stream_id === activeSortStream)?.score ?? 0
+            const sb = b.stream_tags?.find((t) => t.stream_id === activeSortStream)?.score ?? 0
+            if (sb !== sa) return sb - sa
+            // Tie-break by availability so Available sorts first when scores match
+            return (availOrder[b.availability] ?? 0) - (availOrder[a.availability] ?? 0)
           })
         }
         return list
       })()
     : []
-
-  const streams = releasesData?.streams ?? []
 
   return (
     <div className="py-4 md:py-6 px-4 lg:px-6">
@@ -428,19 +434,12 @@ export function SearchPage({ authToken }) {
                     </Badge>
                   ))}
                   <span className="text-muted-foreground ml-2">Sort by:</span>
-                  <Badge
-                    variant={sortByStreamId === null ? "secondary" : "outline"}
-                    className="cursor-pointer"
-                    onClick={() => setSortByStreamId(null)}
-                  >
-                    Default
-                  </Badge>
                   {streams.map((st) => (
                     <Badge
                       key={st.id}
-                      variant={sortByStreamId === st.id ? "default" : "outline"}
+                      variant={activeSortStream === st.id ? "default" : "outline"}
                       className="cursor-pointer"
-                      onClick={() => setSortByStreamId((prev) => (prev === st.id ? null : st.id))}
+                      onClick={() => setSortByStreamId(st.id)}
                     >
                       {st.name} priority
                     </Badge>

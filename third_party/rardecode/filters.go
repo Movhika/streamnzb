@@ -16,18 +16,13 @@ const (
 	vmFixedGlobalSize = 0x40
 )
 
-// v3Filter is the interface type for RAR V3 filters.
-// v3Filter performs the same function as the filter type, except that it also takes
-// the initial register values r, and global data as input for the RAR V3 VM.
 type v3Filter func(r map[int]uint32, global, buf []byte, offset int64) ([]byte, error)
 
 var (
-	// standardV3Filters is a list of known filters. We can replace the use of a vm
-	// filter with a custom filter function.
 	standardV3Filters = []struct {
-		crc uint32   // crc of code byte slice for filter
-		len int      // length of code byte slice for filter
-		f   v3Filter // replacement filter function
+		crc uint32
+		len int
+		f   v3Filter
 	}{
 		{0xad576887, 53, e8FilterV3},
 		{0x3cd7e57e, 57, e8e9FilterV3},
@@ -37,7 +32,6 @@ var (
 		{0xbc85e701, 216, filterAudioV3},
 	}
 
-	// itanium filter byte masks
 	byteMask = []int{4, 4, 6, 6, 0, 0, 7, 7, 4, 4, 0, 0, 4, 4, 0, 0}
 )
 
@@ -121,7 +115,7 @@ func filterDelta(n int, buf []byte) ([]byte, error) {
 	var res []byte
 	l := len(buf)
 	if cap(buf) >= 2*l {
-		res = buf[l : 2*l] // use unused capacity
+		res = buf[l : 2*l]
 	} else {
 		res = make([]byte, l, 2*l)
 	}
@@ -159,7 +153,7 @@ func filterRGBV3(r map[int]uint32, global, buf []byte, offset int64) ([]byte, er
 	var res []byte
 	l := len(buf)
 	if cap(buf) >= 2*l {
-		res = buf[l : 2*l] // use unused capacity
+		res = buf[l : 2*l]
 	} else {
 		res = make([]byte, l, 2*l)
 	}
@@ -204,7 +198,7 @@ func filterAudioV3(r map[int]uint32, global, buf []byte, offset int64) ([]byte, 
 	var res []byte
 	l := len(buf)
 	if cap(buf) >= 2*l {
-		res = buf[l : 2*l] // use unused capacity
+		res = buf[l : 2*l]
 	} else {
 		res = make([]byte, l, 2*l)
 	}
@@ -293,14 +287,12 @@ type vmFilter struct {
 	code      []command
 }
 
-// execute implements v3filter type for VM based RAR 3 filters.
 func (f *vmFilter) execute(r map[int]uint32, global, buf []byte, offset int64) ([]byte, error) {
 	if len(buf) > vmGlobalAddr {
 		return buf, ErrInvalidFilter
 	}
 	v := newVM(buf)
 
-	// register setup
 	v.r[3] = vmGlobalAddr
 	v.r[4] = uint32(len(buf))
 	v.r[5] = f.execCount
@@ -308,10 +300,8 @@ func (f *vmFilter) execute(r map[int]uint32, global, buf []byte, offset int64) (
 		v.r[i] = n
 	}
 
-	// vm global data memory block
 	vg := v.m[vmGlobalAddr : vmGlobalAddr+vmGlobalSize]
 
-	// initialize fixed global memory
 	for i, n := range v.r[:vmRegs-1] {
 		binary.LittleEndian.PutUint32(vg[i*4:], n)
 	}
@@ -319,13 +309,11 @@ func (f *vmFilter) execute(r map[int]uint32, global, buf []byte, offset int64) (
 	binary.LittleEndian.PutUint64(vg[0x24:], uint64(offset))
 	binary.LittleEndian.PutUint32(vg[0x2c:], f.execCount)
 
-	// registers
 	v.r[6] = uint32(offset)
 
-	// copy program global memory
 	var n int
 	if len(f.global) > 0 {
-		n = copy(vg[vmFixedGlobalSize:], f.global) // use saved global instead
+		n = copy(vg[vmFixedGlobalSize:], f.global)
 	} else {
 		n = copy(vg[vmFixedGlobalSize:], global)
 	}
@@ -335,14 +323,12 @@ func (f *vmFilter) execute(r map[int]uint32, global, buf []byte, offset int64) (
 
 	f.execCount++
 
-	// keep largest global buffer
 	if cap(global) > cap(f.global) {
 		f.global = global[:0]
 	} else if len(f.global) > 0 {
 		f.global = f.global[:0]
 	}
 
-	// check for global data to be saved for next program execution
 	globalSize := binary.LittleEndian.Uint32(vg[0x30:])
 	if globalSize > 0 {
 		if globalSize > vmGlobalSize-vmFixedGlobalSize {
@@ -356,28 +342,23 @@ func (f *vmFilter) execute(r map[int]uint32, global, buf []byte, offset int64) (
 		copy(f.global, vg[vmFixedGlobalSize:])
 	}
 
-	// find program output
 	length := binary.LittleEndian.Uint32(vg[0x1c:]) & vmMask
 	start := binary.LittleEndian.Uint32(vg[0x20:]) & vmMask
 	if start+length > vmSize {
-		// TODO: error
+
 		start = 0
 		length = 0
 	}
 	if start != 0 && cap(v.m) > cap(buf) {
-		// Initial buffer was to small for vm.
-		// Copy output to beginning of vm memory so that decodeReader
-		// will re-use the newly allocated vm memory and we will not
-		// have to reallocate again next time.
+
 		copy(v.m, v.m[start:start+length])
 		start = 0
 	}
 	return v.m[start : start+length], nil
 }
 
-// getV3Filter returns a V3 filter function from a code byte slice.
 func getV3Filter(code []byte) (v3Filter, error) {
-	// check if filter is a known standard filter
+
 	c := crc32.ChecksumIEEE(code)
 	for _, f := range standardV3Filters {
 		if f.crc == c && f.len == len(code) {
@@ -385,11 +366,9 @@ func getV3Filter(code []byte) (v3Filter, error) {
 		}
 	}
 
-	// create new vm filter
 	f := new(vmFilter)
-	r := newRarBitReader(bytes.NewReader(code[1:])) // skip first xor byte check
+	r := newRarBitReader(bytes.NewReader(code[1:]))
 
-	// read static data
 	n, err := r.readBits(1)
 	if err != nil {
 		return nil, err

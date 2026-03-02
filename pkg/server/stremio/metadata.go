@@ -9,8 +9,6 @@ import (
 	"streamnzb/pkg/search/triage"
 )
 
-// buildStreamMetadata creates a rich Stream object with PTT metadata.
-// rel is the canonical release for deduplication; may be nil for legacy paths.
 func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB float64, totalBytes int64, rel *release.Release) Stream {
 	meta := cand.Metadata
 
@@ -35,16 +33,13 @@ func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB flo
 	}
 }
 
-// buildStreamName creates the left-side name (provider badge + quality)
 func buildStreamName(meta *parser.ParsedRelease, group string) string {
 	parts := []string{}
 
-	// Resolution
 	parts = append(parts, strings.ToUpper(group))
 
-	// Source type
 	if meta.Quality != "" {
-		// Simplify quality string
+
 		quality := meta.Quality
 		quality = strings.ReplaceAll(quality, "Blu-ray", "BluRay")
 		quality = strings.ReplaceAll(quality, "WEB-DL", "WEB")
@@ -54,11 +49,9 @@ func buildStreamName(meta *parser.ParsedRelease, group string) string {
 	return strings.Join(parts, " ")
 }
 
-// buildDetailedDescription creates the right-side technical details
 func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filename string) string {
 	lines := []string{}
 
-	// Line 1: Source + Codec + Quality
 	line1 := []string{}
 	if meta.Quality != "" {
 		line1 = append(line1, fmt.Sprintf("📡 %s", meta.Quality))
@@ -78,13 +71,11 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 		lines = append(lines, strings.Join(line1, " "))
 	}
 
-	// Line 2: Visual Tags (HDR/3D) + Audio
-	// PTT ThreeD formats: "3D", "3D HSBS", "3D SBS", "3D HOU", "3D OU"
 	line2 := []string{}
 	visualTags := make([]string, 0)
 	visualTags = append(visualTags, meta.HDR...)
 	if meta.ThreeD != "" {
-		// Preserve the actual 3D format from PTT
+
 		visualTags = append(visualTags, meta.ThreeD)
 	}
 	if len(visualTags) > 0 {
@@ -102,7 +93,6 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 		lines = append(lines, strings.Join(line2, " • "))
 	}
 
-	// Line 3: Special flags
 	flags := []string{}
 	if meta.Proper {
 		flags = append(flags, "⚡ PROPER")
@@ -123,7 +113,6 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 		lines = append(lines, strings.Join(flags, " "))
 	}
 
-	// Line 4: Size + Release Group
 	line4 := []string{}
 	if sizeGB > 0 {
 		line4 = append(line4, fmt.Sprintf("💾 %.2f GB", sizeGB))
@@ -135,13 +124,11 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 	}
 	lines = append(lines, strings.Join(line4, " • "))
 
-	// Line 5: Languages
 	if len(meta.Languages) > 0 {
 		langs := strings.Join(meta.Languages, " | ")
 		lines = append(lines, fmt.Sprintf("🌍 %s", langs))
 	}
 
-	// Line 6: Filename
 	lines = append(lines, fmt.Sprintf("📄 %s", filename))
 
 	return strings.Join(lines, "\n")

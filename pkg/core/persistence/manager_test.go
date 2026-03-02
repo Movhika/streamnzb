@@ -21,7 +21,6 @@ func TestStateManager(t *testing.T) {
 		t.Fatalf("failed to get manager: %v", err)
 	}
 
-	// Test Set and Get
 	key := "test_key"
 	value := map[string]string{"foo": "bar"}
 	if err := mgr.Set(key, value); err != nil {
@@ -40,13 +39,11 @@ func TestStateManager(t *testing.T) {
 		t.Errorf("expected bar, got %s", retrieved["foo"])
 	}
 
-	// Flush so debounced save runs before we reload (Set() schedules save after 2s)
 	if err := mgr.Flush(); err != nil {
 		t.Fatalf("failed to flush: %v", err)
 	}
 
-	// Test Persistence
-	globalManager = nil // Reset global for reload
+	globalManager = nil
 	mgr2, err := GetManager(tempDir)
 	if err != nil {
 		t.Fatalf("failed to reload manager: %v", err)
@@ -73,7 +70,6 @@ func TestMigration(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Create legacy usage.json
 	usageData := map[string]interface{}{
 		"indexer1": map[string]interface{}{
 			"api_hits_used":  10,
@@ -84,14 +80,12 @@ func TestMigration(t *testing.T) {
 	data, _ := json.Marshal(usageData)
 	os.WriteFile(usagePath, data, 0644)
 
-	// Initialize manager
 	globalManager = nil
 	mgr, err := GetManager(tempDir)
 	if err != nil {
 		t.Fatalf("failed to get manager: %v", err)
 	}
 
-	// Verify migration
 	var migratedUsage map[string]interface{}
 	found, err := mgr.Get("indexer_usage", &migratedUsage)
 	if err != nil || !found {
@@ -106,7 +100,6 @@ func TestMigration(t *testing.T) {
 		t.Errorf("expected 10, got %v", indexer1["api_hits_used"])
 	}
 
-	// Verify usage.json is gone
 	if _, err := os.Stat(usagePath); !os.IsNotExist(err) {
 		t.Error("usage.json should have been deleted after migration")
 	}

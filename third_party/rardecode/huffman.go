@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	maxCodeLength = 15 // maximum code length in bits
+	maxCodeLength = 15
 	maxQuickBits  = 10
 	maxQuickSize  = 1 << maxQuickBits
 )
@@ -97,11 +97,11 @@ func (h *huffmanDecoder) readSym(r bitReader) (int, error) {
 		if err != io.EOF {
 			return 0, err
 		}
-		// fall back to 1 bit at a time if we read past EOF
+
 		for bits = 1; bits <= maxCodeLength; bits++ {
 			b, err := r.readBits(1)
 			if err != nil {
-				return 0, err // not enough bits return error
+				return 0, err
 			}
 			v |= uint16(b) << (maxCodeLength - bits)
 			if v < h.limit[bits] {
@@ -135,8 +135,6 @@ func (h *huffmanDecoder) readSym(r bitReader) (int, error) {
 	return int(h.symbol[pos]), nil
 }
 
-// readCodeLengthTable reads a new code length table into codeLength from br.
-// If addOld is set the old table is added to the new one.
 func readCodeLengthTable(br bitReader, codeLength []byte, addOld bool) error {
 	var bitlength [20]byte
 	for i := 0; i < len(bitlength); i++ {
@@ -150,7 +148,7 @@ func readCodeLengthTable(br bitReader, codeLength []byte, addOld bool) error {
 				return err
 			}
 			if cnt > 0 {
-				// array already zero'd dont need to explicitly set
+
 				i += cnt + 1
 				continue
 			}

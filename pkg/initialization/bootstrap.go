@@ -13,22 +13,22 @@ import (
 	"streamnzb/pkg/indexer/easynews"
 	"streamnzb/pkg/indexer/newznab"
 	"streamnzb/pkg/usenet/nntp"
+	"streamnzb/pkg/usenet/pool"
 	"strings"
 	"sync"
 )
 
-// InitializedComponents holds all the components initialized during bootstrap
 type InitializedComponents struct {
 	Config               *config.Config
 	Indexer              indexer.Indexer
 	ProviderPools        map[string]*nntp.ClientPool
-	ProviderOrder        []string // Provider names in priority order (for single-provider validation)
+	ProviderOrder        []string
 	StreamingPools       []*nntp.ClientPool
-	AvailNZBIndexerHosts []string                 // Underlying indexer hostnames for AvailNZB GetReleases filter (e.g. nzbgeek.info)
-	IndexerCaps          map[string]*indexer.Caps // Capabilities per indexer name (from CAPS endpoint)
+	UsenetPool           *pool.Pool
+	AvailNZBIndexerHosts []string
+	IndexerCaps          map[string]*indexer.Caps
 }
 
-// WaitForInputAndExit prints an error and waits for user input before exiting
 func WaitForInputAndExit(err error) {
 	logger.Error("CRITICAL ERROR", "err", err)
 	fmt.Println("\nPress Enter to exit...")
@@ -37,9 +37,8 @@ func WaitForInputAndExit(err error) {
 	os.Exit(1)
 }
 
-// Bootstrap coordinates the application startup sequence
 func Bootstrap() (*InitializedComponents, error) {
-	// 1. Load configuration
+
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("configuration error: %w", err)
@@ -48,7 +47,6 @@ func Bootstrap() (*InitializedComponents, error) {
 	return BuildComponents(cfg)
 }
 
-// hostFromIndexerURL returns hostname for AvailNZB (lowercase, no api. prefix).
 func hostFromIndexerURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -58,27 +56,23 @@ func hostFromIndexerURL(rawURL string) string {
 	return strings.TrimPrefix(h, "api.")
 }
 
-// BuildComponents builds all system modules from the provided configuration
 func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
-	// 2. Initialize Indexers
+
 	var indexers []indexer.Indexer
 	var availNzbHosts []string
 	seenHost := make(map[string]bool)
 
-	// Initialize State Manager
 	dataDir := paths.GetDataDir()
 	stateMgr, err := persistence.GetManager(dataDir)
 	if err != nil {
 		logger.Error("Failed to initialize state manager", "err", err)
 	}
 
-	// Initialize Usage Manager
 	usageMgr, err := indexer.GetUsageManager(stateMgr)
 	if err != nil {
 		logger.Error("Failed to initialize usage manager", "err", err)
 	}
 
-	// Initialize Internal Indexers (unified list)
 	for _, idxCfg := range cfg.Indexers {
 		if idxCfg.URL == "" {
 			continue
@@ -89,10 +83,9 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 
 		indexerType := idxCfg.Type
 		if indexerType == "" {
-			indexerType = "newznab" // Default
+			indexerType = "newznab"
 		}
-		// Aggregators (NZBHydra, Prowlarr, or type=aggregator) speak Newznab API; use same client but do not
-		// add their host to AvailNZB indexer filter (AvailNZB tracks underlying indexers; we match by DetailsURL/comments later).
+
 		isAggregator := indexerType == "aggregator" || indexerType == "nzbhydra" || indexerType == "prowlarr"
 		if indexerType == "aggregator" {
 			indexerType = "newznab"
@@ -100,12 +93,12 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 
 		switch indexerType {
 		case "easynews":
-			// Determine download base URL (for proxying NZB downloads)
+
 			downloadBase := cfg.AddonBaseURL
 			if downloadBase == "" {
 				downloadBase = "http://127.0.0.1:7000"
 			}
-			// Remove trailing slash
+
 			if len(downloadBase) > 0 && downloadBase[len(downloadBase)-1] == '/' {
 				downloadBase = downloadBase[:len(downloadBase)-1]
 			}
@@ -121,7 +114,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 				seenHost[h] = true
 				availNzbHosts = append(availNzbHosts, h)
 			}
-		default: // newznab
+		default:
 			client := newznab.NewClient(idxCfg, usageMgr)
 			indexers = append(indexers, client)
 			logger.Info("Initialized Newznab indexer", "name", idxCfg.Name, "url", idxCfg.URL)
@@ -140,7 +133,6 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 
 	aggregator := indexer.NewAggregator(indexers...)
 
-	// Fetch capabilities for all indexers that support CAPS (in parallel)
 	indexerCaps := make(map[string]*indexer.Caps)
 	var capsMu sync.Mutex
 	var capsWg sync.WaitGroup
@@ -165,11 +157,9 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		logger.Info("Fetched indexer capabilities", "count", len(indexerCaps))
 	}
 
-	// 3. Initialize NNTP provider pools
 	providerPools := make(map[string]*nntp.ClientPool)
 	var streamingPools []*nntp.ClientPool
 
-	// Initialize provider usage manager (may be nil if stateMgr failed)
 	var providerUsageMgr *nntp.ProviderUsageManager
 	if stateMgr != nil {
 		if mgr, err := nntp.GetProviderUsageManager(stateMgr); err != nil {
@@ -179,16 +169,14 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		}
 	}
 
-	// Sort providers by priority (lower number = higher priority) and filter disabled ones
-	// Note: Migration from old config format happens in config.Load(), not here
 	providers := make([]config.Provider, 0, len(cfg.Providers))
 	for _, p := range cfg.Providers {
-		// Only include enabled providers (check pointer)
+
 		if p.Enabled != nil && *p.Enabled {
 			providers = append(providers, p)
 		}
 	}
-	// Sort by priority (ascending: 1, 2, 3...)
+
 	sort.Slice(providers, func(i, j int) bool {
 		priI := 999
 		priJ := 999
@@ -214,19 +202,16 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 			provider.Connections,
 		)
 
-		// Validate credentials/connectivity (502 auth check)
 		if err := pool.Validate(); err != nil {
 			logger.Error("Failed to initialize provider", "name", provider.Name, "host", provider.Host, "err", err)
 			continue
 		}
 
-		// Use Host as fallback if Name is empty (common for UI-added providers)
 		poolName := provider.Name
 		if poolName == "" {
 			poolName = provider.Host
 		}
 
-		// Restore persisted usage if available and configure persistence
 		if providerUsageMgr != nil {
 			if usage := providerUsageMgr.GetUsage(poolName); usage != nil {
 				pool.RestoreTotalBytes(usage.TotalBytes)
@@ -243,12 +228,42 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		logger.Warn("!! No valid NNTP providers initialized. Check your credentials in the web UI !!")
 	}
 
+	var usenetPool *pool.Pool
+	if len(providerOrder) > 0 {
+		providerConfigs := make([]pool.ProviderConfig, 0, len(providerOrder))
+		for i, name := range providerOrder {
+			cp := providerPools[name]
+			if cp == nil {
+				continue
+			}
+			providerConfigs = append(providerConfigs, pool.ProviderConfig{
+				ID:         name,
+				Priority:   i,
+				IsBackup:   false,
+				ClientPool: cp,
+			})
+		}
+		if len(providerConfigs) > 0 {
+			var err error
+			usenetPool, err = pool.NewPool(&pool.Config{
+				Providers:    providerConfigs,
+				SegmentCache: pool.NewMemorySegmentCache(),
+			})
+			if err != nil {
+				logger.Error("Failed to build usenet pool", "err", err)
+			} else {
+				logger.Info("Usenet pool initialized", "providers", len(providerConfigs))
+			}
+		}
+	}
+
 	return &InitializedComponents{
 		Config:               cfg,
 		Indexer:              aggregator,
 		ProviderPools:        providerPools,
 		ProviderOrder:        providerOrder,
 		StreamingPools:       streamingPools,
+		UsenetPool:           usenetPool,
 		AvailNZBIndexerHosts: availNzbHosts,
 		IndexerCaps:          indexerCaps,
 	}, nil

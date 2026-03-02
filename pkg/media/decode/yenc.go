@@ -4,17 +4,19 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"regexp"
+	"strconv"
 
 	"github.com/javi11/rapidyenc"
 )
 
-// normalizeCRLF wraps r to convert lone LF to CRLF before rapidyenc.
-// rapidyenc expects CRLF; some NNTP servers send LF-only.
+var sizeMismatchRE = regexp.MustCompile(`expected size (\d+) but got (\d+)`)
+
 type crlfReader struct {
-	r     io.Reader
-	buf   []byte
-	last  byte
-	off   int
+	r    io.Reader
+	buf  []byte
+	last byte
+	off  int
 }
 
 func (c *crlfReader) Read(p []byte) (int, error) {
@@ -28,7 +30,7 @@ func (c *crlfReader) Read(p []byte) (int, error) {
 				out++
 				c.last = '\r'
 				if out >= len(p) {
-					c.off-- // put \n back for next Read
+					c.off--
 					return out, nil
 				}
 			}
@@ -50,24 +52,27 @@ func (c *crlfReader) Read(p []byte) (int, error) {
 
 func normalizeCRLF(r io.Reader) io.Reader { return &crlfReader{r: r} }
 
-// Decode reads from r, decodes yEnc, and writes to w.
-// It returns the number of bytes written and the filename found in the header.
-// Frame represents a decoded segment.
 type Frame struct {
 	Data     []byte
 	FileName string
 }
 
-// DecodeToBytes decodes the reader into a byte slice.
+const maxDecodeSizeTolerance = 256
+
 func DecodeToBytes(r io.Reader) (*Frame, error) {
 	dec := rapidyenc.NewDecoder(normalizeCRLF(r))
 	buf := new(bytes.Buffer)
 	_, err := io.Copy(buf, dec)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
+	if err == nil || errors.Is(err, io.EOF) {
+		return &Frame{Data: buf.Bytes(), FileName: dec.Meta.FileName}, nil
 	}
-	return &Frame{
-		Data:     buf.Bytes(),
-		FileName: dec.Meta.FileName,
-	}, nil
+	if sub := sizeMismatchRE.FindStringSubmatch(err.Error()); len(sub) == 3 {
+		expected, _ := strconv.ParseInt(sub[1], 10, 64)
+		got, _ := strconv.ParseInt(sub[2], 10, 64)
+		shortfall := expected - got
+		if shortfall > 0 && shortfall <= maxDecodeSizeTolerance && int64(buf.Len()) == got {
+			return &Frame{Data: buf.Bytes(), FileName: dec.Meta.FileName}, nil
+		}
+	}
+	return nil, err
 }

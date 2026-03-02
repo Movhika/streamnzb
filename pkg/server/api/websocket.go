@@ -20,11 +20,11 @@ import (
 	"streamnzb/pkg/indexer/newznab"
 	"streamnzb/pkg/initialization"
 	"streamnzb/pkg/search/triage"
+	"streamnzb/pkg/server/stremio"
 	"streamnzb/pkg/services/availnzb"
 	"streamnzb/pkg/services/metadata/tmdb"
 	"streamnzb/pkg/services/metadata/tvdb"
 	"streamnzb/pkg/usenet/nntp"
-	"streamnzb/pkg/server/stremio"
 	"streamnzb/pkg/usenet/validation"
 
 	"github.com/gorilla/websocket"
@@ -32,7 +32,7 @@ import (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allowing all origins for development
+		return true
 	},
 }
 
@@ -42,10 +42,10 @@ type WSMessage struct {
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// Get authenticated device from context (set by auth middleware)
+
 	device, ok := auth.DeviceFromContext(r)
 	if !ok {
-		// Try cookie fallback
+
 		cookie, err := r.Cookie("auth_session")
 		if err == nil && cookie != nil {
 			device, err = s.deviceManager.AuthenticateToken(cookie.Value, s.config.GetAdminUsername(), s.config.AdminToken)
@@ -69,16 +69,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Create Client with device
 	client := &Client{
 		conn:   conn,
 		send:   make(chan WSMessage, 256),
 		device: device,
-		user:   device, // Backwards compatibility alias
+		user:   device,
 	}
 	s.AddClient(client)
 
-	// Ensure cleanup
 	defer func() {
 		s.RemoveClient(client)
 		conn.Close()
@@ -86,10 +84,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debug("WS Client connected", "remote", r.RemoteAddr)
 
-	ticker := time.NewTicker(1 * time.Second) // Throttled to reduce load from collectStats
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	// Notify stats, log history, and auth info on connect (config and indexer_caps are now via REST API).
 	go func() {
 		stats := s.collectStats()
 		payload, _ := json.Marshal(stats)
@@ -111,15 +108,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		trySendWS(client, WSMessage{Type: "auth_info", Payload: authPayload})
 	}()
 
-	// Read loop (Client -> Server)
 	go func() {
 		defer func() {
-			// When read fails, we close the connection, which triggers the write loop to exit via error or context?
-			// Actually, usually we close the done channel or something.
-			// Here we just let the write loop detect the closed channel (via RemoveClient)
-			// But RemoveClient is called in defer of the main function.
-			// We need to signal main function to exit.
-			// Best way: Read loop is a separate goroutine. Main function is Write loop.
+
 		}()
 
 		for {
@@ -128,22 +119,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					logger.Warn("WS read error", "err", err)
 				}
-				// Signal disconnect
-				// We can close the connection here?
-				// Or use a channel.
-				// Since we can't easily break the main loop from here,
-				// we'll rely on the write loop failing or us closing the conn.
+
 				conn.Close()
 				return
 			}
 
-			// WebSocket is only for stats and logs; all other operations use REST API.
-			// Ignore any legacy client commands (get_config, save_config, etc.).
 			_ = msg
 		}
 	}()
 
-	// Write loop (Server -> Client)
 	for {
 		select {
 		case <-ticker.C:
@@ -160,8 +144,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// trySendWS sends msg to the client's channel without blocking. Returns true if sent.
-// Use for status/response messages so handlers don't hang when the client is slow.
 func trySendWS(client *Client, msg WSMessage) bool {
 	select {
 	case client.send <- msg:
@@ -178,7 +160,7 @@ func (s *Server) sendStats(client *Client) {
 }
 
 func (s *Server) sendConfig(client *Client) {
-	// Admin always gets global config, devices get merged config. Never send admin hash/token to client.
+
 	var cfg config.Config
 	if client.device != nil && client.device.Username == s.config.GetAdminUsername() {
 		cfg = s.config.RedactForAPI()
@@ -212,7 +194,7 @@ func (s *Server) sendIndexerCaps(client *Client) {
 }
 
 func (s *Server) sendLogHistory(client *Client) {
-	// Fetch history from global logger
+
 	history := logger.GetHistory()
 	payload, _ := json.Marshal(history)
 
@@ -226,9 +208,8 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 		return
 	}
 
-	// Admin saves to global config, regular devices don't save via this endpoint
 	if client.device != nil && client.device.Username == s.config.GetAdminUsername() {
-		// Validate settings before saving
+
 		fieldErrors := s.validateConfig(&newCfg)
 		if len(fieldErrors) > 0 {
 			errorPayload, _ := json.Marshal(map[string]interface{}{
@@ -240,22 +221,16 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			return
 		}
 
-		// Preserve effective values for any key that has an env override, so we don't
-		// overwrite them with form data (they would be overridden on next restart anyway).
-		// Note: ldflags variables are never part of config - they're build-time constants
-		// used directly in main.go and cannot be overridden.
 		s.mu.RLock()
 		currentCfg := s.config
 		currentLoadedPath := s.config.LoadedPath
 		s.mu.RUnlock()
 		config.CopyEnvOverridesFrom(currentCfg, &newCfg)
-		// Admin credentials and token are never sent from the UI; preserve from current config.
+
 		newCfg.AdminPasswordHash = currentCfg.AdminPasswordHash
 		newCfg.AdminToken = currentCfg.AdminToken
 		newCfg.AdminMustChangePassword = currentCfg.AdminMustChangePassword
 
-		// Apply provider defaults migration (only for old configs with priority=0)
-		// This ensures old configs get migrated when saving from UI
 		newCfg.ApplyProviderDefaults()
 
 		if currentLoadedPath == "" {
@@ -263,7 +238,6 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 		}
 		newCfg.LoadedPath = currentLoadedPath
 
-		// Update global config
 		s.mu.Lock()
 		s.config = &newCfg
 		s.mu.Unlock()
@@ -275,18 +249,15 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 
 		s.reloadConfigAsync(&newCfg)
 
-		// Push updated config + caps back to client
 		s.sendConfig(client)
 		s.sendIndexerCaps(client)
 		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded."}`)})
 		return
 	}
 
-	// Regular devices cannot save via this endpoint
 	trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save global configuration"}`)})
 }
 
-// reloadConfigAsync runs config reload in a goroutine (used by both WS and REST PUT /api/config).
 func (s *Server) reloadConfigAsync(newCfg *config.Config) {
 	go func() {
 		if s.app != nil {
@@ -304,7 +275,7 @@ func (s *Server) reloadConfigAsync(newCfg *config.Config) {
 			logger.Error("Reload: BuildComponents failed", "err", err)
 			return
 		}
-		validator := validation.NewChecker(base.ProviderPools, base.ProviderOrder, 5, 6)
+		validator := validation.NewChecker(base.UsenetPool, 5, 6)
 		defaultFilters := config.DefaultFilterConfig()
 		defaultSorting := config.DefaultSortConfig()
 		triageService := triage.NewService(&defaultFilters, defaultSorting)
@@ -340,7 +311,6 @@ func (s *Server) reloadConfigAsync(newCfg *config.Config) {
 	}()
 }
 
-// handleFetchCapsWS re-fetches capabilities for all indexers and broadcasts to the client.
 func (s *Server) handleFetchCapsWS(client *Client) {
 	s.mu.RLock()
 	idx := s.indexer
@@ -374,7 +344,7 @@ func (s *Server) handleFetchCapsWS(client *Client) {
 }
 
 func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, payload json.RawMessage) {
-	// Only admin can save device configs
+
 	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save device configurations"}`)})
 		return
@@ -413,7 +383,7 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 }
 
 func (s *Server) handleGetDevicesWS(client *Client) {
-	// Only admin can get devices list
+
 	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "users_response", Payload: json.RawMessage(`{"error":"Only admin can access devices list"}`)})
 		return
@@ -421,7 +391,6 @@ func (s *Server) handleGetDevicesWS(client *Client) {
 
 	devices := s.deviceManager.GetAllDevices()
 
-	// Format devices for response (exclude sensitive data)
 	deviceList := make([]map[string]interface{}, 0, len(devices))
 	for _, device := range devices {
 		deviceList = append(deviceList, map[string]interface{}{
@@ -436,7 +405,7 @@ func (s *Server) handleGetDevicesWS(client *Client) {
 }
 
 func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
-	// Only admin can get user details
+
 	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_response", Payload: json.RawMessage(`{"error":"Only admin can access user details"}`)})
 		return
@@ -468,7 +437,7 @@ func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 }
 
 func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
-	// Only admin can create users
+
 	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can create users"}`)})
 		return
@@ -482,7 +451,6 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	// Create user without password (empty string)
 	device, err := s.deviceManager.CreateDevice(req.Username, "", s.config.GetAdminUsername())
 	if err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
@@ -501,12 +469,11 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 	respPayload, _ := json.Marshal(response)
 	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 
-	// Broadcast updated devices list to all admin clients
 	s.broadcastUsersList()
 }
 
 func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
-	// Only admin can delete users
+
 	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can delete users"}`)})
 		return
@@ -534,12 +501,11 @@ func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
 	respPayload, _ := json.Marshal(response)
 	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 
-	// Broadcast updated devices list to all admin clients
 	s.broadcastUsersList()
 }
 
 func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage) {
-	// Only admin can regenerate tokens
+
 	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can regenerate tokens"}`)})
 		return
@@ -568,12 +534,11 @@ func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage
 	respPayload, _ := json.Marshal(response)
 	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 
-	// Broadcast updated devices list to all admin clients
 	s.broadcastUsersList()
 }
 
 func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage) {
-	// Only admin can update password
+
 	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can update password"}`)})
 		return
@@ -588,11 +553,6 @@ func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage)
 		return
 	}
 
-	// Note: We've already verified the client is authenticated as admin (line 592).
-	// The username in the request may be the new username if both username and password are being changed.
-	// Since this endpoint only updates the admin password, we allow the change regardless of the username value.
-
-	// Update admin password in config (not state)
 	newHash := auth.HashPassword(req.Password)
 	s.mu.Lock()
 	s.config.AdminPasswordHash = newHash
@@ -616,7 +576,6 @@ func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage)
 func (s *Server) broadcastUsersList() {
 	devices := s.deviceManager.GetAllDevices()
 
-	// Format devices for response
 	deviceList := make([]map[string]interface{}, 0, len(devices))
 	for _, device := range devices {
 		deviceList = append(deviceList, map[string]interface{}{
@@ -628,7 +587,6 @@ func (s *Server) broadcastUsersList() {
 
 	payload, _ := json.Marshal(deviceList)
 
-	// Send to all admin clients
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
 	for client := range s.clients {
@@ -636,13 +594,12 @@ func (s *Server) broadcastUsersList() {
 			select {
 			case client.send <- WSMessage{Type: "users_response", Payload: payload}:
 			default:
-				// Channel full, skip
+
 			}
 		}
 	}
 }
 
-// validateConfig checks connectivity for all components and returns a map of field errors
 func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 	errors := make(map[string]string)
 	var mu sync.Mutex

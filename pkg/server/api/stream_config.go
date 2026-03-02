@@ -9,7 +9,6 @@ import (
 	"streamnzb/pkg/stream"
 )
 
-// handleStreamConfig dispatches GET/PUT /api/stream/config. Admin only.
 func (s *Server) handleStreamConfig(w http.ResponseWriter, r *http.Request) {
 	device, _ := auth.DeviceFromContext(r)
 	if device == nil || device.Username != s.config.GetAdminUsername() {
@@ -26,7 +25,6 @@ func (s *Server) handleStreamConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleGetStreamConfig returns the global stream config. Admin only.
 func (s *Server) handleGetStreamConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -43,7 +41,6 @@ func (s *Server) handleGetStreamConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handlePutStreamConfig updates the global stream config (PUT /api/stream/config). Admin only.
 func (s *Server) handlePutStreamConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

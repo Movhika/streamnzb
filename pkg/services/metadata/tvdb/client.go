@@ -18,18 +18,16 @@ const (
 	createdAtKey   = "created_at"
 	statusKey      = "status"
 	successVal     = "success"
-	tokenValidDays = 25 // TVDB tokens last ~1 month; refresh before expiry
+	tokenValidDays = 25
 )
 
-// Client for TheTVDB API v4
 type Client struct {
 	apiKey     string
 	dataDir    string
 	client     *http.Client
-	tokenCache string // in-memory cache, refreshed from state if needed
+	tokenCache string
 }
 
-// NewClient creates a new TVDB client
 func NewClient(apiKey, dataDir string) *Client {
 	return &Client{
 		apiKey:  apiKey,
@@ -40,7 +38,6 @@ func NewClient(apiKey, dataDir string) *Client {
 	}
 }
 
-// loginResponse matches the response from POST /login
 type loginResponse struct {
 	Status string `json:"status"`
 	Data   struct {
@@ -48,7 +45,6 @@ type loginResponse struct {
 	} `json:"data"`
 }
 
-// searchRemoteIDResponse matches the response from GET /search/remoteid/{id}
 type searchRemoteIDResponse struct {
 	Status string `json:"status"`
 	Data   []struct {
@@ -64,22 +60,20 @@ type searchRemoteIDResponse struct {
 	} `json:"data"`
 }
 
-// tokenState is stored in state.json
 type tokenState struct {
 	Token     string `json:"token"`
-	CreatedAt string `json:"created_at"` // RFC3339
+	CreatedAt string `json:"created_at"`
 }
 
-// ensureToken gets a valid bearer token: from cache, from state.json (if not expired), or by logging in
 func (c *Client) ensureToken() (string, error) {
 	if c.apiKey == "" {
 		return "", fmt.Errorf("TVDB API key not configured")
 	}
-	// Try cache first
+
 	if c.tokenCache != "" {
 		return c.tokenCache, nil
 	}
-	// Try state.json
+
 	manager, err := persistence.GetManager(c.dataDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to get state manager: %w", err)
@@ -95,12 +89,12 @@ func (c *Client) ensureToken() (string, error) {
 			logger.Debug("TVDB token expired, refreshing", "age_days", int(age.Hours()/24))
 		}
 	}
-	// Login
+
 	token, err := c.login()
 	if err != nil {
 		return "", err
 	}
-	// Save to state with timestamp
+
 	state := tokenState{
 		Token:     token,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
@@ -144,12 +138,10 @@ func (c *Client) login() (string, error) {
 	return out.Data.Token, nil
 }
 
-// invalidateToken clears the cached token (e.g. after 401)
 func (c *Client) invalidateToken() {
 	c.tokenCache = ""
 }
 
-// doRequest performs a request with Bearer auth, refreshing token if needed
 func (c *Client) doRequest(method, path string, body []byte) (*http.Response, error) {
 	token, err := c.ensureToken()
 	if err != nil {
@@ -175,15 +167,13 @@ func (c *Client) doRequest(method, path string, body []byte) (*http.Response, er
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		c.invalidateToken()
-		// Could retry once with new token; for simplicity we return error
+
 		resp.Body.Close()
 		return nil, fmt.Errorf("TVDB token invalid or expired")
 	}
 	return resp, nil
 }
 
-// ResolveTVDBID looks up the TVDB series ID by IMDb ID (e.g. tt4283088) or TMDB ID.
-// Uses GET /search/remoteid/{remoteId}.
 func (c *Client) ResolveTVDBID(remoteID string) (string, error) {
 	if c.apiKey == "" {
 		return "", fmt.Errorf("TVDB API key not configured")
@@ -209,7 +199,6 @@ func (c *Client) ResolveTVDBID(remoteID string) (string, error) {
 		return "", fmt.Errorf("no TVDB result for remote ID: %s", remoteID)
 	}
 
-	// Prefer seriesId from episode, then series.id, then movie.id (for movies we'd return movie id)
 	for _, item := range out.Data {
 		if item.Episode != nil && item.Episode.SeriesID != 0 {
 			logger.Debug("Resolved TVDB ID from remote ID", "remote", remoteID, "tvdb", item.Episode.SeriesID)

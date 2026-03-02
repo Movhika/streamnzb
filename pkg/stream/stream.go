@@ -10,30 +10,25 @@ import (
 )
 
 const (
-	// GlobalStreamID is the fixed id for the single global stream (v1).
 	GlobalStreamID = "global"
-	// GlobalStreamName is the display name for the global stream.
+
 	GlobalStreamName = "Global"
 )
 
-// Stream is a named playback configuration: filters and sorting used for search and catalog.
-// For v1 there is one global stream; devices are tokens-only for auth.
 type Stream struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	// Filters and Sorting define what releases are shown and their priority (same types as config).
+
 	Filters config.FilterConfig `json:"filters"`
 	Sorting config.SortConfig   `json:"sorting"`
-	// IndexerOverrides optional per-indexer search overrides; key = indexer name. V1 can be nil.
+
 	IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides,omitempty"`
-	// ShowAllStream: when true, show every release (unknown or available) as a separate stream row
-	// and disable play-next-stream fallback for this stream.
+
 	ShowAllStream bool `json:"show_all_stream"`
-	// PriorityGridAdded lists optional category keys added to the priority grid (e.g. "quality", "codec").
+
 	PriorityGridAdded []string `json:"priority_grid_added,omitempty"`
 }
 
-// Manager loads and saves streams from config.
 type Manager struct {
 	mu      sync.RWMutex
 	streams map[string]*Stream
@@ -41,7 +36,6 @@ type Manager struct {
 	saveFn  func() error
 }
 
-// NewManagerFromConfig creates a stream manager backed by config (streams in config.json).
 func NewManagerFromConfig(cfg *config.Config, saveFn func() error) (*Manager, error) {
 	if cfg.Streams == nil {
 		cfg.Streams = []*config.StreamEntry{}
@@ -102,13 +96,13 @@ func streamFromEntry(e *config.StreamEntry) *Stream {
 
 func entryFromStream(s *Stream) *config.StreamEntry {
 	e := &config.StreamEntry{
-		ID:                  s.ID,
-		Name:                s.Name,
-		Filters:             s.Filters,
-		Sorting:             s.Sorting,
-		IndexerOverrides:    s.IndexerOverrides,
-		ShowAllStream:       s.ShowAllStream,
-		PriorityGridAdded:   s.PriorityGridAdded,
+		ID:                s.ID,
+		Name:              s.Name,
+		Filters:           s.Filters,
+		Sorting:           s.Sorting,
+		IndexerOverrides:  s.IndexerOverrides,
+		ShowAllStream:     s.ShowAllStream,
+		PriorityGridAdded: s.PriorityGridAdded,
 	}
 	if e.IndexerOverrides == nil {
 		e.IndexerOverrides = make(map[string]config.IndexerSearchConfig)
@@ -127,8 +121,6 @@ func (m *Manager) saveLocked() error {
 	return nil
 }
 
-// GetGlobal returns the default stream used for catalog/play when no stream is specified.
-// Prefers a stream with id GlobalStreamID; otherwise returns the first stream in the list.
 func (m *Manager) GetGlobal() *Stream {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -138,7 +130,7 @@ func (m *Manager) GetGlobal() *Stream {
 	for _, s := range m.streams {
 		return s
 	}
-	// Fallback if state was corrupted (no streams)
+
 	return &Stream{
 		ID:      GlobalStreamID,
 		Name:    GlobalStreamName,
@@ -147,12 +139,10 @@ func (m *Manager) GetGlobal() *Stream {
 	}
 }
 
-// DefaultStreamID returns the id of the default stream (for legacy URLs that omit stream id).
 func (m *Manager) DefaultStreamID() string {
 	return m.GetGlobal().ID
 }
 
-// Get returns a stream by id.
 func (m *Manager) Get(id string) (*Stream, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -163,7 +153,6 @@ func (m *Manager) Get(id string) (*Stream, error) {
 	return s, nil
 }
 
-// SetGlobal updates the global stream (name, filters, sorting). Id remains GlobalStreamID.
 func (m *Manager) SetGlobal(s *Stream) error {
 	if s == nil {
 		return fmt.Errorf("stream is nil")
@@ -175,7 +164,6 @@ func (m *Manager) SetGlobal(s *Stream) error {
 	return m.saveLocked()
 }
 
-// List returns all streams in no particular order.
 func (m *Manager) List() []*Stream {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -186,7 +174,6 @@ func (m *Manager) List() []*Stream {
 	return out
 }
 
-// Set creates or updates a stream by id. The stream's ID field is set to id.
 func (m *Manager) Set(id string, s *Stream) error {
 	if id == "" {
 		return fmt.Errorf("stream id is required")
@@ -201,7 +188,6 @@ func (m *Manager) Set(id string, s *Stream) error {
 	return m.saveLocked()
 }
 
-// Create adds a new stream with a generated id. Name must be set. Returns the new id.
 func (m *Manager) Create(s *Stream) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("stream is nil")
@@ -237,7 +223,6 @@ func generateStreamID(streams map[string]*Stream) (string, error) {
 	return "", fmt.Errorf("could not generate unique stream id")
 }
 
-// Delete removes a stream by id. Returns error if it is the last stream (at least one required).
 func (m *Manager) Delete(id string) error {
 	if id == "" {
 		return fmt.Errorf("stream id is required")

@@ -73,38 +73,34 @@ func (b *readBuf) uvarint() uint64 {
 		s += 7
 
 	}
-	// if we run out of bytes, just return 0
+
 	*b = (*b)[len(*b):]
 	return 0
 }
 
-// fileBlockHeader represents a file block in a RAR archive.
-// Files may comprise one or more file blocks.
-// Solid files retain decode tables and dictionary from previous solid files in the archive.
 type fileBlockHeader struct {
-	first     bool             // first block in file
-	last      bool             // last block in file
-	arcSolid  bool             // archive is solid
-	dataOff   int64            // offset to data for file block in archive volume
-	packedOff int64            // offset to data in packed file
-	blocknum  int              // number for current block in file
-	volnum    int              // archive volume number
-	winSize   int64            // decode window size
-	hash      func() hash.Hash // hash used for file checksum
-	hashKey   []byte           // optional hmac key to be used calculate file checksum
-	sum       []byte           // expected checksum for file contents
-	decVer    int              // decoder to use for file
-	key       []byte           // key for AES, non-empty if file encrypted
-	iv        []byte           // iv for AES, non-empty if file encrypted
-	salt      []byte           // salt used for key derivation
-	kdfCount  int              // KDF iteration count (RAR5: 2^n, RAR3/4: 0x40000)
-	errs      []error          // errors to return when trying to read file body
+	first     bool
+	last      bool
+	arcSolid  bool
+	dataOff   int64
+	packedOff int64
+	blocknum  int
+	volnum    int
+	winSize   int64
+	hash      func() hash.Hash
+	hashKey   []byte
+	sum       []byte
+	decVer    int
+	key       []byte
+	iv        []byte
+	salt      []byte
+	kdfCount  int
+	errs      []error
 	FileHeader
 }
 
-// archiveBlockReader returns the next fileBlockHeader in an archive volume.
 type archiveBlockReader interface {
-	init(br *bufVolumeReader) (int, error)                   // init volume and returns optional (>=0) volume number
-	nextBlock(br *bufVolumeReader) (*fileBlockHeader, error) // reads the volume and returns the next fileBlockHeader
+	init(br *bufVolumeReader) (int, error)
+	nextBlock(br *bufVolumeReader) (*fileBlockHeader, error)
 	useOldNaming() bool
 }

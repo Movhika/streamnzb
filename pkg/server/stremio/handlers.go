@@ -40,11 +40,15 @@ import (
 	"streamnzb/pkg/usenet/validation"
 )
 
-// Server represents the Stremio addon HTTP server
+var (
+	availTrue  = true
+	availFalse = false
+)
+
 type Server struct {
 	mu                   sync.RWMutex
 	manifest             *Manifest
-	version              string // raw version for API/frontend (e.g. dev-9a3e479)
+	version              string
 	baseURL              string
 	config               *config.Config
 	indexer              indexer.Indexer
@@ -53,23 +57,21 @@ type Server struct {
 	triageService        *triage.Service
 	availClient          *availnzb.Client
 	availReporter        *availnzb.Reporter
-	availNZBIndexerHosts []string // Underlying indexer hostnames for AvailNZB GetReleases
+	availNZBIndexerHosts []string
 	tmdbClient           *tmdb.Client
 	tvdbClient           *tvdb.Client
 	deviceManager        *auth.DeviceManager
 	streamManager        *stream.Manager
-	recentFailures       sync.Map // normalizedTitle → time.Time; short-lived cache to avoid re-validating known-dead releases across requests
-	playListCache        sync.Map // key "streamId:contentType:id" -> *playListCacheEntry; reuse ordered list on play
-	rawSearchCache       sync.Map // key "contentType:id" -> *rawSearchCacheEntry; one indexer/AvailNZB fetch shared by all streams
-	nextReleaseIndex     sync.Map // key "token:streamId:contentType:id" -> *nextReleaseState; iterating "Next release" row + bound for same play session
+	recentFailures       sync.Map
+	playListCache        sync.Map
+	rawSearchCache       sync.Map
+	nextReleaseIndex     sync.Map
 	webHandler           http.Handler
 	apiHandler           http.Handler
 }
 
-// FailoverOrderPath is the path AIOStreams POSTs to report failover order (bingeGroup list). Stored in session manager per device. No trailing slash.
 const FailoverOrderPath = "/failover_order"
 
-// ServerOptions configures a Stremio addon server. Used by NewServer and Reload.
 type ServerOptions struct {
 	Config               *config.Config
 	BaseURL              string
@@ -79,7 +81,7 @@ type ServerOptions struct {
 	SessionManager       *session.Manager
 	TriageService        *triage.Service
 	AvailClient          *availnzb.Client
-	AvailNZBIndexerHosts []string // Filter AvailNZB GetReleases by indexer; nil = all
+	AvailNZBIndexerHosts []string
 	TMDBClient           *tmdb.Client
 	TVDBClient           *tvdb.Client
 	DeviceManager        *auth.DeviceManager
@@ -87,7 +89,6 @@ type ServerOptions struct {
 	Version              string
 }
 
-// NewServer creates a new Stremio addon server.
 func NewServer(opts *ServerOptions) (*Server, error) {
 	if opts == nil {
 		return nil, fmt.Errorf("ServerOptions is required")
@@ -125,7 +126,6 @@ func NewServer(opts *ServerOptions) (*Server, error) {
 	return s, nil
 }
 
-// CheckPort verifies if the specified port is available for the addon
 func (s *Server) CheckPort(port int) error {
 	address := fmt.Sprintf(":%d", port)
 	ln, err := net.Listen("tcp", address)
@@ -136,17 +136,14 @@ func (s *Server) CheckPort(port int) error {
 	return nil
 }
 
-// SetWebHandler sets the handler for static web content (fallback)
 func (s *Server) SetWebHandler(h http.Handler) {
 	s.webHandler = h
 }
 
-// SetAPIHandler sets the handler for API requests
 func (s *Server) SetAPIHandler(h http.Handler) {
 	s.apiHandler = h
 }
 
-// Version returns the raw version for API/frontend (e.g. dev-9a3e479)
 func (s *Server) Version() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -156,10 +153,8 @@ func (s *Server) Version() string {
 	return "dev"
 }
 
-// SetupRoutes configures HTTP routes for the addon
 func (s *Server) SetupRoutes(mux *http.ServeMux) {
-	// Root handler for manifest and other routes
-	// We use a custom handler to handle the optional token prefix
+
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.RLock()
 		deviceManager := s.deviceManager
@@ -170,56 +165,47 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 		path := r.URL.Path
 		var authenticatedDevice *auth.Device
 
-		// Serve embedded error video directly - bypass token logic so /error/... is never treated as a device token
 		if path == "/error/failure.mp4" && webHandler != nil {
 			webHandler.ServeHTTP(w, r)
 			return
 		}
 
-		// Determine if this is a Stremio route that requires device token
 		isStremioRoute := path == "/manifest.json" || path == FailoverOrderPath || strings.HasPrefix(path, "/stream/") || strings.HasPrefix(path, "/play/") || strings.HasPrefix(path, "/next/") || strings.HasPrefix(path, "/debug/play")
 
-		// Root path "/" and web UI routes are always accessible (no token required)
-		// Only Stremio routes require device tokens in the path
-
-		// Check for device token in path (only if path has a token segment)
 		trimmedPath := strings.TrimPrefix(path, "/")
 		parts := strings.SplitN(trimmedPath, "/", 2)
 
 		if len(parts) >= 1 && parts[0] != "" {
 			token := parts[0]
 
-			// Try to authenticate as a device token
 			if deviceManager != nil {
 				device, err := deviceManager.AuthenticateToken(token, s.config.GetAdminUsername(), s.config.AdminToken)
 				if err == nil && device != nil {
 					authenticatedDevice = device
-					// Strip token from path for internal routing
+
 					if len(parts) > 1 {
 						path = "/" + parts[1]
 					} else {
 						path = "/"
 					}
 					r.URL.Path = path
-					// Store device in context for handlers to use
+
 					r = r.WithContext(auth.ContextWithDevice(r.Context(), device))
 				} else if isStremioRoute {
-					// Token in path but doesn't match any device, and this is a Stremio route - unauthorized
+
 					logger.Error("Unauthorized request - invalid device token", "path", path, "remote", r.RemoteAddr)
 					http.Error(w, "Unauthorized", http.StatusUnauthorized)
 					return
 				}
-				// If token doesn't match but it's not a Stremio route, continue (might be web UI route like /login)
+
 			}
 		} else if isStremioRoute {
-			// Stremio routes require device token in path
+
 			logger.Error("Unauthorized request - Stremio route requires device token", "path", path, "remote", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		// If no token in path and not a Stremio route, allow access (for web UI routes like /, /login, and API routes which use cookies/headers)
 
-		// Internal routing
 		if path == "/manifest.json" {
 			s.handleManifest(w, r)
 		} else if strings.HasPrefix(path, "/stream/") {
@@ -236,9 +222,7 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 			s.handleHealth(w, r)
 		} else if strings.HasPrefix(path, "/api/") {
 			if apiHandler != nil {
-				// API Handler expects /api/...
-				// Current path is /api/... (token stripped)
-				// Need to preserve the path for the API mux
+
 				apiHandler.ServeHTTP(w, r)
 			} else {
 				http.NotFound(w, r)
@@ -255,7 +239,6 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 	mux.Handle("/", finalHandler)
 }
 
-// handleManifest serves the addon manifest
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	logger.Debug("Manifest request", "remote", r.RemoteAddr)
 
@@ -266,7 +249,6 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	manifest := s.manifest
 	s.mu.RUnlock()
 
-	// Configure button (behaviorHints.configurable) only for admin users
 	device, _ := auth.DeviceFromContext(r)
 	isAdmin := device != nil && device.Username == s.config.GetAdminUsername()
 
@@ -279,9 +261,8 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// handleStream handles stream requests
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *auth.Device) {
-	// Parse URL: /stream/{type}/{id}.json
+
 	path := strings.TrimPrefix(r.URL.Path, "/stream/")
 	path = strings.TrimSuffix(path, ".json")
 
@@ -291,8 +272,8 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		return
 	}
 
-	contentType := parts[0] // "movie" or "series"
-	id := parts[1]          // IMDb ID (tt1234567) or TMDB ID
+	contentType := parts[0]
+	id := parts[1]
 
 	logger.Info("Stream request", "type", contentType, "id", id, "device", func() string {
 		if device != nil {
@@ -301,8 +282,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		return "legacy"
 	}())
 
-	// Allow time for indexer search plus NNTP validation across providers.
-	// 5s was too short: slow indexers + validation often exceeded it and returned 0 streams.
 	const streamRequestTimeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(r.Context(), streamRequestTimeout)
 	defer cancel()
@@ -337,7 +316,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		Streams: streams,
 	}
 
-	// Debug: Log the response
 	responseJSON, _ := json.MarshalIndent(response, "", "  ")
 	logger.Trace("Sending stream response", "json", string(responseJSON))
 
@@ -347,16 +325,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	json.NewEncoder(w).Encode(response)
 }
 
-// failoverOrderRequest is the body AIOStreams POSTs to FailoverOrderPath.
-// Body: { streams: [ { failoverId: "streamnzb-" + playPath }, ... ] }.
 type failoverOrderRequest struct {
 	Streams []struct {
 		FailoverID string `json:"failoverId"`
 	} `json:"streams"`
 }
 
-// handleFailoverOrder accepts POST with body { streams: [ { failoverId: "streamnzb-<playPath>" }, ... ] }.
-// We store the order so we match by exact slot path when resolving play.
 func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	logger.Debug("Failover order request", "device", device.Username, "method", r.Method, "url", r.URL.Path)
 	if r.Method != http.MethodPost {
@@ -393,7 +367,7 @@ func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, dev
 		if after, ok := strings.CutPrefix(raw, "streamnzb-"); ok {
 			slotOrID = after
 		}
-		// Slot path (stream:streamId:type:id:index) we keep as-is; otherwise validate stream ID exists
+
 		if !strings.HasPrefix(slotOrID, streamSlotPrefix) {
 			if sm != nil {
 				if str, _ := sm.Get(slotOrID); str == nil {
@@ -477,8 +451,6 @@ func streamBehaviorHints(streamName, streamID string, rel *release.Release, cach
 	return h
 }
 
-// buildStreamsFromPlayList converts an ordered play list into Stremio Stream objects.
-// When showAll is true, one Stream per candidate; when false, one main Stream + optional "Next release".
 func buildStreamsFromPlayList(list *orderedPlayListResult, key StreamSlotKey, streamName, baseURL string, showAll bool) []Stream {
 	nameLeft := streamName
 	if nameLeft == "" {
@@ -575,8 +547,6 @@ func buildStreamsFromPlayList(list *orderedPlayListResult, key StreamSlotKey, st
 	return streams
 }
 
-// GetStreams returns the catalog stream list (one row per stream config, plus optional "Next release" per stream).
-// Used by the dashboard API and Stremio stream request.
 func (s *Server) GetStreams(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
 	const streamRequestTimeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, streamRequestTimeout)
@@ -606,9 +576,6 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 	return streams, nil
 }
 
-// addAPIKeyToDownloadURL appends the matching indexer's API key to the download URL (by host). Returns original if no match.
-// For Newznab t=get URLs, the API expects parameter "id" (see https://inhies.github.io/Newznab-API/functions/#get);
-// if the URL has "guid" but no "id", we set id=guid so indexers that require "id" work.
 func addAPIKeyToDownloadURL(downloadURL string, indexers []config.IndexerConfig) string {
 	if downloadURL == "" || len(indexers) == 0 {
 		return downloadURL
@@ -641,7 +608,6 @@ func addAPIKeyToDownloadURL(downloadURL string, indexers []config.IndexerConfig)
 	return downloadURL
 }
 
-// getGlobalStream returns the default stream for catalog/play when no stream is specified. May return nil if streamManager not set.
 func (s *Server) getGlobalStream() *stream.Stream {
 	s.mu.RLock()
 	sm := s.streamManager
@@ -652,7 +618,6 @@ func (s *Server) getGlobalStream() *stream.Stream {
 	return sm.GetGlobal()
 }
 
-// getDefaultStreamID returns the stream id to use when the URL omits it (legacy 3-part slot). Never empty.
 func (s *Server) getDefaultStreamID() string {
 	if str := s.getGlobalStream(); str != nil && str.ID != "" {
 		return str.ID
@@ -660,7 +625,6 @@ func (s *Server) getDefaultStreamID() string {
 	return stream.GlobalStreamID
 }
 
-// streamConfigsForStreamRequest returns the list of stream configs to show as rows (one per stream), in stable order: global first, then others by id. Never nil.
 func (s *Server) streamConfigsForStreamRequest() []*stream.Stream {
 	s.mu.RLock()
 	sm := s.streamManager
@@ -677,7 +641,7 @@ func (s *Server) streamConfigsForStreamRequest() []*stream.Stream {
 			return []*stream.Stream{g}
 		}
 	}
-	// Global first, then rest by id so Stremio always sees the same order (global top, next-release second per stream).
+
 	sort.Slice(list, func(i, j int) bool {
 		a, b := list[i], list[j]
 		if a == nil || b == nil {
@@ -685,17 +649,16 @@ func (s *Server) streamConfigsForStreamRequest() []*stream.Stream {
 		}
 		ai, bj := a.ID == stream.GlobalStreamID, b.ID == stream.GlobalStreamID
 		if ai != bj {
-			return ai // global first
+			return ai
 		}
 		if ai {
-			return true // both global, keep order
+			return true
 		}
 		return a.ID < b.ID
 	})
 	return list
 }
 
-// triageCandidates returns filtered+sorted candidates using the stream's filters and sorting.
 func (s *Server) triageCandidates(str *stream.Stream, releases []*release.Release) []triage.Candidate {
 	if str == nil {
 		return s.triageService.Filter(releases)
@@ -704,36 +667,30 @@ func (s *Server) triageCandidates(str *stream.Stream, releases []*release.Releas
 	return ts.Filter(releases)
 }
 
-// streamSinkKey is the context key for an optional StreamSink callback.
-var streamSinkKey = struct{}{}
+type streamSinkKeyType struct{}
 
-// streamSlotPrefix is the session ID prefix for play slots: stream:streamId:type:id:index (or legacy stream:type:id:index).
+var streamSinkKey = streamSinkKeyType{}
+
 const streamSlotPrefix = "stream:"
 
-// StreamSlotKey identifies a stream config and catalog item (no candidate index).
-// Used for cache keys, slot paths, and to avoid passing (streamID, contentType, id) everywhere.
 type StreamSlotKey struct {
 	StreamID    string
 	ContentType string
 	ID          string
 }
 
-// SlotPath returns the slot path "stream:streamID:contentType:id:index".
 func (k StreamSlotKey) SlotPath(index int) string {
 	return formatStreamSlotPath(k.StreamID, k.ContentType, k.ID, index)
 }
 
-// CacheKey returns "streamID:contentType:id" for play list cache.
 func (k StreamSlotKey) CacheKey() string {
 	return k.StreamID + ":" + k.ContentType + ":" + k.ID
 }
 
-// RawCacheKey returns "contentType:id" for raw search cache.
 func (k StreamSlotKey) RawCacheKey() string {
 	return k.ContentType + ":" + k.ID
 }
 
-// baseURLWithToken returns the addon base URL with optional device token (e.g. https://host or https://host/token).
 func (s *Server) baseURLWithToken(device *auth.Device) string {
 	base := strings.TrimSuffix(s.baseURL, "/")
 	if device != nil && device.Token != "" {
@@ -742,27 +699,23 @@ func (s *Server) baseURLWithToken(device *auth.Device) string {
 	return base
 }
 
-// formatStreamSlotPath returns the slot path "stream:streamID:contentType:id:index".
 func formatStreamSlotPath(streamID, contentType, id string, index int) string {
 	return streamSlotPrefix + streamID + ":" + contentType + ":" + id + ":" + strconv.Itoa(index)
 }
 
-// orderedPlayListResult holds the result of building the ordered play list (no validation).
 type orderedPlayListResult struct {
 	Candidates       []triage.Candidate
 	FirstIsAvailGood bool
 	Params           *SearchParams
-	// CachedAvailable: detailsURL -> true if AvailNZB reports available. Nil if not set (e.g. from cache).
+
 	CachedAvailable map[string]bool
 }
 
-// rawSearchResult holds indexer + AvailNZB results for a title (contentType+id). No stream-specific triage.
-// Reused across all streams so we run TMDB/indexer/AvailNZB once per title.
 type rawSearchResult struct {
 	Params          *SearchParams
 	AvailReleases   []*release.Release
 	IndexerReleases []*release.Release
-	CachedAvailable map[string]bool // detailsURL -> true if from AvailNZB available
+	CachedAvailable map[string]bool
 	AvailResult     *availnzb.ReleasesResult
 }
 
@@ -813,7 +766,6 @@ func (s *Server) buildOrderedPlayListUncached(ctx context.Context, key StreamSlo
 	return s.buildOrderedPlayListFromRaw(raw, str, skipFilterSort)
 }
 
-// getOrBuildRawSearchResult runs TMDB + AvailNZB + indexer search once per (contentType, id); result is shared by all streams.
 func (s *Server) getOrBuildRawSearchResult(ctx context.Context, contentType, id string) (*rawSearchResult, error) {
 	rawKey := contentType + ":" + id
 	if v, ok := s.rawSearchCache.Load(rawKey); ok {
@@ -830,7 +782,6 @@ func (s *Server) getOrBuildRawSearchResult(ctx context.Context, contentType, id 
 	return raw, nil
 }
 
-// buildRawSearchResult performs one indexer + AvailNZB fetch for the title. Uses default stream only for buildSearchParams (e.g. indexer overrides).
 func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id string) (*rawSearchResult, error) {
 	str := s.getGlobalStream()
 	params, err := s.buildSearchParams(contentType, id, str)
@@ -854,9 +805,6 @@ func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id strin
 		return nil, err
 	}
 
-	// When we didn't pass an indexer filter to AvailNZB (e.g. only aggregators), filter AvailNZB results to
-	// releases that appear in our indexer results (match by DetailsURL) so we don't show availability for
-	// indexers the user doesn't have.
 	if availResult != nil && len(params.AvailIndexers) == 0 {
 		indexerDetailsURLs := make(map[string]bool)
 		for _, r := range indexerReleases {
@@ -884,7 +832,7 @@ func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id strin
 			if rws == nil || rws.Release == nil || !rws.Available || rws.Release.Link == "" {
 				continue
 			}
-			// Mark as ID-based so triage scores them like indexer ID results (we fetched by IMDb/TVDB ID).
+
 			rws.Release.QuerySource = "id"
 			availReleases = append(availReleases, rws.Release)
 			cachedAvailable[rws.Release.DetailsURL] = true
@@ -900,18 +848,16 @@ func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id strin
 	}, nil
 }
 
-// GetSearchReleases returns all releases from indexers and AvailNZB for a title, with availability and per-stream tags.
-// Used by the search UI to show full results and filter/sort by availability or stream.
 func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) (*SearchReleasesResponse, error) {
 	raw, err := s.getOrBuildRawSearchResult(ctx, contentType, id)
 	if err != nil || raw == nil {
 		return nil, err
 	}
+	populateAvailable(raw)
 
-	// Build unified list: (release, availability). AvailNZB first (all reports), then indexer-only with "Unknown".
 	type releaseWithAvail struct {
 		rel   *release.Release
-		avail string // "Available", "Unavailable", "Unknown"
+		avail string
 	}
 	seenKey := make(map[string]bool)
 	var unified []releaseWithAvail
@@ -923,6 +869,23 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		}
 		seenKey[key] = true
 		return false
+	}
+
+	setAvail := func(rel *release.Release, avail string) {
+		if rel == nil {
+			return
+		}
+		switch avail {
+		case "Available":
+			rel.Available = &availTrue
+		case "Unavailable":
+			rel.Available = &availFalse
+		case "Unknown":
+			if len(raw.CachedAvailable) > 0 && rel.DetailsURL != "" && raw.CachedAvailable[rel.DetailsURL] {
+				rel.Available = &availTrue
+			}
+
+		}
 	}
 
 	if raw.AvailResult != nil {
@@ -938,6 +901,7 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 			if addRelease(r) {
 				continue
 			}
+			setAvail(r, avail)
 			unified = append(unified, releaseWithAvail{rel: r, avail: avail})
 		}
 	}
@@ -948,15 +912,15 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		if addRelease(r) {
 			continue
 		}
+		setAvail(r, "Unknown")
 		unified = append(unified, releaseWithAvail{rel: r, avail: "Unknown"})
 	}
 
-	// Per-release, per-stream: fits and score
 	streams := s.streamConfigsForStreamRequest()
 	releaseScores := make(map[string]map[string]struct {
 		Fits  bool
 		Score int
-	}) // detailsURL -> streamId -> {Fits, Score}
+	})
 	for _, str := range streams {
 		if str == nil {
 			continue
@@ -982,7 +946,7 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 				Score int
 			}{Fits: true, Score: c.Score}
 		}
-		// Mark releases that were not in candidates as not fitting (filtered out)
+
 		for _, u := range unified {
 			key := release.Key(u.rel)
 			if releaseScores[key] == nil {
@@ -1000,7 +964,6 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		}
 	}
 
-	// Build stream list for response
 	streamInfos := make([]SearchStreamInfo, 0, len(streams))
 	for _, str := range streams {
 		if str != nil {
@@ -1008,7 +971,6 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		}
 	}
 
-	// Build release list with tags
 	releasesOut := make([]SearchReleaseTag, 0, len(unified))
 	for _, u := range unified {
 		r := u.rel
@@ -1046,10 +1008,83 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		})
 	}
 
+	if len(streamInfos) > 0 && len(releasesOut) > 0 {
+		firstStreamID := streamInfos[0].ID
+		sort.Slice(releasesOut, func(i, j int) bool {
+			si := 0
+			sj := 0
+			for _, t := range releasesOut[i].StreamTags {
+				if t.StreamID == firstStreamID {
+					si = t.Score
+					break
+				}
+			}
+			for _, t := range releasesOut[j].StreamTags {
+				if t.StreamID == firstStreamID {
+					sj = t.Score
+					break
+				}
+			}
+			if si != sj {
+				return si > sj
+			}
+
+			availOrder := map[string]int{"Available": 2, "Unknown": 1, "Unavailable": 0}
+			return (availOrder[releasesOut[i].Availability] - availOrder[releasesOut[j].Availability]) > 0
+		})
+	}
+
 	return &SearchReleasesResponse{Streams: streamInfos, Releases: releasesOut}, nil
 }
 
-// releasesToCandidates converts releases to candidates with no stream filtering (score 0, preserve order).
+func populateAvailable(raw *rawSearchResult) {
+	if raw.AvailResult != nil {
+		for _, rws := range raw.AvailResult.Releases {
+			if rws == nil || rws.Release == nil {
+				continue
+			}
+			if rws.Available {
+				rws.Release.Available = &availTrue
+			} else {
+				rws.Release.Available = &availFalse
+			}
+		}
+	}
+	if len(raw.CachedAvailable) > 0 {
+		for _, rel := range raw.IndexerReleases {
+			if rel != nil && rel.DetailsURL != "" && raw.CachedAvailable[rel.DetailsURL] {
+				rel.Available = &availTrue
+			}
+		}
+	}
+}
+
+func buildAllReleasesFromRaw(raw *rawSearchResult) []*release.Release {
+	seenURL := make(map[string]bool)
+	var out []*release.Release
+	for _, rel := range raw.AvailReleases {
+		if rel == nil || rel.DetailsURL == "" {
+			continue
+		}
+		if seenURL[rel.DetailsURL] {
+			continue
+		}
+		seenURL[rel.DetailsURL] = true
+		out = append(out, rel)
+	}
+	for _, rel := range raw.IndexerReleases {
+		if rel == nil || rel.DetailsURL == "" {
+			continue
+		}
+		if seenURL[rel.DetailsURL] {
+			continue
+		}
+		seenURL[rel.DetailsURL] = true
+		out = append(out, rel)
+	}
+	return out
+}
+
 func releasesToCandidates(releases []*release.Release) []triage.Candidate {
 	var out []triage.Candidate
 	for _, rel := range releases {
@@ -1061,10 +1096,9 @@ func releasesToCandidates(releases []*release.Release) []triage.Candidate {
 	return out
 }
 
-// buildOrderedPlayListFromRaw applies one stream's filters/sorting to raw results (triage, merge, filter, sort).
-// When skipFilterSort is true (e.g. AIOStreams), stream triage and sort are skipped; only merge, dedupe, and safety filters apply.
 func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.Stream, skipFilterSort bool) (*orderedPlayListResult, error) {
-	// Set of DetailsURLs that AvailNZB reports as unavailable — exclude these from Stremio play list.
+	populateAvailable(raw)
+
 	unavailableDetailsURLs := make(map[string]bool)
 	if raw.AvailResult != nil {
 		for _, rws := range raw.AvailResult.Releases {
@@ -1077,39 +1111,21 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 		}
 	}
 
-	// Populate Available field on releases so triage can filter/score by AvailNZB status.
-	if len(raw.CachedAvailable) > 0 {
-		t := true
-		for _, rel := range raw.AvailReleases {
-			if rel != nil && rel.DetailsURL != "" && raw.CachedAvailable[rel.DetailsURL] {
-				rel.Available = &t
-			}
-		}
-		for _, rel := range raw.IndexerReleases {
-			if rel != nil && rel.DetailsURL != "" && raw.CachedAvailable[rel.DetailsURL] {
-				rel.Available = &t
-			}
-		}
-	}
-
-	var availCandidates, indexerCandidates []triage.Candidate
+	allReleases := buildAllReleasesFromRaw(raw)
+	var merged []triage.Candidate
 	if skipFilterSort {
-		availCandidates = releasesToCandidates(raw.AvailReleases)
-		indexerCandidates = releasesToCandidates(raw.IndexerReleases)
+		merged = releasesToCandidates(allReleases)
 	} else {
-		availCandidates = s.triageCandidates(str, raw.AvailReleases)
-		indexerCandidates = s.triageCandidates(str, raw.IndexerReleases)
+		merged = s.triageCandidates(str, allReleases)
 	}
 
 	seenURL := make(map[string]bool)
-	// When skipFilterSort (e.g. AIOStreams), also dedupe by normalized title so the same
-	// release from different indexers (different DetailsURL) collapses to one entry.
 	var seenTitle map[string]bool
 	if skipFilterSort {
 		seenTitle = make(map[string]bool)
 	}
-	var merged []triage.Candidate
-	for _, c := range availCandidates {
+	filtered := merged[:0]
+	for _, c := range merged {
 		if c.Release == nil || c.Release.DetailsURL == "" {
 			continue
 		}
@@ -1129,32 +1145,10 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 			}
 		}
 		seenURL[c.Release.DetailsURL] = true
-		merged = append(merged, c)
+		filtered = append(filtered, c)
 	}
-	for _, c := range indexerCandidates {
-		if c.Release == nil || c.Release.DetailsURL == "" {
-			continue
-		}
-		if unavailableDetailsURLs[c.Release.DetailsURL] {
-			continue
-		}
-		if seenURL[c.Release.DetailsURL] {
-			continue
-		}
-		if seenTitle != nil && c.Release.Title != "" {
-			titleKey := release.NormalizeTitleForDedup(c.Release.Title)
-			if titleKey != "" {
-				if seenTitle[titleKey] {
-					continue
-				}
-				seenTitle[titleKey] = true
-			}
-		}
-		seenURL[c.Release.DetailsURL] = true
-		merged = append(merged, c)
-	}
+	merged = filtered
 
-	// Filter recent failures
 	{
 		const recentFailureTTL = 5 * time.Minute
 		now := time.Now()
@@ -1175,7 +1169,6 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 		merged = filtered
 	}
 
-	// Filter AvailNZB unhealthy for our providers
 	if raw.AvailResult != nil && s.availClient != nil {
 		ourBackbones, _ := s.availClient.OurBackbones(s.validator.GetProviderHosts())
 		cachedUnhealthyForUs := make(map[string]bool)
@@ -1212,8 +1205,7 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 		}
 	}
 	if !skipFilterSort {
-		// Sort by stream's score only. AvailNZB does not override the stream's priority: we only badge/serve
-		// [availNZB] when the stream's #1 choice happens to be AvailNZB-good.
+
 		sort.Slice(merged, func(i, j int) bool {
 			return streamScoreFromCandidate(merged[i]) > streamScoreFromCandidate(merged[j])
 		})
@@ -1231,17 +1223,12 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 	}, nil
 }
 
-// streamScoreFromCandidate returns the triage score for ordering (same as Candidate.Score).
 func streamScoreFromCandidate(c triage.Candidate) int {
 	return c.Score
 }
 
-// StreamSink is called for each stream returned by GetStreams.
-// Return false to stop receiving more streams.
 type StreamSink func(Stream) bool
 
-// WithStreamSink adds a sink to ctx. When GetStreams is called with this context,
-// each stream in the result is passed to the sink (e.g. for WebSocket streaming).
 func WithStreamSink(ctx context.Context, sink StreamSink) context.Context {
 	if sink == nil {
 		return ctx
@@ -1258,11 +1245,9 @@ func getStreamSinkFromContext(ctx context.Context) StreamSink {
 	return nil
 }
 
-// SearchParams holds the built request and IDs for a stream search (contentType + id).
-// Built by buildSearchParams for use by buildOrderedPlayList and GetAvailNZBStreams.
 type SearchParams struct {
-	ContentType   string // original type from request (movie/series)
-	ID            string // original id from request
+	ContentType   string
+	ID            string
 	Req           indexer.SearchRequest
 	ContentIDs    *session.AvailReportMeta
 	ImdbForText   string
@@ -1270,8 +1255,6 @@ type SearchParams struct {
 	AvailIndexers []string
 }
 
-// buildSearchParams builds the search request and content IDs for the given contentType and id.
-// Used by buildOrderedPlayList and GetAvailNZBStreams. Indexer overrides come from the stream (v1 may be nil).
 func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (*SearchParams, error) {
 	const searchLimit = 1000
 	params := &SearchParams{ContentType: contentType, ID: id}
@@ -1310,7 +1293,7 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 	} else {
 		req.Cat = "5000"
 	}
-	// Resolve TVDB (and optionally IMDb) for series so indexers get tvdbid+season+ep and AvailNZB gets correct IDs.
+
 	if contentType == "series" {
 		if req.IMDbID != "" && req.TVDBID == "" {
 			if s.tvdbClient != nil {
@@ -1345,8 +1328,8 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 		if tmdbIDNum, err := strconv.Atoi(req.TMDBID); err == nil {
 			if extIDs, err := s.tmdbClient.GetExternalIDs(tmdbIDNum, "movie"); err == nil && extIDs.IMDbID != "" {
 				contentIDs.ImdbID = extIDs.IMDbID
-				req.IMDbID = contentIDs.ImdbID  // keep search request in sync so indexers and logging see IMDb
-				imdbForText = contentIDs.ImdbID // so SearchParams and downstream use resolved IMDb
+				req.IMDbID = contentIDs.ImdbID
+				imdbForText = contentIDs.ImdbID
 			}
 		}
 	}
@@ -1370,7 +1353,7 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 		req.PerIndexerQuery = make(map[string][]string)
 		if s.tmdbClient != nil {
 			if contentType == "movie" {
-				// Resolve TMDB title once per unique (lang, includeYear, norm) and reuse for indexers to avoid N identical API calls
+
 				type queryKey struct {
 					lang        string
 					includeYear bool
@@ -1430,9 +1413,6 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 	return params, nil
 }
 
-// runAvailNZBPhase runs only the AvailNZB phase: fetch releases, triage, build streams.
-// str is used for filters/sorting; device is used only for building play URLs (token).
-// Used by GetAvailNZBStreams (e.g. search UI).
 func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, str *stream.Stream, device *auth.Device) ([]Stream, []*release.Release, *availnzb.ReleasesResult) {
 	contentIDs := params.ContentIDs
 	availIndexers := params.AvailIndexers
@@ -1489,8 +1469,6 @@ func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, str
 	return streams, availReleases, availResult
 }
 
-// GetAvailNZBStreams returns only streams from AvailNZB (no indexer search or validation).
-// Used by the search UI to show cached-available results immediately.
 func (s *Server) GetAvailNZBStreams(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
 	str := s.getGlobalStream()
 	params, err := s.buildSearchParams(contentType, id, str)
@@ -1504,9 +1482,6 @@ func (s *Server) GetAvailNZBStreams(ctx context.Context, contentType, id string,
 	return streams, nil
 }
 
-// resolveStreamSlot builds the ordered play list for the given stream, creates a deferred session for the release at index, and sets fallback URLs.
-// key.StreamID empty means default stream; it is normalized to the actual id for sessionID and URLs.
-// skipFilterSort when true (e.g. AIOStreams) uses raw order without stream filtering/sorting.
 func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index int, device *auth.Device, skipFilterSort bool) (*session.Session, error) {
 	if key.StreamID == "" {
 		key.StreamID = s.getDefaultStreamID()
@@ -1517,6 +1492,15 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 	}
 	if index < 0 || index >= len(list.Candidates) {
 		return nil, fmt.Errorf("index %d out of range (candidates %d)", index, len(list.Candidates))
+	}
+	for i := index; i < len(list.Candidates); i++ {
+		if !s.sessionManager.IsStreamSlotFailed(key.SlotPath(i)) {
+			index = i
+			break
+		}
+		if i == len(list.Candidates)-1 {
+			return nil, fmt.Errorf("all slots from %d failed (430/unavailable)", index)
+		}
 	}
 	cand := list.Candidates[index]
 	rel := cand.Release
@@ -1587,16 +1571,12 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 	return sess, nil
 }
 
-// nextReleaseState holds the next index to use and the currently bound index for /next/...:0.
-// BoundIndex is set on first request so range/reconnect requests get the same play URL; cleared when stream list is requested.
 type nextReleaseState struct {
 	mu         sync.Mutex
-	NextIndex  int // next index to use when user clicks "Next release" again
-	BoundIndex int // current play index for /next/...:0 (-1 = not bound)
+	NextIndex  int
+	BoundIndex int
 }
 
-// isSlotFailed returns true if a session exists for the given stream slot and any of its files
-// have exceeded the failure threshold (IsFailed), so that slot should be skipped when resolving "next".
 func (s *Server) isSlotFailed(key StreamSlotKey, slotIndex int) bool {
 	slotSessionID := key.SlotPath(slotIndex)
 	sess, err := s.sessionManager.GetSession(slotSessionID)
@@ -1615,11 +1595,6 @@ func (s *Server) isSlotFailed(key StreamSlotKey, slotIndex int) bool {
 	return false
 }
 
-// handleNextRelease redirects to the next release in the ordered play list.
-// For /next/stream[:streamId]:type:id:0 we use per-user state: first request binds to an index and all
-// subsequent requests (range, reconnect) redirect to the same index until the user re-opens the stream list.
-// When resolving the next index we skip slots that are already failed (session exists and has IsFailed()),
-// so the first redirect goes to the first working slot and avoids double redirects (:0 → :1 failed → :2).
 func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/next/")
 	if sessionID == "" {
@@ -1677,15 +1652,13 @@ func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, devic
 	}
 
 	nextSlot := slotKey.SlotPath(playIndex)
-	nextURL := s.baseURLWithToken(device) + "/play/" + nextSlot
+	nextURL := s.baseURLWithToken(device) + "/play/" + nextSlot + "?next=1"
 	logger.Info("Next release redirect", "from", sessionID, "to", nextSlot)
 	w.Header().Set("Location", nextURL)
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	http.Redirect(w, r, nextURL, http.StatusTemporaryRedirect)
 }
 
-// clearNextReleaseBound clears the bound index for the "Next release" row when the user opens the stream list,
-// so the next click on "Next release" advances to the next index.
 func (s *Server) clearNextReleaseBound(device *auth.Device, key StreamSlotKey) {
 	if key.StreamID == "" || key.ContentType == "" || key.ID == "" {
 		return
@@ -1703,10 +1676,6 @@ func (s *Server) clearNextReleaseBound(device *auth.Device, key StreamSlotKey) {
 	}
 }
 
-// parseStreamSlotID parses stream slot paths.
-// Legacy 3-part: "stream:contentType:id:index" → streamId="", contentType, id, index (streamId implied default).
-// 4-part: "stream:streamId:contentType:id:index" (id may contain colons) → streamId, contentType, id, index.
-// Returns streamId (empty for legacy), contentType, id, index and true, or zero values and false.
 func parseStreamSlotID(sessionID string) (streamId, contentType, id string, index int, ok bool) {
 	if !strings.HasPrefix(sessionID, streamSlotPrefix) {
 		return "", "", "", 0, false
@@ -1731,8 +1700,6 @@ func parseStreamSlotID(sessionID string) (streamId, contentType, id string, inde
 	return streamId, contentType, id, index, true
 }
 
-// legacyOccurrenceIndex returns the 0-based candidate index for a legacy (stream-ID-only) entry
-// at position pos in the failover order. The k-th occurrence of the same stream ID maps to candidate k-1.
 func legacyOccurrenceIndex(order []string, entry string, pos int) int {
 	count := 0
 	for k := 0; k <= pos; k++ {
@@ -1743,26 +1710,27 @@ func legacyOccurrenceIndex(order []string, entry string, pos int) int {
 	return count - 1
 }
 
-// handlePlay serves video content for a session.
-// Each request creates its own stream from the cached blueprint.
-// No stream sharing, no mutexes, no caching -- the shared segment
-// cache in loader.File handles deduplication automatically.
-// Phase 3: sessionID may be a stream slot "stream:type:id:index"; we create a deferred session on first hit and set fallbacks.
-// Failover is handled internally: on failure the handler tries the next slot in sequence without any HTTP redirects.
 func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/play/")
 	logger.Info("Play request", "session", sessionID)
 
 	requestedSessionID := sessionID
-	// Short-circuit: players (Stremio, VLC, etc.) reuse the original play URL for Range/retry
-	// requests instead of the final redirected URL (HTTP 307 = "keep using original URL").
-	// Swap sessionID to the known-good slot and serve its content directly.
-	for {
-		if knownGood, found := s.sessionManager.GetKnownGoodSlot(sessionID); found && knownGood != sessionID {
-			logger.Info("Serving known-good stream directly (player reused original URL)", "requested", sessionID, "serving", knownGood)
-			sessionID = knownGood
-		} else {
-			break
+
+	chainStart := r.URL.Query().Get("from")
+	if chainStart == "" {
+		chainStart = sessionID
+	}
+
+	skipKnownGood := r.URL.Query().Get("next") != ""
+
+	if !skipKnownGood {
+		for {
+			if knownGood, found := s.sessionManager.GetKnownGoodSlot(sessionID); found && knownGood != sessionID {
+				logger.Info("Serving known-good stream directly (player reused original URL)", "requested", sessionID, "serving", knownGood)
+				sessionID = knownGood
+			} else {
+				break
+			}
 		}
 	}
 
@@ -1773,18 +1741,11 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		size   int64
 	)
 
-	// Resolve or retrieve session
 	var err error
 	sess, err = s.sessionManager.GetSession(sessionID)
 	if err != nil {
 		if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
 			skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
-			if !skipFilterSort && device != nil {
-				order := s.sessionManager.GetDeviceFailoverOrder(device.Token)
-				if len(order) > 0 && strings.HasPrefix(order[0], streamSlotPrefix) {
-					skipFilterSort = true
-				}
-			}
 			key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
 			sess, err = s.resolveStreamSlot(r.Context(), key, index, device, skipFilterSort)
 			if err != nil {
@@ -1798,38 +1759,41 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		}
 	}
 
-	stream, name, size, err = s.tryPlaySlot(r.Context(), sess)
-	if err != nil {
-		next := nextFallbackSessionID(sess)
+	skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
+	for {
+		stream, name, size, err = s.tryPlaySlot(r.Context(), sess)
+		if err == nil {
+			break
+		}
+		s.sessionManager.ClearKnownGoodForSlot(sessionID)
 		s.sessionManager.DeleteSession(sessionID)
-		if next == "" {
+		nextID := nextFallbackSessionID(sess)
+		if nextID == "" {
+			logger.Info("No more fallback slots", "last", sessionID, "err", err)
 			forceDisconnect(w, s.baseURL)
 			return
 		}
-
-		redirectURL := fmt.Sprintf("%s/play/%s", s.baseURLWithToken(device), next)
-		if r.URL.RawQuery != "" {
-			redirectURL += "?" + r.URL.RawQuery
+		logger.Info("Trying next fallback slot (internal)", "from", sessionID, "to", nextID, "err", err)
+		sess, err = s.getOrResolveSession(r.Context(), nextID, device, skipFilterSort)
+		if err != nil {
+			logger.Debug("Resolve next fallback failed", "next", nextID, "err", err)
+			forceDisconnect(w, s.baseURL)
+			return
 		}
-
-		logger.Info("Redirecting to next fallback slot", "from", sessionID, "to", next, "err", err)
-		http.Redirect(w, r, redirectURL, http.StatusFound)
-		return
+		sessionID = nextID
 	}
 	defer stream.Close()
 
-	// Report successful fetch/stream to AvailNZB (lazy sessions weren't reported at catalog time)
 	if s.availReporter != nil {
 		s.availReporter.ReportGood(sess)
 	}
 
-	// Record known-good slot so repeated requests (player reusing original URL)
-	// can short-circuit directly here instead of re-running the failover chain.
-	if requestedSessionID != sessionID {
+	if chainStart != "" && chainStart != sessionID {
+		s.sessionManager.SetKnownGoodSlot(chainStart, sessionID)
+	} else if requestedSessionID != sessionID {
 		s.sessionManager.SetKnownGoodSlot(requestedSessionID, sessionID)
 	}
 
-	// If client sent t= (start time in seconds) and no Range, convert to byte offset for supported containers.
 	if tStr := r.URL.Query().Get("t"); tStr != "" && r.Header.Get("Range") == "" {
 		if tSec, parseOK := seek.ParseTSeconds(tStr); parseOK {
 			if byteOffset, seekOK := seek.TimeToByteOffset(stream, size, name, tSec); seekOK {
@@ -1855,7 +1819,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 
 	logger.Info("Serving media", "name", name, "size", size, "session", sessionID)
 
-	// Set appropriate Content-Type based on the actual media file
 	ext := strings.ToLower(filepath.Ext(name))
 	if ext == ".mkv" {
 		w.Header().Set("Content-Type", "video/x-matroska")
@@ -1868,16 +1831,13 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
-	bufW := newBufferedResponseWriter(w, 256*1024) // 256KB buffer to smooth NNTP→client throughput
+	bufW := newBufferedResponseWriter(w, 256*1024)
 	defer bufW.Flush()
 
 	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
 	logger.Trace("Finished serving media", "session", sessionID)
 }
 
-// tryPlaySlot attempts to download the NZB, validate files, and open a media stream for the
-// given session. On failure it reports bad releases and invalidates the NZB cache as needed.
-// The caller is responsible for DeleteSession and advancing to the next fallback.
 func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.ReadSeekCloser, string, int64, error) {
 	sessionID := sess.ID
 	if _, err := sess.GetOrDownloadNZB(s.sessionManager); err != nil {
@@ -1901,7 +1861,7 @@ func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.Rea
 	for _, f := range files {
 		if f.IsFailed() {
 			logger.Error("Session file has too many failures", "session", sessionID, "file", f.Name())
-			s.reportBadRelease(sess, loader.ErrTooManyZeroFills)
+			s.reportBadRelease(sess, unpack.ErrTooManyZeroFills)
 			if sess.NZB != nil {
 				s.validator.InvalidateCache(sess.NZB.Hash())
 			}
@@ -1913,7 +1873,11 @@ func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.Rea
 	if sess.NZB != nil {
 		password = sess.NZB.Password()
 	}
-	stream, name, size, bp, err := unpack.GetMediaStream(ctx, files, sess.Blueprint, password)
+	unpackFiles := make([]unpack.UnpackableFile, len(files))
+	for i := range files {
+		unpackFiles[i] = files[i]
+	}
+	stream, name, size, bp, err := unpack.GetMediaStream(ctx, unpackFiles, sess.Blueprint, password)
 	if bp != nil && sess.Blueprint == nil {
 		sess.SetBlueprint(bp)
 	}
@@ -1928,7 +1892,6 @@ func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.Rea
 	return stream, name, size, nil
 }
 
-// nextFallbackSessionID extracts the session ID from the first fallback play URL.
 func nextFallbackSessionID(sess *session.Session) string {
 	nextURL := sess.FirstFallbackStreamURL()
 	if nextURL == "" {
@@ -1941,11 +1904,26 @@ func nextFallbackSessionID(sess *session.Session) string {
 	return nextURL[idx+len("/play/"):]
 }
 
-// reportBadRelease reports unstreamable releases to AvailNZB in the background.
+func (s *Server) getOrResolveSession(ctx context.Context, sessionID string, device *auth.Device, skipFilterSort bool) (*session.Session, error) {
+	sess, err := s.sessionManager.GetSession(sessionID)
+	if err == nil {
+		return sess, nil
+	}
+	if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
+		key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
+		sess, err = s.resolveStreamSlot(ctx, key, index, device, skipFilterSort)
+		if err != nil {
+			return nil, err
+		}
+		return sess, nil
+	}
+	return nil, err
+}
+
 func (s *Server) reportBadRelease(sess *session.Session, streamErr error) {
 	errMsg := streamErr.Error()
 	if !strings.Contains(errMsg, "compressed") && !strings.Contains(errMsg, "encrypted") &&
-		!strings.Contains(errMsg, "EOF") && !errors.Is(streamErr, loader.ErrTooManyZeroFills) {
+		!strings.Contains(errMsg, "EOF") && !errors.Is(streamErr, unpack.ErrTooManyZeroFills) {
 		return
 	}
 	if s.availReporter != nil {
@@ -1953,7 +1931,6 @@ func (s *Server) reportBadRelease(sess *session.Session, streamErr error) {
 	}
 }
 
-// handleDebugPlay allows playing directly from an NZB URL or local file for debugging
 func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	nzbPath := r.URL.Query().Get("nzb")
 	if nzbPath == "" {
@@ -1966,9 +1943,8 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	var nzbData []byte
 	var err error
 
-	// Check if it's a local file path (starts with / or drive letter on Windows)
 	if strings.HasPrefix(nzbPath, "/") || (len(nzbPath) > 2 && nzbPath[1] == ':') {
-		// Local file path
+
 		logger.Debug("Reading NZB from local file", "path", nzbPath)
 		nzbData, err = os.ReadFile(nzbPath)
 		if err != nil {
@@ -1977,12 +1953,12 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 			return
 		}
 	} else {
-		// URL - try indexer download first (60s for debug play)
+
 		dlCtx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		nzbData, err = s.indexer.DownloadNZB(dlCtx, nzbPath)
 		cancel()
 		if err != nil {
-			// Fallback to HTTP GET with timeout to avoid hanging on slow/broken URLs
+
 			httpClient := &http.Client{Timeout: 60 * time.Second}
 			resp, httpErr := httpClient.Get(nzbPath)
 			if httpErr != nil {
@@ -2007,7 +1983,6 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		}
 	}
 
-	// Parse NZB
 	nzbParsed, err := nzb.Parse(bytes.NewReader(nzbData))
 	if err != nil {
 		logger.Error("Failed to parse NZB", "err", err)
@@ -2015,10 +1990,8 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		return
 	}
 
-	// Create Session
 	sessionID := fmt.Sprintf("debug-%x", nzbPath)
 
-	// Create/Get Session (no release metadata for debug path - no AvailNZB reporting)
 	sess, err := s.sessionManager.CreateSession(sessionID, nzbParsed, nil, nil)
 	if err != nil {
 		logger.Error("Failed to create session", "err", err)
@@ -2026,18 +1999,20 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		return
 	}
 
-	// Get Files
 	files := sess.Files
 	if len(files) == 0 {
 		http.Error(w, "No files in NZB", http.StatusInternalServerError)
 		return
 	}
-
+	unpackFiles := make([]unpack.UnpackableFile, len(files))
+	for i := range files {
+		unpackFiles[i] = files[i]
+	}
 	password := ""
 	if sess.NZB != nil {
 		password = sess.NZB.Password()
 	}
-	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), files, sess.Blueprint, password)
+	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), unpackFiles, sess.Blueprint, password)
 	if bp != nil && sess.Blueprint == nil {
 		sess.SetBlueprint(bp)
 	}
@@ -2048,7 +2023,6 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	}
 	defer stream.Close()
 
-	// If client sent t= and no Range, convert to byte offset for supported containers (same as handlePlay).
 	if tStr := r.URL.Query().Get("t"); tStr != "" && r.Header.Get("Range") == "" {
 		if tSec, parseOK := seek.ParseTSeconds(tStr); parseOK {
 			if byteOffset, seekOK := seek.TimeToByteOffset(stream, size, name, tSec); seekOK {
@@ -2086,7 +2060,6 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	logger.Debug("Finished serving debug media")
 }
 
-// handleHealth serves health check endpoint
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -2095,14 +2068,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// streamScore returns the triage score for sorting (higher = better). Uses the score from
-// triage which respects the user's priority configuration (resolution, codec, etc.).
 func streamScore(s Stream) int {
 	return s.Score
 }
 
-// forceDisconnect redirects to the embedded failure video when streaming is unavailable.
-// The video is packaged with the binary and served from /error/failure.mp4.
 func forceDisconnect(w http.ResponseWriter, baseURL string) {
 	errorVideoURL := strings.TrimSuffix(baseURL, "/") + "/error/failure.mp4"
 	logger.Info("Redirecting to error video", "url", errorVideoURL)
@@ -2112,7 +2081,6 @@ func forceDisconnect(w http.ResponseWriter, baseURL string) {
 	http.Redirect(w, &http.Request{Method: "GET"}, errorVideoURL, http.StatusTemporaryRedirect)
 }
 
-// Reload updates the server components at runtime. Port and Version from opts are ignored.
 func (s *Server) Reload(opts *ServerOptions) {
 	if opts == nil {
 		return
@@ -2162,8 +2130,6 @@ func (w *writeTimeoutResponseWriter) Write(p []byte) (n int, err error) {
 	return w.ResponseWriter.Write(p)
 }
 
-// bufferedResponseWriter wraps ResponseWriter with a bufio.Writer to smooth throughput
-// when serving video (fewer small writes to the client, better MP4 playback).
 type bufferedResponseWriter struct {
 	http.ResponseWriter
 	bw *bufio.Writer
@@ -2187,21 +2153,20 @@ func (b *bufferedResponseWriter) Flush() {
 	}
 }
 
-// StreamMonitor wraps an io.ReadSeekCloser to provide keep-alive updates
 type StreamMonitor struct {
 	io.ReadSeekCloser
 	sessionID  string
 	clientIP   string
 	manager    *session.Manager
 	lastUpdate time.Time
-	mu         sync.Mutex // Protect lastUpdate to be safe, though Read is usually serial
+	mu         sync.Mutex
 }
 
 func (s *StreamMonitor) Read(p []byte) (n int, err error) {
 	n, err = s.ReadSeekCloser.Read(p)
-
-	// Non-blocking update check
-	// We don't want to lock on every read, so just check time occasionally
+	if err != nil && errors.Is(err, unpack.ErrTooManyZeroFills) {
+		s.manager.MarkSlotFailedDuringStream(s.sessionID)
+	}
 	if time.Since(s.lastUpdate) > 10*time.Second {
 		s.mu.Lock()
 		if time.Since(s.lastUpdate) > 10*time.Second {
@@ -2210,7 +2175,6 @@ func (s *StreamMonitor) Read(p []byte) (n int, err error) {
 		}
 		s.mu.Unlock()
 	}
-
 	return n, err
 }
 

@@ -12,13 +12,11 @@ import (
 	"time"
 )
 
-// Client for TheMovieDB API
 type Client struct {
 	apiKey string
 	client *http.Client
 }
 
-// NewClient creates a new TMDB client
 func NewClient(apiKey string) *Client {
 	return &Client{
 		apiKey: apiKey,
@@ -28,7 +26,6 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
-// FindResponse represents the response from /find/{id}
 type FindResponse struct {
 	MovieResults     []Result `json:"movie_results"`
 	PersonResults    []Result `json:"person_results"`
@@ -37,20 +34,18 @@ type FindResponse struct {
 	TVSeasonResults  []Result `json:"tv_season_results"`
 }
 
-// Result represents a search result item
 type Result struct {
 	ID               int    `json:"id"`
-	Name             string `json:"name"`               // TV
-	Title            string `json:"title"`              // Movie
-	OriginalName     string `json:"original_name"`      // TV
-	OriginalTitle    string `json:"original_title"`     // Movie
-	OriginalLanguage string `json:"original_language"` // Movie (ISO 639-1)
+	Name             string `json:"name"`
+	Title            string `json:"title"`
+	OriginalName     string `json:"original_name"`
+	OriginalTitle    string `json:"original_title"`
+	OriginalLanguage string `json:"original_language"`
 	MediaType        string `json:"media_type"`
 	Overview         string `json:"overview"`
-	ReleaseDate      string `json:"release_date"`       // Movie (from Find)
+	ReleaseDate      string `json:"release_date"`
 }
 
-// SearchMultiResponse is the response from GET /search/multi
 type SearchMultiResponse struct {
 	Page         int                 `json:"page"`
 	Results      []SearchMultiResult `json:"results"`
@@ -58,21 +53,19 @@ type SearchMultiResponse struct {
 	TotalResults int                 `json:"total_results"`
 }
 
-// SearchMultiResult is one item from multi search (movie or TV)
 type SearchMultiResult struct {
-	ID             int    `json:"id"`
-	Title          string `json:"title"`           // Movie
-	Name           string `json:"name"`            // TV
-	MediaType      string `json:"media_type"`     // "movie" or "tv"
-	ReleaseDate    string `json:"release_date"`   // Movie
-	FirstAirDate   string `json:"first_air_date"` // TV
-	OriginalTitle  string `json:"original_title"`
-	OriginalName   string `json:"original_name"`
-	PosterPath     string `json:"poster_path"`   // e.g. "/abc.jpg" for image.tmdb.org/t/p/w92/abc.jpg"
-	Overview       string `json:"overview"`      // Short description
+	ID            int    `json:"id"`
+	Title         string `json:"title"`
+	Name          string `json:"name"`
+	MediaType     string `json:"media_type"`
+	ReleaseDate   string `json:"release_date"`
+	FirstAirDate  string `json:"first_air_date"`
+	OriginalTitle string `json:"original_title"`
+	OriginalName  string `json:"original_name"`
+	PosterPath    string `json:"poster_path"`
+	Overview      string `json:"overview"`
 }
 
-// ExternalIDsResponse represents the response from /{type}/{id}/external_ids
 type ExternalIDsResponse struct {
 	ID          int    `json:"id"`
 	IMDbID      string `json:"imdb_id"`
@@ -84,14 +77,11 @@ type ExternalIDsResponse struct {
 	TwitterID   string `json:"twitter_id"`
 }
 
-// MovieTranslationsResponse is the response from GET /movie/{id}/translations
-// https://developer.themoviedb.org/reference/movie-translations
 type MovieTranslationsResponse struct {
-	ID           int                    `json:"id"`
+	ID           int                     `json:"id"`
 	Translations []MovieTranslationEntry `json:"translations"`
 }
 
-// MovieTranslationEntry is one translation (language) for a movie
 type MovieTranslationEntry struct {
 	ISO639_1    string               `json:"iso_639_1"`
 	ISO3166_1   string               `json:"iso_3166_1"`
@@ -100,7 +90,6 @@ type MovieTranslationEntry struct {
 	Data        MovieTranslationData `json:"data"`
 }
 
-// MovieTranslationData holds the translated title and overview
 type MovieTranslationData struct {
 	Title    string `json:"title"`
 	Overview string `json:"overview"`
@@ -120,8 +109,6 @@ func (c *Client) doRequest(endpoint string, params url.Values) (*http.Response, 
 	return c.client.Do(req)
 }
 
-// Find searches for objects by external ID (IMDb ID)
-// source: 'imdb_id', 'tvdb_id', etc.
 func (c *Client) Find(externalID, source string) (*FindResponse, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("TMDB API key not configured")
@@ -149,8 +136,6 @@ func (c *Client) Find(externalID, source string) (*FindResponse, error) {
 	return &result, nil
 }
 
-// SearchMulti searches for movies and TV shows by query string.
-// Uses GET /search/multi. Limit results to the first page with page size up to 20.
 func (c *Client) SearchMulti(query string) (*SearchMultiResponse, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("TMDB API key not configured")
@@ -174,11 +159,11 @@ func (c *Client) SearchMulti(query string) (*SearchMultiResponse, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode TMDB search response: %w", err)
 	}
-	// Limit to 20 results
+
 	if len(result.Results) > 20 {
 		result.Results = result.Results[:20]
 	}
-	// Filter to only movie and tv
+
 	filtered := result.Results[:0]
 	for _, r := range result.Results {
 		if r.MediaType == "movie" || r.MediaType == "tv" {
@@ -189,8 +174,6 @@ func (c *Client) SearchMulti(query string) (*SearchMultiResponse, error) {
 	return &result, nil
 }
 
-// GetExternalIDs retrieves external IDs for a specific TMDB object
-// mediaType: 'movie' or 'tv'
 func (c *Client) GetExternalIDs(tmdbID int, mediaType string) (*ExternalIDsResponse, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("TMDB API key not configured")
@@ -217,37 +200,32 @@ func (c *Client) GetExternalIDs(tmdbID int, mediaType string) (*ExternalIDsRespo
 	return &result, nil
 }
 
-// MovieDetails is the response from GET /movie/{id}
 type MovieDetails struct {
 	ID               int    `json:"id"`
 	Title            string `json:"title"`
 	ReleaseDate      string `json:"release_date"`
 	OriginalTitle    string `json:"original_title"`
-	OriginalLanguage string `json:"original_language"` // ISO 639-1, e.g. "en", "ja"
+	OriginalLanguage string `json:"original_language"`
 }
 
-// TVDetails is the response from GET /tv/{id}
 type TVDetails struct {
-	ID                int            `json:"id"`
-	Name              string         `json:"name"`
-	NumberOfSeasons   int            `json:"number_of_seasons"`
-	Seasons           []TVSeasonInfo `json:"seasons"`
+	ID              int            `json:"id"`
+	Name            string         `json:"name"`
+	NumberOfSeasons int            `json:"number_of_seasons"`
+	Seasons         []TVSeasonInfo `json:"seasons"`
 }
 
-// TVSeasonInfo is one season in TV details (season_number 0 is usually "Specials").
 type TVSeasonInfo struct {
-	SeasonNumber int `json:"season_number"`
-	EpisodeCount int `json:"episode_count"`
+	SeasonNumber int    `json:"season_number"`
+	EpisodeCount int    `json:"episode_count"`
 	Name         string `json:"name"`
 }
 
-// TVSeasonDetails is the response from GET /tv/{id}/season/{season_number}
 type TVSeasonDetails struct {
 	SeasonNumber int             `json:"season_number"`
 	Episodes     []TVEpisodeInfo `json:"episodes"`
 }
 
-// TVEpisodeInfo is one episode in a season.
 type TVEpisodeInfo struct {
 	EpisodeNumber int    `json:"episode_number"`
 	Name          string `json:"name"`
@@ -255,15 +233,11 @@ type TVEpisodeInfo struct {
 	AirDate       string `json:"air_date"`
 }
 
-// GetMovieTitle returns the movie title for text-based search.
-// Supports IMDb ID (tt123) or TMDB ID.
 func (c *Client) GetMovieTitle(imdbID string, tmdbID string) (string, error) {
 	title, _, err := c.GetMovieTitleAndYear(imdbID, tmdbID)
 	return title, err
 }
 
-// GetMovieTitleAndYear returns the movie title and release year (e.g. "2026" from ReleaseDate).
-// Year is empty when not available (e.g. when resolving by IMDb ID only via Find).
 func (c *Client) GetMovieTitleAndYear(imdbID string, tmdbID string) (title string, year string, err error) {
 	if tmdbID != "" {
 		if id, parseErr := strconv.Atoi(tmdbID); parseErr == nil {
@@ -290,8 +264,6 @@ func (c *Client) GetMovieTitleAndYear(imdbID string, tmdbID string) (title strin
 	return "", "", fmt.Errorf("could not resolve movie title")
 }
 
-// GetTVShowName returns the TV show name for text-based search.
-// Supports TMDB ID or IMDb ID (tt123).
 func (c *Client) GetTVShowName(tmdbID string, imdbID string) (string, error) {
 	if tmdbID != "" {
 		if id, err := strconv.Atoi(tmdbID); err == nil {
@@ -314,13 +286,10 @@ func (c *Client) GetTVShowName(tmdbID string, imdbID string) (string, error) {
 	return "", fmt.Errorf("could not resolve TV show name")
 }
 
-// GetMovieDetails fetches movie title for text-based search.
 func (c *Client) GetMovieDetails(tmdbID int) (*MovieDetails, error) {
 	return c.GetMovieDetailsWithLanguage(tmdbID, "")
 }
 
-// GetMovieDetailsWithLanguage fetches movie details in the given language (e.g. "de-DE" for German).
-// Pass "" for default language.
 func (c *Client) GetMovieDetailsWithLanguage(tmdbID int, language string) (*MovieDetails, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("TMDB API key not configured")
@@ -345,8 +314,6 @@ func (c *Client) GetMovieDetailsWithLanguage(tmdbID int, language string) (*Movi
 	return &d, nil
 }
 
-// GetMovieTranslations fetches all translations for a movie (GET /movie/{id}/translations).
-// https://developer.themoviedb.org/reference/movie-translations
 func (c *Client) GetMovieTranslations(movieID int) (*MovieTranslationsResponse, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("TMDB API key not configured")
@@ -368,8 +335,6 @@ func (c *Client) GetMovieTranslations(movieID int) (*MovieTranslationsResponse, 
 	return &out, nil
 }
 
-// movieTitleFromTranslations returns the translated title for the given language.
-// language is e.g. "de-DE" (iso_639_1 + iso_3166_1); we match exact or language-only (e.g. "de").
 func movieTitleFromTranslations(translations *MovieTranslationsResponse, language string) string {
 	if translations == nil || language == "" {
 		return ""
@@ -380,7 +345,7 @@ func movieTitleFromTranslations(translations *MovieTranslationsResponse, languag
 		if t.Data.Title == "" {
 			continue
 		}
-		// Prefer exact match (e.g. de-DE)
+
 		if countryCode != "" {
 			if strings.EqualFold(t.ISO639_1, langCode) && strings.EqualFold(t.ISO3166_1, countryCode) {
 				logger.Debug("TMDB translation match", "requested", language, "iso_639_1", t.ISO639_1, "iso_3166_1", t.ISO3166_1, "title", t.Data.Title)
@@ -393,7 +358,7 @@ func movieTitleFromTranslations(translations *MovieTranslationsResponse, languag
 			}
 		}
 	}
-	// Fallback: match language only
+
 	for i := range translations.Translations {
 		t := &translations.Translations[i]
 		if t.Data.Title != "" && strings.EqualFold(t.ISO639_1, langCode) {
@@ -413,15 +378,10 @@ func splitLanguageTag(tag string) (lang, country string) {
 	return tag, ""
 }
 
-// GetMovieTitleForSearch returns the movie title (and optional year) for indexer search,
-// optionally in the given language and normalized for filename matching (e.g. ü→ue).
-// language: e.g. "de-DE" for German; empty = default. When set, we use the Translations API for the title.
-// includeYear: append release year. normalize: apply umlaut→ascii.
 func (c *Client) GetMovieTitleForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (string, error) {
 	var movieID int
 	var title, year string
 
-	// Resolve movie ID and default title/year
 	if tmdbID != "" {
 		if id, err := strconv.Atoi(tmdbID); err == nil {
 			movieID = id
@@ -450,7 +410,6 @@ func (c *Client) GetMovieTitleForSearch(imdbID, tmdbID, language string, include
 		}
 	}
 
-	// When a language is requested, use the Translations API for the title
 	if language != "" && movieID != 0 {
 		tr, err := c.GetMovieTranslations(movieID)
 		if err != nil {
@@ -474,9 +433,6 @@ func (c *Client) GetMovieTitleForSearch(imdbID, tmdbID, language string, include
 	return out, nil
 }
 
-// GetMovieTitlesForSearch returns primary and optional original-language title for indexer search.
-// When the movie's original_language is not "en", original is the formatted original title (with year/normalize)
-// so callers can run a second text query and merge results. Uses one fetch (details or find).
 func (c *Client) GetMovieTitlesForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (primary, original string, err error) {
 	var movieID int
 	var title, year string
@@ -567,7 +523,6 @@ func (c *Client) GetMovieTitlesForSearch(imdbID, tmdbID, language string, includ
 	return primary, out, nil
 }
 
-// GetTVDetails fetches TV show name for text-based search.
 func (c *Client) GetTVDetails(tmdbID int) (*TVDetails, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("TMDB API key not configured")
@@ -588,7 +543,6 @@ func (c *Client) GetTVDetails(tmdbID int) (*TVDetails, error) {
 	return &d, nil
 }
 
-// GetTVSeasonDetails fetches episode list for a season (GET /tv/{id}/season/{season_number}).
 func (c *Client) GetTVSeasonDetails(seriesID, seasonNumber int) (*TVSeasonDetails, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("TMDB API key not configured")
@@ -609,15 +563,13 @@ func (c *Client) GetTVSeasonDetails(seriesID, seasonNumber int) (*TVSeasonDetail
 	return &d, nil
 }
 
-// ResolveTVDBID tries to find the TVDB ID for a given IMDb string (e.g. tt123456)
 func (c *Client) ResolveTVDBID(imdbID string) (string, error) {
-	// 1. Find the TMDB ID from IMDb ID
+
 	findResp, err := c.Find(imdbID, "imdb_id")
 	if err != nil {
 		return "", err
 	}
 
-	// Check if we found a TV show
 	if len(findResp.TVResults) == 0 {
 		return "", fmt.Errorf("no TV show found for IMDb ID: %s", imdbID)
 	}
@@ -625,7 +577,6 @@ func (c *Client) ResolveTVDBID(imdbID string) (string, error) {
 	tmdbID := findResp.TVResults[0].ID
 	logger.Debug("Resolved TMDB ID from IMDb", "imdb", imdbID, "tmdb", tmdbID)
 
-	// 2. Get External IDs using TMDB ID
 	extIDs, err := c.GetExternalIDs(tmdbID, "tv")
 	if err != nil {
 		return "", err

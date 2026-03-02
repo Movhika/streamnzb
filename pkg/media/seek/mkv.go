@@ -5,42 +5,35 @@ import (
 	"math"
 )
 
-// Matroska/EBML element IDs (level 0–1) and Info children.
 var (
-	// Segment is level 0 (0x18538067).
 	ebmlSegmentID = []byte{0x18, 0x53, 0x80, 0x67}
-	// Info is level 1 under Segment (0x1549A966).
+
 	ebmlInfoID = []byte{0x15, 0x49, 0xA9, 0x66}
-	// TimestampScale (0x2AD7B1) - uint, default 1000000 (nanoseconds per tick).
+
 	ebmlTimestampScaleID = []byte{0x2A, 0xD7, 0xB1}
-	// Duration (0x4489) - float, segment duration in ticks.
+
 	ebmlDurationID = []byte{0x44, 0x89}
 )
 
 const defaultTimestampScale = 1000000
 
-// durationFromMKV parses data (first portion of file) for EBML Segment → Info,
-// then TimestampScale and Duration. Returns duration in seconds.
-// Duration is in segment ticks; duration_sec = Duration * TimestampScale / 1e9.
 func durationFromMKV(data []byte) (durationSec float64, ok bool) {
-	// Skip EBML header: find Segment by scanning for its ID (simple approach)
+
 	segStart := findInBytes(data, ebmlSegmentID)
 	if segStart < 0 {
 		return 0, false
 	}
 	segData := data[segStart:]
-	// Segment payload starts after ID + size
+
 	off, payloadLen := readEBMLElement(segData)
 	if off < 0 || payloadLen < 0 {
 		return 0, false
 	}
 	segPayload := segData[off:]
-	if int64(len(segPayload)) < payloadLen {
-		segPayload = segPayload[:len(segPayload)]
-	} else {
+	if int64(len(segPayload)) >= payloadLen {
 		segPayload = segPayload[:payloadLen]
 	}
-	// Find Info inside Segment
+
 	infoStart := findInBytes(segPayload, ebmlInfoID)
 	if infoStart < 0 {
 		return 0, false
@@ -56,7 +49,7 @@ func durationFromMKV(data []byte) (durationSec float64, ok bool) {
 	}
 	var timecodeScale uint64 = defaultTimestampScale
 	var duration float64 = -1
-	// Parse Info children
+
 	for len(infoPayload) > 0 {
 		idLen, _ := readEBMLVINT(infoPayload)
 		if idLen <= 0 {
@@ -93,7 +86,7 @@ func durationFromMKV(data []byte) (durationSec float64, ok bool) {
 	if duration <= 0 || timecodeScale == 0 {
 		return 0, false
 	}
-	// Duration is in segment ticks; TimestampScale is nanoseconds per tick
+
 	return duration * float64(timecodeScale) / 1e9, true
 }
 
@@ -118,7 +111,6 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
-// readEBMLElement reads element ID (VINT) and size (VINT), returns offset to payload and payload length.
 func readEBMLElement(data []byte) (payloadOffset int, payloadLen int64) {
 	idLen, _ := readEBMLVINT(data)
 	if idLen <= 0 || idLen >= len(data) {

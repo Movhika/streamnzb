@@ -11,7 +11,16 @@ import (
 	"streamnzb/pkg/search/parser"
 )
 
-// matchSingle returns true if value matches any in list (case-insensitive, contains or equal).
+func getAvailStatus(rel *release.Release) string {
+	if rel == nil || rel.Available == nil {
+		return "unknown"
+	}
+	if *rel.Available {
+		return "available"
+	}
+	return "unavailable"
+}
+
 func matchSingle(value string, list []string) bool {
 	if value == "" || len(list) == 0 {
 		return false
@@ -25,7 +34,6 @@ func matchSingle(value string, list []string) bool {
 	return false
 }
 
-// matchMulti returns true if any of values matches any in list.
 func matchMulti(values []string, list []string) bool {
 	if len(list) == 0 {
 		return false
@@ -58,8 +66,6 @@ func matchVisualTags(p *parser.ParsedRelease, list []string) bool {
 	return matchMulti(tags, list)
 }
 
-// matchGroup returns true if the release group equals any entry in list (case-insensitive).
-// Whole-word only: "CiNE" does not match "CiNEPHiLES", "E" does not match "EPSiLON".
 func matchGroup(group string, list []string) bool {
 	if group == "" || len(list) == 0 {
 		return false
@@ -74,8 +80,6 @@ func matchGroup(group string, list []string) bool {
 	return false
 }
 
-// isIncludedBypass checks all Included (whitelist bypass) lists across every category.
-// If the release matches ANY included rule in ANY category, it passes ALL filters.
 func isIncludedBypass(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *release.Release) bool {
 	if matchSingle(p.Quality, cfg.QualityIncluded) {
 		return true
@@ -116,7 +120,7 @@ func isIncludedBypass(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *re
 	if matchGroup(p.Group, cfg.GroupIncluded) {
 		return true
 	}
-	// Languages bypass
+
 	if len(cfg.LanguagesIncluded) > 0 {
 		languages := mergeReleaseLanguages(p.Languages, nil)
 		if rel != nil && len(rel.Languages) > 0 {
@@ -126,10 +130,12 @@ func isIncludedBypass(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *re
 			return true
 		}
 	}
+
+	if matchSingle(getAvailStatus(rel), cfg.AvailNZBIncluded) {
+		return true
+	}
 	return false
 }
-
-// --- Excluded checks (reject if matches) ---
 
 func checkQualityExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 	return len(cfg.QualityExcluded) > 0 && matchSingle(p.Quality, cfg.QualityExcluded)
@@ -183,6 +189,10 @@ func checkGroupExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease) bool 
 	return len(cfg.GroupExcluded) > 0 && matchGroup(p.Group, cfg.GroupExcluded)
 }
 
+func checkAvailNZBExcluded(cfg *config.FilterConfig, rel *release.Release) bool {
+	return len(cfg.AvailNZBExcluded) > 0 && matchSingle(getAvailStatus(rel), cfg.AvailNZBExcluded)
+}
+
 func checkLanguagesExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *release.Release) bool {
 	if len(cfg.LanguagesExcluded) == 0 {
 		return false
@@ -200,8 +210,6 @@ func checkLanguagesExcluded(cfg *config.FilterConfig, p *parser.ParsedRelease, r
 	}
 	return false
 }
-
-// --- Required checks (must match at least one, or reject) ---
 
 func checkQualityRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 	return len(cfg.QualityRequired) > 0 && !matchSingle(p.Quality, cfg.QualityRequired)
@@ -259,6 +267,10 @@ func checkRegionRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool
 
 func checkGroupRequired(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 	return len(cfg.GroupRequired) > 0 && !matchGroup(p.Group, cfg.GroupRequired)
+}
+
+func checkAvailNZBRequired(cfg *config.FilterConfig, rel *release.Release) bool {
+	return len(cfg.AvailNZBRequired) > 0 && !matchSingle(getAvailStatus(rel), cfg.AvailNZBRequired)
 }
 
 func checkLanguagesRequired(cfg *config.FilterConfig, p *parser.ParsedRelease, rel *release.Release) bool {
@@ -459,16 +471,6 @@ func checkRegexRequired(compiledRequired []*regexp.Regexp, rel *release.Release)
 		}
 	}
 	return true
-}
-
-func checkAvailNZB(cfg *config.FilterConfig, rel *release.Release) bool {
-	if cfg.AvailNZBRequired == nil || !*cfg.AvailNZBRequired {
-		return true
-	}
-	if rel == nil || rel.Available == nil {
-		return true
-	}
-	return *rel.Available
 }
 
 func checkSizeWithResolution(cfg *config.FilterConfig, rel *release.Release, p *parser.ParsedRelease) bool {

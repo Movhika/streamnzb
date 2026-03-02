@@ -15,10 +15,10 @@ import (
 	"streamnzb/pkg/services/metadata/tmdb"
 	"streamnzb/pkg/services/metadata/tvdb"
 	"streamnzb/pkg/usenet/nntp"
+	"streamnzb/pkg/usenet/pool"
 	"streamnzb/pkg/usenet/validation"
 )
 
-// BuildOpts holds external dependencies (env/ldflags) not stored in config
 type BuildOpts struct {
 	AvailNZBURL    string
 	AvailNZBAPIKey string
@@ -28,15 +28,15 @@ type BuildOpts struct {
 	SessionTTL     time.Duration
 }
 
-// Components holds all application components built from config
 type Components struct {
 	Config               *config.Config
 	Indexer              indexer.Indexer
 	ProviderPools        map[string]*nntp.ClientPool
 	ProviderOrder        []string
 	StreamingPools       []*nntp.ClientPool
+	UsenetPool           *pool.Pool
 	AvailNZBIndexerHosts []string
-	IndexerCaps          map[string]*indexer.Caps // Capabilities per indexer name
+	IndexerCaps          map[string]*indexer.Caps
 	Validator            *validation.Checker
 	Triage               *triage.Service
 	AvailClient          *availnzb.Client
@@ -44,19 +44,16 @@ type Components struct {
 	TVDBClient           *tvdb.Client
 }
 
-// App centralizes service construction and granular reload
 type App struct {
 	mu         sync.RWMutex
 	components *Components
 	opts       BuildOpts
 }
 
-// New creates an App. Call Build to initialize components.
 func New() *App {
 	return &App{}
 }
 
-// Build constructs all components from config. Use for initial bootstrap.
 func (a *App) Build(cfg *config.Config, opts BuildOpts) (*Components, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -70,7 +67,6 @@ func (a *App) Build(cfg *config.Config, opts BuildOpts) (*Components, error) {
 	return comp, nil
 }
 
-// buildFull runs full BuildComponents and builds validator, triage, avail, tmdb, tvdb
 func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error) {
 	base, err := initialization.BuildComponents(cfg)
 	if err != nil {
@@ -78,12 +74,7 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 	}
 
 	const validationSampleSize = 5
-	validator := validation.NewChecker(
-		base.ProviderPools,
-		base.ProviderOrder,
-		validationSampleSize,
-		6,
-	)
+	validator := validation.NewChecker(base.UsenetPool, validationSampleSize, 6)
 	defaultFilters := config.DefaultFilterConfig()
 	defaultSorting := config.DefaultSortConfig()
 	triageSvc := triage.NewService(&defaultFilters, defaultSorting)
@@ -107,6 +98,7 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 		ProviderPools:        base.ProviderPools,
 		ProviderOrder:        base.ProviderOrder,
 		StreamingPools:       base.StreamingPools,
+		UsenetPool:           base.UsenetPool,
 		AvailNZBIndexerHosts: base.AvailNZBIndexerHosts,
 		IndexerCaps:          base.IndexerCaps,
 		Validator:            validator,
@@ -117,18 +109,16 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 	}, nil
 }
 
-// ReloadScope indicates what changed and needs reloading
 type ReloadScope int
 
 const (
-	ReloadConfigOnly ReloadScope = iota // Filters, Sorting, LogLevel - no NNTP/indexer restart
-	ReloadIndexers                      // Indexers changed
-	ReloadProviders                     // Providers changed - full pool rebuild
-	ReloadProxy                         // Proxy settings changed
-	ReloadFull                          // Indexers or Providers changed - full rebuild
+	ReloadConfigOnly ReloadScope = iota
+	ReloadIndexers
+	ReloadProviders
+	ReloadProxy
+	ReloadFull
 )
 
-// ConfigChanged returns what scope of reload is needed
 func ConfigChanged(old, new_ *config.Config) ReloadScope {
 	if old == nil || new_ == nil {
 		return ReloadFull
@@ -145,14 +135,11 @@ func ConfigChanged(old, new_ *config.Config) ReloadScope {
 		return ReloadFull
 	}
 	if proxyChanged {
-		return ReloadFull // Validator depends on proxy settings
+		return ReloadFull
 	}
 	return ReloadConfigOnly
 }
 
-// Reload performs granular reload based on config diff.
-// Returns (components, fullReload). When fullReload is false, caller must NOT shutdown
-// NNTP pools or restart proxy - only update config, triage, stremio.
 func (a *App) Reload(newCfg *config.Config) (*Components, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -162,7 +149,7 @@ func (a *App) Reload(newCfg *config.Config) (*Components, bool, error) {
 
 	switch scope {
 	case ReloadConfigOnly:
-		// No pool/indexer rebuild - just config + triage
+
 		logger.Info("Reload: config-only - no NNTP/indexer restart")
 		defaultFilters := config.DefaultFilterConfig()
 		defaultSorting := config.DefaultSortConfig()
@@ -202,7 +189,6 @@ func (a *App) Reload(newCfg *config.Config) (*Components, bool, error) {
 	}
 }
 
-// Components returns the current components (read-only). Safe for concurrent read.
 func (a *App) Components() *Components {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

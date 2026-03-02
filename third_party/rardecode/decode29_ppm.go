@@ -1,8 +1,8 @@
 package rardecode
 
 type ppm29Decoder struct {
-	m   model // ppm model
-	esc byte  // escape character
+	m   model
+	esc byte
 	br  *rarBitReader
 }
 
@@ -82,7 +82,6 @@ func (d *ppm29Decoder) readFilterData() ([]byte, error) {
 	return buf, nil
 }
 
-// fill window until full, error, filter found or end of block.
 func (d *ppm29Decoder) fill(dr *decodeReader) ([]byte, error) {
 	for dr.notFull() {
 		c, err := d.m.ReadByte()
