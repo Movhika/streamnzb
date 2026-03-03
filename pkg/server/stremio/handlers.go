@@ -1767,6 +1767,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	var triedSlotIDs []string
 	for {
 		triedSlotIDs = append(triedSlotIDs, sessionID)
+		s.prefetchNextFallbackNZB(nextFallbackSessionID(sess), device, skipFilterSort)
 		stream, name, size, err = s.tryPlaySlot(r.Context(), sess)
 		if err == nil {
 			break
@@ -1913,6 +1914,24 @@ func nextFallbackSessionID(sess *session.Session) string {
 		return ""
 	}
 	return nextURL[idx+len("/play/"):]
+}
+
+// prefetchNextFallbackNZB starts a background goroutine to resolve the next fallback slot and
+// download its NZB so that when we fail over to it, tryPlaySlot may find the NZB already loaded.
+func (s *Server) prefetchNextFallbackNZB(nextSlotID string, device *auth.Device, skipFilterSort bool) {
+	if nextSlotID == "" {
+		return
+	}
+	go func(id string, dev *auth.Device, skip bool) {
+		ctx := context.Background()
+		sess, err := s.getOrResolveSession(ctx, id, dev, skip)
+		if err != nil {
+			return
+		}
+		if _, err := sess.GetOrDownloadNZB(s.sessionManager); err != nil {
+			logger.Trace("Prefetch NZB failed (next fallback)", "slot", id, "err", err)
+		}
+	}(nextSlotID, device, skipFilterSort)
 }
 
 func (s *Server) getOrResolveSession(ctx context.Context, sessionID string, device *auth.Device, skipFilterSort bool) (*session.Session, error) {
