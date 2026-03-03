@@ -369,9 +369,9 @@ func scanFullArchive(rarFiles []UnpackableFile, password string) []filePart {
 		firstName = ExtractFilename(rarFiles[0].Name())
 	}
 
-	for _, f := range rarFiles {
-		_ = f.EnsureSegmentMap()
-	}
+	// Do not EnsureSegmentMap for all volumes here: it would trigger segment-0 fetch for every
+	// RAR file sequentially (hundreds of round-trips). Segment maps are populated lazily when
+	// each volume is first read by ListArchiveInfo.
 
 	fsys := NewNZBFSFromMap(fileMap)
 	logger.Debug("Full archive scan starting", "first", firstName, "volumes", len(rarFiles))
