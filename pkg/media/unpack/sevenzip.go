@@ -31,6 +31,16 @@ func CreateSevenZipBlueprint(files []UnpackableFile, firstVolName string, passwo
 	parts := filesToParts(archiveFiles)
 	mr := NewConcatenatedReaderAt(parts)
 
+	// Verify 7z magic signature before passing to library
+	// Signature is 7z (0x37 0x7A 0xBC 0xAF 0x27 0x1C)
+	header := make([]byte, 6)
+	if _, err := mr.ReadAt(header, 0); err != nil {
+		return nil, fmt.Errorf("failed to read 7z header: %w", err)
+	}
+	if string(header[:2]) != "7z" || header[2] != 0xBC || header[3] != 0xAF || header[4] != 0x27 || header[5] != 0x1C {
+		return nil, fmt.Errorf("failed to open 7z archive: invalid header (possibly missing segments or corrupted)")
+	}
+
 	var r *sevenzip.Reader
 	var err error
 	if password != "" {

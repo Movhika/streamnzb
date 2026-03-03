@@ -311,6 +311,9 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int) ([]by
 		if isArticleNotFound(err) {
 			return nil, fmt.Errorf("segment unavailable: %w", err)
 		}
+		if index == 0 {
+			return nil, fmt.Errorf("first segment fetch failed: %w", err)
+		}
 		f.zeroFillMu.Lock()
 		count := f.zeroFillCount
 		if count >= MaxZeroFills {
@@ -427,6 +430,10 @@ func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int) ([]byte
 
 	if lastErr != nil && isArticleNotFound(lastErr) {
 		return nil, fmt.Errorf("segment unavailable: %w", lastErr)
+	}
+
+	if index == 0 {
+		return nil, fmt.Errorf("first segment failed on all providers: %w", lastErr)
 	}
 
 	f.zeroFillMu.Lock()

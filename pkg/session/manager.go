@@ -99,6 +99,7 @@ type Manager struct {
 	failoverOrder           sync.Map
 	knownGoodSlots          sync.Map
 	slotFailedDuringPlayback sync.Map // slotPath -> *failedSlotEntry (430 during streaming)
+	aioStreamsDevices       sync.Map  // deviceToken -> true (device has sent AIOStreams User-Agent)
 }
 
 type failedSlotEntry struct {
@@ -331,6 +332,22 @@ func (m *Manager) SetFallbackStreams(sessionID string, urls []string) {
 		return
 	}
 	session.SetFallbackStreams(urls)
+}
+
+// SetAIOStreamsDevice marks this device as an AIOStreams client. Call when User-Agent contains "AIOStreams".
+func (m *Manager) SetAIOStreamsDevice(deviceToken string) {
+	if deviceToken != "" {
+		m.aioStreamsDevices.Store(deviceToken, true)
+	}
+}
+
+// IsAIOStreamsDevice returns true if this device has been seen with AIOStreams User-Agent.
+func (m *Manager) IsAIOStreamsDevice(deviceToken string) bool {
+	if deviceToken == "" {
+		return false
+	}
+	v, ok := m.aioStreamsDevices.Load(deviceToken)
+	return ok && v == true
 }
 
 func failoverOrderMapKey(deviceToken, streamKey string) string {

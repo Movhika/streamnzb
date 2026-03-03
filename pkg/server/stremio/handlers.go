@@ -287,16 +287,15 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	defer cancel()
 
 	logger.Trace("stream request start", "type", contentType, "id", id)
-	isAIOStreams := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
-	deviceToken := ""
-	if device != nil {
-		deviceToken = device.Token
+	if device != nil && strings.Contains(r.Header.Get("User-Agent"), "AIOStreams") {
+		s.sessionManager.SetAIOStreamsDevice(device.Token)
 	}
-	var streams []Stream
+	baseURL := s.baseURLWithToken(device)
 	streamsList := s.streamConfigsForStreamRequest()
+	var streams []Stream
 	for _, str := range streamsList {
 		key := StreamSlotKey{StreamID: str.ID, ContentType: contentType, ID: id}
-		list, err := s.buildOrderedPlayList(ctx, key, isAIOStreams)
+		slotStreams, list, err := s.buildStreamsForKey(ctx, key, str, device, baseURL)
 		if err != nil {
 			logger.Error("Error building play list", "streamId", str.ID, "err", err)
 			continue
@@ -304,21 +303,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		if list == nil {
 			continue
 		}
-		if len(list.Candidates) == 0 {
-			continue
-		}
-		if isAIOStreams {
-			list = filterPlayListToAvailableForAIOStreams(list)
-			if list != nil && len(list.Candidates) == 0 {
-				continue
-			}
-		}
-		if order := s.sessionManager.GetDeviceFailoverOrder(deviceToken, key.CacheKey()); len(order) > 0 {
-			list = filterPlayListByOrder(list, key, order)
-		}
-		s.clearNextReleaseBound(device, key)
-		baseURL := s.baseURLWithToken(device)
-		streams = append(streams, buildStreamsFromPlayList(list, key, str.Name, baseURL, str.ShowAllStream || isAIOStreams)...)
+		streams = append(streams, slotStreams...)
 		logger.Debug("Stream rows", "streamId", str.ID, "name", str.Name, "candidates", len(list.Candidates), "showAllStream", str.ShowAllStream)
 	}
 	if streams == nil {
@@ -346,6 +331,9 @@ type failoverOrderRequest struct {
 
 func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	logger.Debug("Failover order request", "device", device.Username, "method", r.Method, "url", r.URL.Path)
+	if device != nil && strings.Contains(r.Header.Get("User-Agent"), "AIOStreams") {
+		s.sessionManager.SetAIOStreamsDevice(device.Token)
+	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -367,28 +355,24 @@ func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, dev
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.mu.RLock()
-	sm := s.streamManager
-	s.mu.RUnlock()
 	var order []string
 	for _, entry := range req.Streams {
 		raw := strings.TrimSpace(entry.FailoverID)
 		if raw == "" {
 			continue
 		}
-		slotOrID := raw
+		slotPath := raw
 		if after, ok := strings.CutPrefix(raw, "streamnzb-"); ok {
-			slotOrID = after
+			slotPath = after
 		}
-
-		if !strings.HasPrefix(slotOrID, streamSlotPrefix) {
-			if sm != nil {
-				if str, _ := sm.Get(slotOrID); str == nil {
-					continue
-				}
-			}
+		// Only accept slot paths (stream:streamId:type:id:index); no legacy stream-ID-only entries.
+		if !strings.HasPrefix(slotPath, streamSlotPrefix) {
+			continue
 		}
-		order = append(order, slotOrID)
+		if _, _, _, _, ok := parseStreamSlotID(slotPath); !ok {
+			continue
+		}
+		order = append(order, slotPath)
 	}
 	if len(order) == 0 {
 		var firstNonEmptyRaw string
@@ -405,17 +389,9 @@ func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, dev
 				}
 			}
 		}
-		devKey := ""
-		if device != nil {
-			devKey = device.Token
-		}
-		logger.Info("Failover order: no entries stored (all skipped)", "device", devKey, "requested", len(req.Streams), "nonEmptyFailoverIds", nonEmptyCount, "firstFailoverIdSample", firstNonEmptyRaw)
+		logger.Info("Failover order: no entries stored (all skipped)", "device", deviceToken(device), "requested", len(req.Streams), "nonEmptyFailoverIds", nonEmptyCount, "firstFailoverIdSample", firstNonEmptyRaw)
 		w.WriteHeader(http.StatusNoContent)
 		return
-	}
-	deviceToken := ""
-	if device != nil {
-		deviceToken = device.Token
 	}
 	streamKey := ""
 	for _, entry := range order {
@@ -430,7 +406,8 @@ func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, dev
 			}
 		}
 	}
-	s.sessionManager.SetDeviceFailoverOrder(deviceToken, streamKey, order)
+	token := deviceToken(device)
+	s.sessionManager.SetDeviceFailoverOrder(token, streamKey, order)
 	sample := ""
 	if len(order) > 0 {
 		sample = order[0]
@@ -438,8 +415,7 @@ func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, dev
 			sample += " ... " + order[len(order)-1]
 		}
 	}
-	usingPaths := len(order) > 0 && strings.HasPrefix(order[0], streamSlotPrefix)
-	logger.Info("Failover order stored", "device", deviceToken, "streamKey", streamKey, "slots", len(order), "usingSlotPaths", usingPaths, "sample", sample)
+	logger.Info("Failover order stored", "device", token, "streamKey", streamKey, "slots", len(order), "sample", sample)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -580,31 +556,45 @@ func buildStreamsFromPlayList(list *orderedPlayListResult, key StreamSlotKey, st
 	return streams
 }
 
+// buildStreamsForKey runs the shared pipeline: build play list → optional AIO filter → device order → clear next bound → build Stream[].
+// Returns (nil, nil, nil) when there are no candidates; (nil, nil, err) on error.
+func (s *Server) buildStreamsForKey(ctx context.Context, key StreamSlotKey, str *stream.Stream, device *auth.Device, baseURL string) ([]Stream, *orderedPlayListResult, error) {
+	isAIOStreams := s.sessionManager.IsAIOStreamsDevice(deviceToken(device))
+	list, err := s.buildOrderedPlayList(ctx, key, isAIOStreams)
+	if err != nil {
+		return nil, nil, err
+	}
+	if list == nil || len(list.Candidates) == 0 {
+		return nil, nil, nil
+	}
+	if isAIOStreams {
+		list = filterPlayListToAvailableForAIOStreams(list)
+		if list == nil || len(list.Candidates) == 0 {
+			return nil, nil, nil
+		}
+	}
+	if order := s.sessionManager.GetDeviceFailoverOrder(deviceToken(device), key.CacheKey()); len(order) > 0 {
+		list = filterPlayListByOrder(list, key, order)
+	}
+	s.clearNextReleaseBound(device, key)
+	showAll := str.ShowAllStream || isAIOStreams
+	return buildStreamsFromPlayList(list, key, str.Name, baseURL, showAll), list, nil
+}
+
 func (s *Server) GetStreams(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
 	const streamRequestTimeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, streamRequestTimeout)
 	defer cancel()
-	deviceToken := ""
-	if device != nil {
-		deviceToken = device.Token
-	}
-	var streams []Stream
+	baseURL := s.baseURLWithToken(device)
 	streamsList := s.streamConfigsForStreamRequest()
+	var streams []Stream
 	for _, str := range streamsList {
 		key := StreamSlotKey{StreamID: str.ID, ContentType: contentType, ID: id}
-		list, err := s.buildOrderedPlayList(ctx, key, false)
-		if err != nil || list == nil {
+		slotStreams, _, err := s.buildStreamsForKey(ctx, key, str, device, baseURL)
+		if err != nil || slotStreams == nil {
 			continue
 		}
-		if len(list.Candidates) == 0 {
-			continue
-		}
-		if order := s.sessionManager.GetDeviceFailoverOrder(deviceToken, key.CacheKey()); len(order) > 0 {
-			list = filterPlayListByOrder(list, key, order)
-		}
-		s.clearNextReleaseBound(device, key)
-		baseURL := s.baseURLWithToken(device)
-		streams = append(streams, buildStreamsFromPlayList(list, key, str.Name, baseURL, str.ShowAllStream)...)
+		streams = append(streams, slotStreams...)
 	}
 	if sink := getStreamSinkFromContext(ctx); sink != nil {
 		for _, st := range streams {
@@ -739,6 +729,20 @@ func (s *Server) baseURLWithToken(device *auth.Device) string {
 	return base
 }
 
+func deviceToken(device *auth.Device) string {
+	if device != nil {
+		return device.Token
+	}
+	return ""
+}
+
+func nextReleaseStateKey(device *auth.Device, key StreamSlotKey) string {
+	if device != nil && device.Token != "" {
+		return device.Token + ":" + key.CacheKey()
+	}
+	return ":" + key.CacheKey()
+}
+
 func formatStreamSlotPath(streamID, contentType, id string, index int) string {
 	return streamSlotPrefix + streamID + ":" + contentType + ":" + id + ":" + strconv.Itoa(index)
 }
@@ -779,8 +783,8 @@ type rawSearchCacheEntry struct {
 	until time.Time
 }
 
-// filterPlayListByOrder returns a copy of list containing only candidates whose slot path is in order,
-// in the same order as order. SlotPaths on the result are set to the order entries so stream URLs match what the client has.
+// filterPlayListByOrder keeps only candidates whose slot path appears in order (same key, valid index), in that order.
+// SlotPaths on the result are set from order so stream URLs match the client. Non-slot-path entries are ignored.
 func filterPlayListByOrder(list *orderedPlayListResult, key StreamSlotKey, order []string) *orderedPlayListResult {
 	if list == nil || len(order) == 0 {
 		return list
@@ -856,23 +860,32 @@ func filterPlayListToAvailableForAIOStreams(list *orderedPlayListResult) *ordere
 	}
 }
 
-func (s *Server) buildOrderedPlayList(ctx context.Context, key StreamSlotKey, skipFilterSort bool) (*orderedPlayListResult, error) {
+// buildOrderedPlayList returns an ordered list of candidates for (stream, type, id).
+// Raw search is cached by (contentType, id); play list is cached by (key, isAIOStreams).
+// When isAIOStreams is true we skip triage/sort and do title dedup only (for AIOStreams client).
+func (s *Server) buildOrderedPlayList(ctx context.Context, key StreamSlotKey, isAIOStreams bool) (*orderedPlayListResult, error) {
 	if key.StreamID == "" {
 		key.StreamID = s.getDefaultStreamID()
 	}
-	list, err := s.buildOrderedPlayListUncached(ctx, key, skipFilterSort)
+	cacheKey := key.CacheKey()
+	if isAIOStreams {
+		cacheKey += "|noFilter"
+	}
+	if v, ok := s.playListCache.Load(cacheKey); ok {
+		if ent, _ := v.(*playListCacheEntry); ent != nil && time.Now().Before(ent.until) {
+			logger.Debug("Play list cache hit", "key", cacheKey)
+			return ent.result, nil
+		}
+	}
+	list, err := s.buildOrderedPlayListUncached(ctx, key, isAIOStreams)
 	if err != nil || list == nil {
 		return list, err
-	}
-	cacheKey := key.CacheKey()
-	if skipFilterSort {
-		cacheKey += "|noFilter"
 	}
 	s.playListCache.Store(cacheKey, &playListCacheEntry{result: list, until: time.Now().Add(playListCacheTTL)})
 	return list, nil
 }
 
-func (s *Server) buildOrderedPlayListUncached(ctx context.Context, key StreamSlotKey, skipFilterSort bool) (*orderedPlayListResult, error) {
+func (s *Server) buildOrderedPlayListUncached(ctx context.Context, key StreamSlotKey, isAIOStreams bool) (*orderedPlayListResult, error) {
 	raw, err := s.getOrBuildRawSearchResult(ctx, key.ContentType, key.ID)
 	if err != nil || raw == nil {
 		return nil, err
@@ -888,7 +901,7 @@ func (s *Server) buildOrderedPlayListUncached(ctx context.Context, key StreamSlo
 	if str == nil {
 		str = s.getGlobalStream()
 	}
-	return s.buildOrderedPlayListFromRaw(raw, str, skipFilterSort)
+	return s.buildOrderedPlayListFromRaw(raw, str, isAIOStreams)
 }
 
 func (s *Server) getOrBuildRawSearchResult(ctx context.Context, contentType, id string) (*rawSearchResult, error) {
@@ -1221,7 +1234,7 @@ func releasesToCandidates(releases []*release.Release) []triage.Candidate {
 	return out
 }
 
-func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.Stream, skipFilterSort bool) (*orderedPlayListResult, error) {
+func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.Stream, isAIOStreams bool) (*orderedPlayListResult, error) {
 	populateAvailable(raw)
 
 	unavailableDetailsURLs := make(map[string]bool)
@@ -1238,7 +1251,7 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 
 	allReleases := buildAllReleasesFromRaw(raw)
 	var merged []triage.Candidate
-	if skipFilterSort {
+	if isAIOStreams {
 		merged = releasesToCandidates(allReleases)
 	} else {
 		merged = s.triageCandidates(str, allReleases)
@@ -1246,7 +1259,7 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 
 	seenURL := make(map[string]bool)
 	var seenTitle map[string]bool
-	if skipFilterSort {
+	if isAIOStreams {
 		seenTitle = make(map[string]bool)
 	}
 	filtered := merged[:0]
@@ -1329,8 +1342,7 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 			merged = filtered
 		}
 	}
-	if !skipFilterSort {
-
+	if !isAIOStreams {
 		sort.Slice(merged, func(i, j int) bool {
 			return streamScoreFromCandidate(merged[i]) > streamScoreFromCandidate(merged[j])
 		})
@@ -1582,7 +1594,7 @@ func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, str
 		}
 		var streamURL string
 		if device != nil {
-			streamURL = fmt.Sprintf("%s/%s/play/%s", s.baseURL, device.Token, sessionID)
+			streamURL = s.baseURLWithToken(device) + "/play/" + sessionID
 		}
 		sizeGB := float64(rel.Size) / (1024 * 1024 * 1024)
 		displayTitle := rel.Title + "\n[AvailNZB]"
@@ -1608,24 +1620,62 @@ func (s *Server) GetAvailNZBStreams(ctx context.Context, contentType, id string,
 	return streams, nil
 }
 
-func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index int, device *auth.Device, skipFilterSort bool) (*session.Session, error) {
+// buildFallbackURLsForSlot returns URLs for the next fallback slots: from device order (entries after sessionID)
+// if present and valid, otherwise from play list rest (index+1 .. end). Order entries must match key and be in range.
+func buildFallbackURLsForSlot(sessionID string, key StreamSlotKey, index int, numCandidates int, order []string, base string) []string {
+	maxIndex := numCandidates - 1
+	if maxIndex < 0 {
+		return nil
+	}
+	var urls []string
+	if len(order) > 0 {
+		ourPosition := -1
+		for p, entry := range order {
+			if entry == sessionID {
+				ourPosition = p
+				break
+			}
+		}
+		if ourPosition >= 0 {
+			for j := ourPosition + 1; j < len(order); j++ {
+				entry := order[j]
+				if !strings.HasPrefix(entry, streamSlotPrefix) {
+					continue
+				}
+				sid, ct, id, orderIndex, ok := parseStreamSlotID(entry)
+				if !ok || orderIndex < 0 || orderIndex > maxIndex {
+					continue
+				}
+				if ct != key.ContentType || id != key.ID {
+					continue
+				}
+				if sid != "" && sid != key.StreamID {
+					continue
+				}
+				urls = append(urls, base+"/play/"+entry)
+			}
+		}
+	}
+	if len(urls) == 0 {
+		for i := index + 1; i < numCandidates; i++ {
+			urls = append(urls, base+"/play/"+key.SlotPath(i))
+		}
+	}
+	return urls
+}
+
+func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index int, device *auth.Device) (*session.Session, error) {
 	if key.StreamID == "" {
 		key.StreamID = s.getDefaultStreamID()
 	}
-	list, err := s.buildOrderedPlayList(ctx, key, skipFilterSort)
+	isAIOStreams := s.sessionManager.IsAIOStreamsDevice(deviceToken(device))
+	list, err := s.buildOrderedPlayList(ctx, key, isAIOStreams)
 	if err != nil || list == nil {
 		return nil, fmt.Errorf("build play list: %w", err)
 	}
-	if index < 0 {
-		return nil, fmt.Errorf("index %d out of range (candidates %d)", index, len(list.Candidates))
-	}
-	if index >= len(list.Candidates) {
-		if len(list.Candidates) == 0 {
-			return nil, fmt.Errorf("index %d out of range (candidates 0)", index)
-		}
-		requested := index
-		index = len(list.Candidates) - 1
-		logger.Debug("Stream slot index out of range, using last candidate", "requested", requested, "candidates", len(list.Candidates))
+	n := len(list.Candidates)
+	if index < 0 || index >= n {
+		return nil, fmt.Errorf("index %d out of range (candidates %d)", index, n)
 	}
 	cand := list.Candidates[index]
 	rel := cand.Release
@@ -1645,54 +1695,8 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 		return nil, fmt.Errorf("create deferred session: %w", err)
 	}
 	base := s.baseURLWithToken(device)
-	token := ""
-	if device != nil {
-		token = device.Token
-	}
-	ourSlotPath := sessionID
-	order := s.sessionManager.GetDeviceFailoverOrder(token, key.CacheKey())
-	var fallbackURLs []string
-	var ourPosition int = -1
-	var matchedByPath bool
-	if len(order) > 0 {
-		for p, entry := range order {
-			if entry == ourSlotPath {
-				ourPosition = p
-				matchedByPath = true
-				break
-			}
-			if !strings.HasPrefix(entry, streamSlotPrefix) && entry == key.StreamID {
-				if legacyOccurrenceIndex(order, entry, p) == index {
-					ourPosition = p
-					break
-				}
-			}
-		}
-	}
-	if ourPosition >= 0 && !matchedByPath {
-		logger.Debug("Failover order: matched by legacy (stream ID + occurrence); send playPath as BingeGroup for exact order", "stream", key.StreamID, "index", index)
-	}
-
-	maxIndex := len(list.Candidates) - 1
-	if ourPosition >= 0 {
-		for j := ourPosition + 1; j < len(order); j++ {
-			entry := order[j]
-			if strings.HasPrefix(entry, streamSlotPrefix) {
-				if _, _, _, orderIndex, ok := parseStreamSlotID(entry); ok && orderIndex <= maxIndex {
-					fallbackURLs = append(fallbackURLs, base+"/play/"+entry)
-				}
-			} else {
-				ci := legacyOccurrenceIndex(order, entry, j)
-				if ci <= maxIndex {
-					fallbackURLs = append(fallbackURLs, base+"/play/"+formatStreamSlotPath(entry, key.ContentType, key.ID, ci))
-				}
-			}
-		}
-	} else {
-		for i := index + 1; i < len(list.Candidates); i++ {
-			fallbackURLs = append(fallbackURLs, base+"/play/"+key.SlotPath(i))
-		}
-	}
+	order := s.sessionManager.GetDeviceFailoverOrder(deviceToken(device), key.CacheKey())
+	fallbackURLs := buildFallbackURLsForSlot(sessionID, key, index, n, order, base)
 	s.sessionManager.SetFallbackStreams(sessionID, fallbackURLs)
 	sess, err := s.sessionManager.GetSession(sessionID)
 	if err != nil {
@@ -1743,11 +1747,11 @@ func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, devic
 
 	var playIndex int
 	if index == 0 {
-		stateKey := ":" + slotKey.CacheKey()
-		if device != nil && device.Token != "" {
-			stateKey = device.Token + ":" + slotKey.CacheKey()
+		if device != nil && strings.Contains(r.Header.Get("User-Agent"), "AIOStreams") {
+			s.sessionManager.SetAIOStreamsDevice(device.Token)
 		}
-		isAIOStreams := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
+		stateKey := nextReleaseStateKey(device, slotKey)
+		isAIOStreams := s.sessionManager.IsAIOStreamsDevice(deviceToken(device))
 		list, err := s.buildOrderedPlayList(r.Context(), slotKey, isAIOStreams)
 		maxIdx := 0
 		if err == nil && list != nil && len(list.Candidates) > 1 {
@@ -1793,10 +1797,7 @@ func (s *Server) clearNextReleaseBound(device *auth.Device, key StreamSlotKey) {
 	if key.StreamID == "" || key.ContentType == "" || key.ID == "" {
 		return
 	}
-	stateKey := ":" + key.CacheKey()
-	if device != nil && device.Token != "" {
-		stateKey = device.Token + ":" + key.CacheKey()
-	}
+	stateKey := nextReleaseStateKey(device, key)
 	if v, ok := s.nextReleaseIndex.Load(stateKey); ok {
 		if state, _ := v.(*nextReleaseState); state != nil {
 			state.mu.Lock()
@@ -1830,16 +1831,6 @@ func parseStreamSlotID(sessionID string) (streamId, contentType, id string, inde
 	return streamId, contentType, id, index, true
 }
 
-func legacyOccurrenceIndex(order []string, entry string, pos int) int {
-	count := 0
-	for k := 0; k <= pos; k++ {
-		if order[k] == entry {
-			count++
-		}
-	}
-	return count - 1
-}
-
 func isSegmentUnavailableErr(err error) bool {
 	for e := err; e != nil; e = errors.Unwrap(e) {
 		s := e.Error()
@@ -1850,9 +1841,16 @@ func isSegmentUnavailableErr(err error) bool {
 	return false
 }
 
+// handlePlay: resolve session (by slot path or existing), optionally redirect if slot previously failed,
+// then loop: try play → on error/probe/seek failure switch to next fallback → serve content.
 func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/play/")
+	requestedSessionID := sessionID
 	logger.Info("Play request", "session", sessionID)
+
+	if device != nil && strings.Contains(r.Header.Get("User-Agent"), "AIOStreams") {
+		s.sessionManager.SetAIOStreamsDevice(device.Token)
+	}
 
 	var (
 		sess   *session.Session
@@ -1865,9 +1863,8 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	sess, err = s.sessionManager.GetSession(sessionID)
 	if err != nil {
 		if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
-			skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
 			key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
-			sess, err = s.resolveStreamSlot(r.Context(), key, index, device, skipFilterSort)
+			sess, err = s.resolveStreamSlot(r.Context(), key, index, device)
 			if err != nil {
 				logger.Debug("Resolve stream slot failed", "slot", sessionID, "err", err)
 				http.Error(w, "Stream slot not found or invalid", http.StatusNotFound)
@@ -1889,9 +1886,8 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		}
 	}
 
-	skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
 	for {
-		s.prefetchNextFallbackNZB(nextFallbackSessionID(sess), device, skipFilterSort)
+		s.prefetchNextFallbackNZB(nextFallbackSessionID(sess), device)
 		stream, name, size, err = s.tryPlaySlot(r.Context(), sess)
 		if err != nil {
 			if isSegmentUnavailableErr(err) {
@@ -1902,21 +1898,14 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			}
 			s.sessionManager.ClearKnownGoodForSlot(sessionID)
 			s.sessionManager.DeleteSession(sessionID)
-			nextID := nextFallbackSessionID(sess)
-			if nextID == "" {
-				logger.Info("No more fallback slots", "last", sessionID, "err", err)
-				forceDisconnect(w, s.baseURL)
-				return
+			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
+				logger.Info("Trying next fallback slot (internal)", "from", sessionID, "to", nextID, "err", err)
+				sess, sessionID = nextSess, nextID
+				continue
 			}
-			logger.Info("Trying next fallback slot (internal)", "from", sessionID, "to", nextID, "err", err)
-			sess, err = s.getOrResolveSession(r.Context(), nextID, device, skipFilterSort)
-			if err != nil {
-				logger.Debug("Resolve next fallback failed", "next", nextID, "err", err)
-				forceDisconnect(w, s.baseURL)
-				return
-			}
-			sessionID = nextID
-			continue
+			logger.Info("No more fallback slots", "last", sessionID, "err", err)
+			forceDisconnect(w, s.baseURL)
+			return
 		}
 		// Probe first chunk before sending any response; if 430 we failover internally (client may not follow redirects).
 		const probeSize = 64 * 1024
@@ -1932,34 +1921,26 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			stream.Close()
 			stream = nil
 			s.sessionManager.DeleteSession(sessionID)
-			nextID := nextFallbackSessionID(sess)
-			if nextID == "" {
-				logger.Info("No more fallback slots after probe", "last", sessionID, "err", readErr)
-				forceDisconnect(w, s.baseURL)
-				return
+			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
+				logger.Info("First read failed (430), trying next fallback (internal)", "from", sessionID, "to", nextID)
+				sess, sessionID = nextSess, nextID
+				continue
 			}
-			logger.Info("First read failed (430), trying next fallback (internal)", "from", sessionID, "to", nextID)
-			sess, err = s.getOrResolveSession(r.Context(), nextID, device, skipFilterSort)
-			if err != nil {
-				logger.Debug("Resolve next fallback failed", "next", nextID, "err", err)
-				forceDisconnect(w, s.baseURL)
-				return
-			}
-			sessionID = nextID
-			continue
+			logger.Info("No more fallback slots after probe", "last", sessionID, "err", readErr)
+			forceDisconnect(w, s.baseURL)
+			return
 		}
 		if _, seekErr := stream.Seek(0, io.SeekStart); seekErr != nil {
 			stream.Close()
 			stream = nil
 			s.sessionManager.DeleteSession(sessionID)
-			nextID := nextFallbackSessionID(sess)
-			if nextID == "" {
-				forceDisconnect(w, s.baseURL)
-				return
+			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
+				logger.Info("Seek after probe failed, trying next fallback", "from", sessionID, "to", nextID)
+				sess, sessionID = nextSess, nextID
+				continue
 			}
-			sess, _ = s.getOrResolveSession(r.Context(), nextID, device, skipFilterSort)
-			sessionID = nextID
-			continue
+			forceDisconnect(w, s.baseURL)
+			return
 		}
 		break
 	}
@@ -1973,7 +1954,12 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		s.availReporter.ReportGood(sess)
 	}
 
-	if tStr := r.URL.Query().Get("t"); tStr != "" && r.Header.Get("Range") == "" {
+	// After internal failover we serve a different file; don't apply the original request's Range or t= to it.
+	failedOver := sessionID != requestedSessionID
+	if failedOver {
+		r.Header.Del("Range")
+	}
+	if tStr := r.URL.Query().Get("t"); !failedOver && tStr != "" && r.Header.Get("Range") == "" {
 		if tSec, parseOK := seek.ParseTSeconds(tStr); parseOK {
 			if byteOffset, seekOK := seek.TimeToByteOffset(stream, size, name, tSec); seekOK {
 				r.Header.Set("Range", "bytes="+strconv.FormatInt(byteOffset, 10)+"-")
@@ -2107,30 +2093,43 @@ func nextFallbackSessionID(sess *session.Session) string {
 
 // prefetchNextFallbackNZB starts a background goroutine to resolve the next fallback slot and
 // download its NZB so that when we fail over to it, tryPlaySlot may find the NZB already loaded.
-func (s *Server) prefetchNextFallbackNZB(nextSlotID string, device *auth.Device, skipFilterSort bool) {
+func (s *Server) prefetchNextFallbackNZB(nextSlotID string, device *auth.Device) {
 	if nextSlotID == "" {
 		return
 	}
-	go func(id string, dev *auth.Device, skip bool) {
+	go func(id string, dev *auth.Device) {
 		ctx := context.Background()
-		sess, err := s.getOrResolveSession(ctx, id, dev, skip)
+		sess, err := s.getOrResolveSession(ctx, id, dev)
 		if err != nil {
 			return
 		}
 		if _, err := sess.GetOrDownloadNZB(s.sessionManager); err != nil {
 			logger.Trace("Prefetch NZB failed (next fallback)", "slot", id, "err", err)
 		}
-	}(nextSlotID, device, skipFilterSort)
+	}(nextSlotID, device)
 }
 
-func (s *Server) getOrResolveSession(ctx context.Context, sessionID string, device *auth.Device, skipFilterSort bool) (*session.Session, error) {
+// switchToNextFallback returns the next fallback session and its ID, or (nil, "", nil) if none, or (nil, "", err) on resolve error.
+func (s *Server) switchToNextFallback(ctx context.Context, sess *session.Session, device *auth.Device) (*session.Session, string, error) {
+	nextID := nextFallbackSessionID(sess)
+	if nextID == "" {
+		return nil, "", nil
+	}
+	nextSess, err := s.getOrResolveSession(ctx, nextID, device)
+	if err != nil {
+		return nil, "", err
+	}
+	return nextSess, nextID, nil
+}
+
+func (s *Server) getOrResolveSession(ctx context.Context, sessionID string, device *auth.Device) (*session.Session, error) {
 	sess, err := s.sessionManager.GetSession(sessionID)
 	if err == nil {
 		return sess, nil
 	}
 	if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
 		key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
-		sess, err = s.resolveStreamSlot(ctx, key, index, device, skipFilterSort)
+		sess, err = s.resolveStreamSlot(ctx, key, index, device)
 		if err != nil {
 			return nil, err
 		}
