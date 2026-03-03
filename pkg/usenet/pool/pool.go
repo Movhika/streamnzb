@@ -87,6 +87,93 @@ func (p *Pool) FetchSegment(ctx context.Context, segment *nzb.Segment, groups []
 	return v.(SegmentData), nil
 }
 
+// FetchSegmentFirst tries all providers in parallel for the first segment (e.g. segment 0).
+// It returns as soon as one provider succeeds, or the last error if all fail.
+// Call this for segment 0 to reduce latency when the article is missing on all providers.
+func (p *Pool) FetchSegmentFirst(ctx context.Context, segment *nzb.Segment, groups []string) (SegmentData, error) {
+	messageID := strings.TrimSpace(segment.ID)
+	if messageID == "" {
+		return SegmentData{}, fmt.Errorf("empty segment message ID")
+	}
+	if data, ok := p.cache.Get(messageID); ok {
+		logger.Trace("fetch segment cache hit", "message_id", messageID)
+		return data, nil
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	p.mu.RLock()
+	providers := p.providers
+	p.mu.RUnlock()
+
+	// Exclude set for each provider: all other provider IDs so getConnection returns that provider.
+	providerIDs := make([]string, len(providers))
+	for i := range providers {
+		providerIDs[i] = providers[i].ID
+	}
+
+	type segResult struct {
+		data SegmentData
+		err  error
+	}
+	ch := make(chan segResult, len(providers))
+
+	for i := range providers {
+		exclude := make([]string, 0, len(providers)-1)
+		for j := range providerIDs {
+			if j != i {
+				exclude = append(exclude, providerIDs[j])
+			}
+		}
+		go func(exclude []string) {
+			conn, release, _, providerID, err := p.getConnection(fetchCtx, exclude, 999, false)
+			if err != nil {
+				ch <- segResult{err: err}
+				return
+			}
+			defer release()
+			if len(groups) > 0 {
+				if err := conn.Group(groups[0]); err != nil {
+					logger.Debug("fetch segment group failed", "provider", providerID, "err", err)
+					ch <- segResult{err: err}
+					return
+				}
+			}
+			r, err := conn.Body(messageID)
+			if err != nil {
+				logger.Debug("fetch segment body failed", "provider", providerID, "err", err)
+				ch <- segResult{err: err}
+				return
+			}
+			cr := &countReader{Reader: r}
+			frame, err := decode.DecodeToBytes(cr)
+			if err != nil {
+				logger.Debug("fetch segment decode failed", "provider", providerID, "err", err)
+				ch <- segResult{err: err}
+				return
+			}
+			ch <- segResult{data: SegmentData{Body: frame.Data, Size: int64(len(frame.Data))}}
+		}(exclude)
+	}
+
+	var lastErr error
+	for range providers {
+		res := <-ch
+		if res.err == nil {
+			cancel()
+			p.cache.Set(messageID, res.data)
+			logger.Trace("fetch segment ok (parallel)", "message_id", messageID, "size", res.data.Size)
+			return res.data, nil
+		}
+		lastErr = res.err
+	}
+	if lastErr != nil {
+		return SegmentData{}, fmt.Errorf("fetch segment %s: failed after retries: %w", messageID, lastErr)
+	}
+	return SegmentData{}, fmt.Errorf("fetch segment %s: failed after retries", messageID)
+}
+
 func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *nzb.Segment, groups []string) (SegmentData, error) {
 	if data, ok := p.cache.Get(messageID); ok {
 		logger.Trace("fetch segment cache hit", "message_id", messageID)

@@ -22,6 +22,12 @@ type SegmentFetcher interface {
 	FetchSegment(ctx context.Context, segment *nzb.Segment, groups []string) (pool.SegmentData, error)
 }
 
+// SegmentFirstFetcher is optional: when implemented, the loader uses it for segment index 0
+// to try all providers in parallel and reduce latency when the article is missing everywhere.
+type SegmentFirstFetcher interface {
+	FetchSegmentFirst(ctx context.Context, segment *nzb.Segment, groups []string) (pool.SegmentData, error)
+}
+
 const MaxZeroFills = 10
 
 // isArticleNotFound reports whether err indicates the article is missing (430 No Such Article).
@@ -266,7 +272,17 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int) ([]by
 	defer cancel()
 
 	seg := f.segments[index]
-	data, err := f.fetcher.FetchSegment(downloadCtx, &seg.Segment, f.nzbFile.Groups)
+	var data pool.SegmentData
+	var err error
+	if index == 0 {
+		if firstFetcher, ok := f.fetcher.(SegmentFirstFetcher); ok {
+			data, err = firstFetcher.FetchSegmentFirst(downloadCtx, &seg.Segment, f.nzbFile.Groups)
+		} else {
+			data, err = f.fetcher.FetchSegment(downloadCtx, &seg.Segment, f.nzbFile.Groups)
+		}
+	} else {
+		data, err = f.fetcher.FetchSegment(downloadCtx, &seg.Segment, f.nzbFile.Groups)
+	}
 	if err != nil {
 		if index == 0 && isArticleNotFound(err) {
 			return nil, fmt.Errorf("first segment unavailable: %w", err)
