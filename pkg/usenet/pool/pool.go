@@ -34,6 +34,16 @@ var (
 	ErrNoProvidersAvailable  = errors.New("usenet/pool: no providers available")
 )
 
+// isArticleNotFound reports whether err indicates 430 No Such Article (article missing on server).
+// On 430 we return immediately instead of trying other providers.
+func isArticleNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "430") || strings.Contains(s, "no such article")
+}
+
 type ProviderConfig struct {
 	ID         string
 	Priority   int
@@ -167,6 +177,10 @@ func (p *Pool) FetchSegmentFirst(ctx context.Context, segment *nzb.Segment, grou
 			return res.data, nil
 		}
 		lastErr = res.err
+		if isArticleNotFound(res.err) {
+			cancel()
+			return SegmentData{}, fmt.Errorf("fetch segment %s: %w", messageID, res.err)
+		}
 	}
 	if lastErr != nil {
 		return SegmentData{}, fmt.Errorf("fetch segment %s: failed after retries: %w", messageID, lastErr)
@@ -209,6 +223,9 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 			release()
 			lastErr = err
 			logger.Debug("fetch segment body failed", "provider", providerID, "err", err)
+			if isArticleNotFound(err) {
+				return SegmentData{}, fmt.Errorf("fetch segment %s: %w", messageID, err)
+			}
 			exclude = append(exclude, providerID)
 			continue
 		}
@@ -240,6 +257,86 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 		return SegmentData{}, fmt.Errorf("fetch segment %s: failed after retries: %w", messageID, lastErr)
 	}
 	return SegmentData{}, fmt.Errorf("fetch segment %s: failed after retries", messageID)
+}
+
+// StatSegment checks whether the article exists on any provider (STAT only, no body).
+// Returns (true, nil) if found, (false, nil) if 430 on all providers, (false, err) on other errors.
+// Use this before opening a stream to fail fast when the first segment is missing.
+func (p *Pool) StatSegment(ctx context.Context, messageID string, groups []string) (exists bool, err error) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return false, fmt.Errorf("empty segment message ID")
+	}
+
+	statCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	p.mu.RLock()
+	providers := p.providers
+	p.mu.RUnlock()
+
+	providerIDs := make([]string, len(providers))
+	for i := range providers {
+		providerIDs[i] = providers[i].ID
+	}
+
+	type statResult struct {
+		exists bool
+		err    error
+	}
+	ch := make(chan statResult, len(providers))
+
+	for i := range providers {
+		exclude := make([]string, 0, len(providers)-1)
+		for j := range providerIDs {
+			if j != i {
+				exclude = append(exclude, providerIDs[j])
+			}
+		}
+		go func(exclude []string) {
+			conn, release, _, providerID, getErr := p.getConnection(statCtx, exclude, 999, false)
+			if getErr != nil {
+				ch <- statResult{err: getErr}
+				return
+			}
+			defer release()
+			if len(groups) > 0 {
+				if groupErr := conn.Group(groups[0]); groupErr != nil {
+					logger.Debug("stat segment group failed", "provider", providerID, "err", groupErr)
+					ch <- statResult{err: groupErr}
+					return
+				}
+			}
+			exists, statErr := conn.StatArticle(messageID)
+			if statErr != nil {
+				logger.Debug("stat segment failed", "provider", providerID, "err", statErr)
+				ch <- statResult{err: statErr}
+				return
+			}
+			ch <- statResult{exists: exists}
+		}(exclude)
+	}
+
+	var lastErr error
+	for range providers {
+		res := <-ch
+		if res.err == nil && res.exists {
+			cancel()
+			logger.Trace("stat segment ok", "message_id", messageID)
+			return true, nil
+		}
+		if res.err != nil {
+			lastErr = res.err
+		}
+		if res.err == nil && !res.exists {
+			lastErr = nil
+		}
+	}
+	if lastErr != nil {
+		return false, fmt.Errorf("stat segment %s: %w", messageID, lastErr)
+	}
+	logger.Trace("stat segment not found (430)", "message_id", messageID)
+	return false, nil
 }
 
 func (p *Pool) getConnection(ctx context.Context, exclude []string, maxPriority int, useBackup bool) (client *nntp.Client, release, discard func(), providerID string, err error) {

@@ -206,21 +206,6 @@ func ScanArchive(files []UnpackableFile, password string) (*ArchiveBlueprint, er
 		}
 	}
 
-	hasMedia := false
-	for _, p := range parts {
-		if p.isMedia {
-			hasMedia = true
-			break
-		}
-	}
-	if !hasMedia && len(parts) > 0 && len(rarFiles) > len(firstVols) {
-		logger.Debug("No media in first volumes, running full multi-volume scan for nested archive")
-		fullParts := scanFullArchive(rarFiles, password)
-		if len(fullParts) > 0 {
-			parts = fullParts
-		}
-	}
-
 	logger.Info("RAR scan complete", "files", len(rarFiles), "duration", time.Since(start))
 
 	for _, p := range parts {
@@ -348,78 +333,6 @@ func scanVolumesParallel(files []UnpackableFile, password string) []filePart {
 		}(f)
 	}
 	wg.Wait()
-	return result
-}
-
-func scanFullArchive(rarFiles []UnpackableFile, password string) []filePart {
-	sort.Slice(rarFiles, func(i, j int) bool {
-		return GetRARVolumeNumber(rarFiles[i].Name()) < GetRARVolumeNumber(rarFiles[j].Name())
-	})
-
-	fileMap := make(map[string]UnpackableFile, len(rarFiles))
-	var firstName string
-	for _, f := range rarFiles {
-		clean := ExtractFilename(f.Name())
-		fileMap[clean] = f
-		if firstName == "" && !IsMiddleRarVolume(strings.ToLower(clean)) {
-			firstName = clean
-		}
-	}
-	if firstName == "" {
-		firstName = ExtractFilename(rarFiles[0].Name())
-	}
-
-	// Do not EnsureSegmentMap for all volumes here: it would trigger segment-0 fetch for every
-	// RAR file sequentially (hundreds of round-trips). Segment maps are populated lazily when
-	// each volume is first read by ListArchiveInfo.
-
-	fsys := NewNZBFSFromMap(fileMap)
-	logger.Debug("Full archive scan starting", "first", firstName, "volumes", len(rarFiles))
-
-	listOpts := []rardecode.Option{rardecode.FileSystem(fsys), rardecode.ParallelRead(true)}
-	if password != "" {
-		listOpts = append(listOpts, rardecode.Password(password))
-	}
-	infos, err := rardecode.ListArchiveInfo(firstName, listOpts...)
-	if err != nil {
-		logger.Debug("Full archive scan failed", "err", err)
-		return nil
-	}
-
-	var result []filePart
-	for _, info := range infos {
-		if info.Name == "" {
-			continue
-		}
-		logger.Debug("Full scan found file", "name", info.Name, "size", info.TotalUnpackedSize, "parts", len(info.Parts))
-
-		compressed := false
-		for _, p := range info.Parts {
-			if p.CompressionMethod != "stored" {
-				compressed = true
-			}
-		}
-
-		for _, p := range info.Parts {
-			volFile := fileMap[ExtractFilename(p.Path)]
-			if volFile == nil {
-				logger.Debug("Volume not found in map", "path", p.Path)
-				continue
-			}
-			result = append(result, filePart{
-				name:         info.Name,
-				unpackedSize: info.TotalUnpackedSize,
-				dataOffset:   p.DataOffset,
-				packedSize:   p.PackedSize,
-				volFile:      volFile,
-				volName:      volFile.Name(),
-				isMedia:      isMediaFile(info),
-				isCompressed: compressed,
-				isEncrypted:  info.AnyEncrypted,
-			})
-		}
-	}
-	logger.Debug("Full archive scan complete", "files", len(infos), "parts", len(result))
 	return result
 }
 
@@ -821,9 +734,17 @@ func findFirstVolume(files []UnpackableFile) UnpackableFile {
 
 func isMediaFile(info rardecode.ArchiveFileInfo) bool {
 	name := info.Name
+	lower := strings.ToLower(name)
+	// .iso is not playable; do not treat as media so we don't select it as main file.
+	if strings.HasSuffix(lower, ExtIso) {
+		return false
+	}
+	// Do not select sample files (e.g. Sample/sample-foo.m2ts) as main media.
+	if IsSampleFile(name) {
+		return false
+	}
 	isVideo := IsVideoFile(name)
 	isLarge := info.TotalUnpackedSize > 50*1024*1024
-	lower := strings.ToLower(name)
 	isArchive := strings.HasSuffix(lower, ExtRar) || strings.HasSuffix(lower, ExtZip) ||
 		strings.HasSuffix(lower, Ext7z) || strings.HasSuffix(lower, ExtPar2) || IsRarPart(lower)
 	return isVideo || (isLarge && !isArchive)

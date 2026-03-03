@@ -90,14 +90,19 @@ type knownGoodSlotEntry struct {
 }
 
 type Manager struct {
-	sessions         map[string]*Session
-	pools            []*nntp.ClientPool
-	usenetPool       *pool.Pool
-	estimator        *loader.SegmentSizeEstimator
-	ttl              time.Duration
-	mu               sync.RWMutex
-	failoverOrder  sync.Map
-	knownGoodSlots sync.Map
+	sessions                map[string]*Session
+	pools                   []*nntp.ClientPool
+	usenetPool              *pool.Pool
+	estimator               *loader.SegmentSizeEstimator
+	ttl                     time.Duration
+	mu                      sync.RWMutex
+	failoverOrder           sync.Map
+	knownGoodSlots          sync.Map
+	slotFailedDuringPlayback sync.Map // slotPath -> *failedSlotEntry (430 during streaming)
+}
+
+type failedSlotEntry struct {
+	expiresAt time.Time
 }
 
 func (s *Session) SetBlueprint(bp interface{}) {
@@ -328,16 +333,32 @@ func (m *Manager) SetFallbackStreams(sessionID string, urls []string) {
 	session.SetFallbackStreams(urls)
 }
 
-func (m *Manager) SetDeviceFailoverOrder(deviceToken string, order []string) {
+func failoverOrderMapKey(deviceToken, streamKey string) string {
+	if streamKey == "" {
+		return deviceToken
+	}
+	return deviceToken + "|" + streamKey
+}
+
+func (m *Manager) SetDeviceFailoverOrder(deviceToken, streamKey string, order []string) {
 	if len(order) == 0 {
 		return
 	}
 	cp := make([]string, len(order))
 	copy(cp, order)
-	m.failoverOrder.Store(deviceToken, cp)
+	m.failoverOrder.Store(failoverOrderMapKey(deviceToken, streamKey), cp)
 }
 
-func (m *Manager) GetDeviceFailoverOrder(deviceToken string) []string {
+// GetDeviceFailoverOrder returns the stored failover order for this device and stream key.
+// It tries key-specific storage first, then falls back to device-only (legacy) if streamKey is set.
+func (m *Manager) GetDeviceFailoverOrder(deviceToken, streamKey string) []string {
+	if streamKey != "" {
+		if val, ok := m.failoverOrder.Load(failoverOrderMapKey(deviceToken, streamKey)); ok && val != nil {
+			if order, ok := val.([]string); ok {
+				return order
+			}
+		}
+	}
 	val, ok := m.failoverOrder.Load(deviceToken)
 	if !ok || val == nil {
 		return nil
@@ -373,6 +394,29 @@ func (m *Manager) ClearKnownGoodForSlot(slot string) {
 		}
 		return true
 	})
+}
+
+// SetSlotFailedDuringPlayback marks the slot as having failed with 430 during playback.
+// Subsequent play requests for this slot should redirect to the next fallback.
+func (m *Manager) SetSlotFailedDuringPlayback(slotPath string) {
+	if slotPath == "" {
+		return
+	}
+	expiresAt := time.Now().Add(m.ttl)
+	m.slotFailedDuringPlayback.Store(slotPath, &failedSlotEntry{expiresAt: expiresAt})
+}
+
+// GetSlotFailedDuringPlayback returns true if this slot recently failed during playback (430).
+func (m *Manager) GetSlotFailedDuringPlayback(slotPath string) bool {
+	val, ok := m.slotFailedDuringPlayback.Load(slotPath)
+	if !ok || val == nil {
+		return false
+	}
+	ent, ok := val.(*failedSlotEntry)
+	if !ok || ent == nil || time.Now().After(ent.expiresAt) {
+		return false
+	}
+	return true
 }
 
 func (m *Manager) GetSession(sessionID string) (*Session, error) {

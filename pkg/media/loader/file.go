@@ -28,6 +28,12 @@ type SegmentFirstFetcher interface {
 	FetchSegmentFirst(ctx context.Context, segment *nzb.Segment, groups []string) (pool.SegmentData, error)
 }
 
+// SegmentStatter is optional: when implemented by the fetcher, CheckFirstSegmentExists uses
+// STAT to verify the first segment exists before opening a stream
+type SegmentStatter interface {
+	StatSegment(ctx context.Context, messageID string, groups []string) (exists bool, err error)
+}
+
 const MaxZeroFills = 10
 
 // isArticleNotFound reports whether err indicates the article is missing (430 No Such Article).
@@ -104,6 +110,24 @@ func (f *File) Size() int64 {
 func (f *File) Segments() []*Segment { return f.segments }
 
 func (f *File) SegmentCount() int { return len(f.segments) }
+
+// CheckFirstSegmentExists returns whether the first segment exists on the server (STAT only).
+// If the fetcher implements SegmentStatter, it runs STAT on the first segment; otherwise returns true.
+// Used before opening a stream to fail fast when the release is unavailable (430).
+func (f *File) CheckFirstSegmentExists(ctx context.Context) (bool, error) {
+	if len(f.segments) == 0 {
+		return false, nil
+	}
+	statter, ok := f.fetcher.(SegmentStatter)
+	if !ok {
+		return true, nil
+	}
+	msgID := strings.TrimSpace(f.segments[0].ID)
+	if msgID == "" {
+		return false, nil
+	}
+	return statter.StatSegment(ctx, msgID, f.nzbFile.Groups)
+}
 
 func (f *File) TotalConnections() int {
 	if f.fetcher != nil {
@@ -284,8 +308,8 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int) ([]by
 		data, err = f.fetcher.FetchSegment(downloadCtx, &seg.Segment, f.nzbFile.Groups)
 	}
 	if err != nil {
-		if index == 0 && isArticleNotFound(err) {
-			return nil, fmt.Errorf("first segment unavailable: %w", err)
+		if isArticleNotFound(err) {
+			return nil, fmt.Errorf("segment unavailable: %w", err)
 		}
 		f.zeroFillMu.Lock()
 		count := f.zeroFillCount
@@ -401,8 +425,8 @@ func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int) ([]byte
 		}
 	}
 
-	if index == 0 && lastErr != nil && isArticleNotFound(lastErr) {
-		return nil, fmt.Errorf("first segment unavailable: %w", lastErr)
+	if lastErr != nil && isArticleNotFound(lastErr) {
+		return nil, fmt.Errorf("segment unavailable: %w", lastErr)
 	}
 
 	f.zeroFillMu.Lock()
