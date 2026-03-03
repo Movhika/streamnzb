@@ -96,9 +96,8 @@ type Manager struct {
 	estimator        *loader.SegmentSizeEstimator
 	ttl              time.Duration
 	mu               sync.RWMutex
-	failoverOrder    sync.Map
-	knownGoodSlots   sync.Map
-	failedStreamSlots sync.Map
+	failoverOrder  sync.Map
+	knownGoodSlots sync.Map
 }
 
 func (s *Session) SetBlueprint(bp interface{}) {
@@ -374,17 +373,6 @@ func (m *Manager) ClearKnownGoodForSlot(slot string) {
 		}
 		return true
 	})
-}
-
-func (m *Manager) MarkSlotFailedDuringStream(sessionID string) {
-	m.failedStreamSlots.Store(sessionID, struct{}{})
-	m.ClearKnownGoodForSlot(sessionID)
-	m.DeleteSession(sessionID)
-}
-
-func (m *Manager) IsStreamSlotFailed(sessionID string) bool {
-	_, ok := m.failedStreamSlots.Load(sessionID)
-	return ok
 }
 
 func (m *Manager) GetSession(sessionID string) (*Session, error) {

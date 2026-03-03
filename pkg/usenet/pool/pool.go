@@ -120,9 +120,6 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 		if err != nil {
 			release()
 			logger.Debug("fetch segment body failed", "provider", providerID, "err", err)
-			if strings.Contains(err.Error(), "430") || strings.Contains(err.Error(), "No Such Article") || strings.Contains(err.Error(), "No such article") {
-				return SegmentData{}, err
-			}
 			exclude = append(exclude, providerID)
 			continue
 		}

@@ -1493,15 +1493,6 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 	if index < 0 || index >= len(list.Candidates) {
 		return nil, fmt.Errorf("index %d out of range (candidates %d)", index, len(list.Candidates))
 	}
-	for i := index; i < len(list.Candidates); i++ {
-		if !s.sessionManager.IsStreamSlotFailed(key.SlotPath(i)) {
-			index = i
-			break
-		}
-		if i == len(list.Candidates)-1 {
-			return nil, fmt.Errorf("all slots from %d failed (430/unavailable)", index)
-		}
-	}
 	cand := list.Candidates[index]
 	rel := cand.Release
 	if rel == nil || rel.Link == "" {
@@ -1760,7 +1751,9 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	}
 
 	skipFilterSort := strings.Contains(r.Header.Get("User-Agent"), "AIOStreams")
+	var triedSlotIDs []string
 	for {
+		triedSlotIDs = append(triedSlotIDs, sessionID)
 		stream, name, size, err = s.tryPlaySlot(r.Context(), sess)
 		if err == nil {
 			break
@@ -1788,10 +1781,15 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		s.availReporter.ReportGood(sess)
 	}
 
-	if chainStart != "" && chainStart != sessionID {
-		s.sessionManager.SetKnownGoodSlot(chainStart, sessionID)
-	} else if requestedSessionID != sessionID {
-		s.sessionManager.SetKnownGoodSlot(requestedSessionID, sessionID)
+	winningSessionID := sessionID
+	for _, id := range triedSlotIDs {
+		s.sessionManager.SetKnownGoodSlot(id, winningSessionID)
+	}
+	if chainStart != "" && chainStart != winningSessionID {
+		s.sessionManager.SetKnownGoodSlot(chainStart, winningSessionID)
+	}
+	if requestedSessionID != winningSessionID {
+		s.sessionManager.SetKnownGoodSlot(requestedSessionID, winningSessionID)
 	}
 
 	if tStr := r.URL.Query().Get("t"); tStr != "" && r.Header.Get("Range") == "" {
@@ -2164,9 +2162,6 @@ type StreamMonitor struct {
 
 func (s *StreamMonitor) Read(p []byte) (n int, err error) {
 	n, err = s.ReadSeekCloser.Read(p)
-	if err != nil && errors.Is(err, unpack.ErrTooManyZeroFills) {
-		s.manager.MarkSlotFailedDuringStream(s.sessionID)
-	}
 	if time.Since(s.lastUpdate) > 10*time.Second {
 		s.mu.Lock()
 		if time.Since(s.lastUpdate) > 10*time.Second {
