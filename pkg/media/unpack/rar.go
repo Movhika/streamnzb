@@ -821,7 +821,7 @@ func findFirstVolume(files []UnpackableFile) UnpackableFile {
 
 func isMediaFile(info rardecode.ArchiveFileInfo) bool {
 	name := info.Name
-	isVideo := IsVideoFile(name) || strings.HasSuffix(strings.ToLower(name), ExtIso)
+	isVideo := IsVideoFile(name)
 	isLarge := info.TotalUnpackedSize > 50*1024*1024
 	lower := strings.ToLower(name)
 	isArchive := strings.HasSuffix(lower, ExtRar) || strings.HasSuffix(lower, ExtZip) ||

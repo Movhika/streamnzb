@@ -60,12 +60,14 @@ func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interf
 	}
 
 	rarFiles := filterRarFiles(files)
+	var rarScanFailed bool
 	if len(rarFiles) > 0 {
 		logger.Trace("Detected RAR archive", "volumes", len(rarFiles))
 		unpackables := make([]UnpackableFile, len(files))
 		copy(unpackables, files)
 		bp, err := ScanArchive(unpackables, password)
 		if err != nil {
+			rarScanFailed = true
 			logger.Warn("ScanArchive failed, falling back to other methods", "err", err)
 		} else {
 			s, name, size, err := StreamFromBlueprint(ctx, bp, password)
@@ -116,19 +118,21 @@ func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interf
 	}
 
 	if largestFile != nil && largestFile.Size() > 50*1024*1024 {
-		logger.Warn("No clear media found, probing largest file", "name", largestFile.Name(), "size", largestFile.Size())
-		unpackables := make([]UnpackableFile, len(files))
-		copy(unpackables, files)
-		logger.Info("Attempting heuristic RAR scan on unknown files")
-		bp, err := ScanArchive(unpackables, password)
-		if err == nil {
-			s, name, size, err := StreamFromBlueprint(ctx, bp, password)
+		if !rarScanFailed {
+			logger.Warn("No clear media found, probing largest file", "name", largestFile.Name(), "size", largestFile.Size())
+			unpackables := make([]UnpackableFile, len(files))
+			copy(unpackables, files)
+			logger.Info("Attempting heuristic RAR scan on unknown files")
+			bp, err := ScanArchive(unpackables, password)
 			if err == nil {
-				logger.Info("Heuristic scan found RAR archive")
-				return s, name, size, bp, nil
+				s, name, size, err := StreamFromBlueprint(ctx, bp, password)
+				if err == nil {
+					logger.Info("Heuristic scan found RAR archive")
+					return s, name, size, bp, nil
+				}
+			} else {
+				logger.Warn("Heuristic RAR scan failed, falling back to direct stream", "err", err)
 			}
-		} else {
-			logger.Warn("Heuristic RAR scan failed, falling back to direct stream", "err", err)
 		}
 		extractedName := ExtractFilename(largestFile.Name())
 		stream, err := largestFile.OpenStreamCtx(ctx)
