@@ -97,6 +97,7 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 	defer cancel()
 
 	var exclude []string
+	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		conn, release, _, providerID, err := p.getConnection(fetchCtx, exclude, 999, false)
 		if err != nil {
@@ -119,6 +120,7 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 		r, err := conn.Body(messageID)
 		if err != nil {
 			release()
+			lastErr = err
 			logger.Debug("fetch segment body failed", "provider", providerID, "err", err)
 			exclude = append(exclude, providerID)
 			continue
@@ -147,6 +149,9 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 		return data, nil
 	}
 
+	if lastErr != nil {
+		return SegmentData{}, fmt.Errorf("fetch segment %s: failed after retries: %w", messageID, lastErr)
+	}
 	return SegmentData{}, fmt.Errorf("fetch segment %s: failed after retries", messageID)
 }
 

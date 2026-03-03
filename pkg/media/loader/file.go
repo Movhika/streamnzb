@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,16 @@ type SegmentFetcher interface {
 }
 
 const MaxZeroFills = 10
+
+// isArticleNotFound reports whether err indicates the article is missing (430 No Such Article).
+// Used to fail fast on the first segment instead of zero-filling through many segments.
+func isArticleNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "430") || strings.Contains(s, "no such article")
+}
 
 func (f *File) IsFailed() bool {
 	f.zeroFillMu.Lock()
@@ -257,6 +268,9 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int) ([]by
 	seg := f.segments[index]
 	data, err := f.fetcher.FetchSegment(downloadCtx, &seg.Segment, f.nzbFile.Groups)
 	if err != nil {
+		if index == 0 && isArticleNotFound(err) {
+			return nil, fmt.Errorf("first segment unavailable: %w", err)
+		}
 		f.zeroFillMu.Lock()
 		count := f.zeroFillCount
 		if count >= MaxZeroFills {
@@ -369,6 +383,10 @@ func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int) ([]byte
 			f.PutCachedSegment(index, res.frame.Data)
 			return res.frame.Data, nil
 		}
+	}
+
+	if index == 0 && lastErr != nil && isArticleNotFound(lastErr) {
+		return nil, fmt.Errorf("first segment unavailable: %w", lastErr)
 	}
 
 	f.zeroFillMu.Lock()

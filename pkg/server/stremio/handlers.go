@@ -1490,8 +1490,16 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 	if err != nil || list == nil {
 		return nil, fmt.Errorf("build play list: %w", err)
 	}
-	if index < 0 || index >= len(list.Candidates) {
+	if index < 0 {
 		return nil, fmt.Errorf("index %d out of range (candidates %d)", index, len(list.Candidates))
+	}
+	if index >= len(list.Candidates) {
+		if len(list.Candidates) == 0 {
+			return nil, fmt.Errorf("index %d out of range (candidates 0)", index)
+		}
+		requested := index
+		index = len(list.Candidates) - 1
+		logger.Debug("Stream slot index out of range, using last candidate", "requested", requested, "candidates", len(list.Candidates))
 	}
 	cand := list.Candidates[index]
 	rel := cand.Release
@@ -1539,14 +1547,19 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 		logger.Debug("Failover order: matched by legacy (stream ID + occurrence); send playPath as BingeGroup for exact order", "stream", key.StreamID, "index", index)
 	}
 
+	maxIndex := len(list.Candidates) - 1
 	if ourPosition >= 0 {
 		for j := ourPosition + 1; j < len(order); j++ {
 			entry := order[j]
 			if strings.HasPrefix(entry, streamSlotPrefix) {
-				fallbackURLs = append(fallbackURLs, base+"/play/"+entry)
+				if _, _, _, orderIndex, ok := parseStreamSlotID(entry); ok && orderIndex <= maxIndex {
+					fallbackURLs = append(fallbackURLs, base+"/play/"+entry)
+				}
 			} else {
 				ci := legacyOccurrenceIndex(order, entry, j)
-				fallbackURLs = append(fallbackURLs, base+"/play/"+formatStreamSlotPath(entry, key.ContentType, key.ID, ci))
+				if ci <= maxIndex {
+					fallbackURLs = append(fallbackURLs, base+"/play/"+formatStreamSlotPath(entry, key.ContentType, key.ID, ci))
+				}
 			}
 		}
 	} else {
