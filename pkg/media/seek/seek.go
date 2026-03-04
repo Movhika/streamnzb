@@ -1,6 +1,7 @@
 package seek
 
 import (
+	"bytes"
 	"io"
 	"strconv"
 	"strings"
@@ -87,4 +88,34 @@ func ParseTSeconds(t string) (float64, bool) {
 		return 0, false
 	}
 	return f, true
+}
+
+// EBML header ID (MKV/WebM) - first element in file.
+var ebmlHeaderID = []byte{0x1A, 0x45, 0xDF, 0xA3}
+
+// ftyp box type (MP4/MOV).
+var ftypBox = []byte{'f', 't', 'y', 'p'}
+
+// ValidateContainerHeader checks that data starts with valid container headers for the given filename.
+// Used by the play probe to ensure RAR/7z/direct streams have readable, valid headers before serving.
+func ValidateContainerHeader(data []byte, filename string) bool {
+	if len(data) < 8 {
+		return false
+	}
+	switch formatFromFilename(filename) {
+	case "mkv":
+		return len(data) >= 4 && bytes.HasPrefix(data, ebmlHeaderID)
+	case "mp4":
+		// MP4: optional 4-byte size (big-endian) then "ftyp", or "ftyp" at 0
+		if bytes.HasPrefix(data, ftypBox) {
+			return true
+		}
+		if len(data) >= 8 && bytes.Equal(data[4:8], ftypBox) {
+			return true
+		}
+		return false
+	default:
+		// AVI, etc.: no strict check; caller may use probe size only to trigger segment read
+		return true
+	}
 }

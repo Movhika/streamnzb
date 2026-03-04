@@ -1888,7 +1888,18 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 
 	var mergedCtx context.Context
 	var mergedCancel context.CancelFunc
+	// No response (headers or body) is sent until we pass the probe below and call ServeContent. That way we can fail over without the client having seen any response.
 	for {
+		// Skip slots we've already marked as failed; use cache so we never try them.
+		if s.sessionManager.GetSlotFailedDuringPlayback(sessionID) {
+			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
+				logger.Info("Skipping known-failed slot, trying next fallback", "from", sessionID, "to", nextID)
+				sess, sessionID = nextSess, nextID
+				continue
+			}
+			forceDisconnect(w, s.baseURL)
+			return
+		}
 		s.prefetchNextFallbackNZB(nextFallbackSessionID(sess), device)
 		// Use a context that cancels when either the request ends or the session is closed (e.g. user closed from dashboard).
 		// That way closing the session aborts playback and stops downloading immediately.
@@ -1922,40 +1933,25 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			forceDisconnect(w, s.baseURL)
 			return
 		}
-		// Probe first chunk before sending any response; if 430 we failover internally (client may not follow redirects).
-		const probeSize = 64 * 1024
-		probeBuf := make([]byte, probeSize)
-		_, readErr := stream.Read(probeBuf)
-		if readErr != nil && readErr != io.EOF {
+		// Probe: check relevant segments (RAR/7z/direct) and validate MKV/MP4 container headers before sending any response.
+		probeErr := unpack.ProbeMediaStream(stream, name, size)
+		if probeErr != nil {
 			mergedCancel()
-			if isSegmentUnavailableErr(readErr) {
+			if isSegmentUnavailableErr(probeErr) {
 				s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
 				if s.availReporter != nil {
-					s.availReporter.ReportBad(sess, readErr.Error())
+					s.availReporter.ReportBad(sess, probeErr.Error())
 				}
 			}
 			stream.Close()
 			stream = nil
 			s.sessionManager.DeleteSession(sessionID)
 			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
-				logger.Info("First read failed (430), trying next fallback (internal)", "from", sessionID, "to", nextID)
+				logger.Info("Probe failed (430 or invalid headers), trying next fallback", "from", sessionID, "to", nextID, "err", probeErr)
 				sess, sessionID = nextSess, nextID
 				continue
 			}
-			logger.Info("No more fallback slots after probe", "last", sessionID, "err", readErr)
-			forceDisconnect(w, s.baseURL)
-			return
-		}
-		if _, seekErr := stream.Seek(0, io.SeekStart); seekErr != nil {
-			mergedCancel()
-			stream.Close()
-			stream = nil
-			s.sessionManager.DeleteSession(sessionID)
-			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
-				logger.Info("Seek after probe failed, trying next fallback", "from", sessionID, "to", nextID)
-				sess, sessionID = nextSess, nextID
-				continue
-			}
+			logger.Info("No more fallback slots after probe", "last", sessionID, "err", probeErr)
 			forceDisconnect(w, s.baseURL)
 			return
 		}
@@ -1968,6 +1964,9 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			stream.Close()
 		}
 	}()
+
+	// Cache that this slot works for this request (requestedSessionID may differ after failover). Next time we can redirect to it before serving anything.
+	s.sessionManager.SetKnownGoodSlot(requestedSessionID, sessionID)
 
 	// After internal failover we serve a different file; don't apply the original request's Range or t= to it.
 	failedOver := sessionID != requestedSessionID

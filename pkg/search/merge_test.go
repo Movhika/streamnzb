@@ -18,6 +18,8 @@ func TestNormalizedTitleMatches(t *testing.T) {
 		{"Some Show", "Other Show", false},
 		{"Law and Order", "Law & Order", true},
 		{"Show 2024", "Show 2024 1080p", true},
+		{"Interstellar", "The.Science.of.Interstellar", false},
+		{"Interstellar", "Interstellar.2014.2160p.BluRay", true},
 	}
 	for _, tt := range tests {
 		got := normalizedTitleMatches(tt.expect, tt.gotTitle)

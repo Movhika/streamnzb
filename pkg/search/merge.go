@@ -35,8 +35,9 @@ func parseFilterQuery(filterQuery string) (normTitle string, year int) {
 }
 
 // fuzzyTitleMatches returns true if every word in the expected title (letters only, &→and)
-// appears as a whole word in the release title. Numbers/years/versions are ignored here;
-// FilterResults still filters by year and season/episode separately.
+// appears as a whole word in the release title, and the release does not add too many
+// extra words (so "The.Science.of.Interstellar" does not match "Interstellar").
+// Numbers/years/versions are ignored; FilterResults still filters by year and season/episode separately.
 func fuzzyTitleMatches(expect, gotTitle string) bool {
 	expectWords := strings.Fields(release.NormalizeTitleLettersOnly(expect))
 	gotNorm := release.NormalizeTitleLettersOnly(gotTitle)
@@ -44,6 +45,12 @@ func fuzzyTitleMatches(expect, gotTitle string) bool {
 		return true
 	}
 	if gotNorm == "" {
+		return false
+	}
+	gotWords := strings.Fields(gotNorm)
+	// Allow at most 2 extra words (e.g. year, edition/quality); reject titles that are
+	// clearly a different product (e.g. "The Science of Interstellar" vs "Interstellar").
+	if len(gotWords) > len(expectWords)+2 {
 		return false
 	}
 	padded := " " + gotNorm + " "

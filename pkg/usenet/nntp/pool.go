@@ -230,13 +230,13 @@ func (p *ClientPool) Put(c *Client) {
 		return
 	}
 	c.LastUsed = time.Now()
-	logger.Debug("nntp pool Put", "host", p.host)
+	logger.Trace("nntp pool Put", "host", p.host)
 
 	select {
 	case p.idleClients <- c:
 		// returned to idle
 	default:
-		logger.Debug("nntp pool Put idle full, closing connection", "host", p.host)
+		logger.Trace("nntp pool Put idle full, closing connection", "host", p.host)
 		c.Quit()
 		p.slots <- struct{}{}
 	}
