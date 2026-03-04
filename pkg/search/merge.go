@@ -34,6 +34,30 @@ func parseFilterQuery(filterQuery string) (normTitle string, year int) {
 	return norm, 0
 }
 
+// fuzzyTitleMatches returns true if every word in the expected title (letters only, &→and)
+// appears as a whole word in the release title. Numbers/years/versions are ignored here;
+// FilterResults still filters by year and season/episode separately.
+func fuzzyTitleMatches(expect, gotTitle string) bool {
+	expectWords := strings.Fields(release.NormalizeTitleLettersOnly(expect))
+	gotNorm := release.NormalizeTitleLettersOnly(gotTitle)
+	if len(expectWords) == 0 {
+		return true
+	}
+	if gotNorm == "" {
+		return false
+	}
+	padded := " " + gotNorm + " "
+	for _, w := range expectWords {
+		if w == "" {
+			continue
+		}
+		if !strings.Contains(padded, " "+w+" ") {
+			return false
+		}
+	}
+	return true
+}
+
 func normalizedTitleMatches(expect, gotTitle string) bool {
 	expectNorm := release.NormalizeTitleForDedup(expect)
 	gotNorm := release.NormalizeTitleForDedup(gotTitle)
@@ -43,22 +67,30 @@ func normalizedTitleMatches(expect, gotTitle string) bool {
 	if expectNorm == "" {
 		return true
 	}
+	// Exact or prefix match (with optional 4-digit year suffix)
 	if gotNorm == expectNorm {
 		return true
 	}
-	if !strings.HasPrefix(gotNorm, expectNorm) {
-		return false
-	}
-	rest := gotNorm[len(expectNorm):]
-	if rest == "" {
-		return true
-	}
-	for _, r := range rest {
-		if !unicode.IsDigit(r) {
-			return false
+	if strings.HasPrefix(gotNorm, expectNorm) {
+		rest := gotNorm[len(expectNorm):]
+		if rest == "" {
+			return true
+		}
+		if len(rest) == 4 {
+			allDigit := true
+			for _, r := range rest {
+				if !unicode.IsDigit(r) {
+					allDigit = false
+					break
+				}
+			}
+			if allDigit {
+				return true
+			}
 		}
 	}
-	return len(rest) == 4
+	// Fall back to fuzzy: every expected word must appear as a word in the release title.
+	return fuzzyTitleMatches(expect, gotTitle)
 }
 
 func FilterResults(releases []*release.Release, contentType, filterQuery, season, episode string) []*release.Release {

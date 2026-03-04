@@ -66,6 +66,9 @@ func NormalizeTitle(s string) string {
 
 func NormalizeTitleForDedup(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
+	// Normalize "&" to "and" so "Law & Order" matches "Law and Order" from indexers.
+	s = strings.ReplaceAll(s, "&", " and ")
+	s = strings.Join(strings.Fields(s), " ")
 	var b strings.Builder
 	for _, r := range s {
 		if unicode.IsLetter(r) || unicode.IsNumber(r) {
@@ -73,6 +76,28 @@ func NormalizeTitleForDedup(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// NormalizeTitleLettersOnly returns a lowercase, letters-and-spaces-only form for fuzzy matching.
+// Numbers, punctuation, and "&" (normalized to "and") are handled so years/versions don't affect title match.
+// Dots and common separators become spaces so "Star.Trek.Starfleet" keeps word boundaries.
+// Season/episode/year are filtered separately in FilterResults.
+func NormalizeTitleLettersOnly(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "&", " and ")
+	// Treat dots, dashes, underscores as word separators so release titles like "Show.Name.S01E01" tokenize.
+	for _, sep := range []string{".", "-", "_", ":", "  "} {
+		s = strings.ReplaceAll(s, sep, " ")
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			b.WriteRune(r)
+		} else if r == ' ' || r == '\t' {
+			b.WriteRune(' ')
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 var filenameReplacer = strings.NewReplacer(
