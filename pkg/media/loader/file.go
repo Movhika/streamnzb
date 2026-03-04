@@ -36,6 +36,11 @@ type SegmentStatter interface {
 
 const MaxZeroFills = 10
 
+// MaxCachedSegments is the maximum number of segments to keep in segCache per file.
+// Prefetch can pull ~40 ahead; we allow a small window behind. Capping prevents
+// unbounded memory growth when many segments are read or prefetched.
+const MaxCachedSegments = 48
+
 // isArticleNotFound reports whether err indicates the article is missing (430 No Such Article).
 // Used to fail fast on the first segment instead of zero-filling through many segments.
 func isArticleNotFound(err error) bool {
@@ -240,6 +245,19 @@ func (f *File) GetCachedSegment(index int) ([]byte, bool) {
 
 func (f *File) PutCachedSegment(index int, data []byte) {
 	f.segCacheMu.Lock()
+	// Evict oldest (smallest index) when at cap to bound memory.
+	for len(f.segCache) >= MaxCachedSegments {
+		minIdx := -1
+		for idx := range f.segCache {
+			if minIdx == -1 || idx < minIdx {
+				minIdx = idx
+			}
+		}
+		if minIdx == -1 {
+			break
+		}
+		delete(f.segCache, minIdx)
+	}
 	f.segCache[index] = data
 	f.segCacheMu.Unlock()
 }

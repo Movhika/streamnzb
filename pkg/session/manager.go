@@ -504,6 +504,13 @@ func (m *Manager) cleanup() {
 		}
 		return true
 	})
+
+	m.slotFailedDuringPlayback.Range(func(key, val any) bool {
+		if ent, ok := val.(*failedSlotEntry); ok && now.After(ent.expiresAt) {
+			m.slotFailedDuringPlayback.Delete(key)
+		}
+		return true
+	})
 }
 
 func (m *Manager) StartPlayback(id, ip string) {
