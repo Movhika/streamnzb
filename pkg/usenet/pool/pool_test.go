@@ -29,15 +29,58 @@ func TestNewPool_NilCacheUsesNoop(t *testing.T) {
 	}
 }
 
-func TestMemorySegmentCache(t *testing.T) {
-	c := NewMemorySegmentCache()
-	data, ok := c.Get("id1")
-	if ok {
-		t.Fatal("expected miss")
+func TestMemorySegmentCache_LRU(t *testing.T) {
+	c := NewMemorySegmentCacheWithCapacity(2)
+	c.Set("id1", SegmentData{Body: []byte("v1"), Size: 2})
+	c.Set("id2", SegmentData{Body: []byte("v2"), Size: 2})
+
+	_, ok := c.Get("id1")
+	if !ok {
+		t.Fatal("expected id1 to be present")
 	}
-	c.Set("id1", SegmentData{Body: []byte("hello"), Size: 5})
-	data, ok = c.Get("id1")
-	if !ok || data.Size != 5 || string(data.Body) != "hello" {
-		t.Fatalf("expected hit: ok=%v size=%d body=%q", ok, data.Size, string(data.Body))
+
+	// Set id3, should evict id2 because id1 was accessed last
+	c.Set("id3", SegmentData{Body: []byte("v3"), Size: 2})
+
+	_, ok = c.Get("id1")
+	if !ok {
+		t.Fatal("expected id1 to be present (accessed last)")
+	}
+	_, ok = c.Get("id2")
+	if ok {
+		t.Fatal("expected id2 to be evicted")
+	}
+	_, ok = c.Get("id3")
+	if !ok {
+		t.Fatal("expected id3 to be present")
+	}
+}
+func TestMemorySegmentCache_BudgetLRU(t *testing.T) {
+	// Budget for 4 bytes
+	budget := &SegmentCacheBudget{maxBytes: 4}
+
+	c := NewMemorySegmentCacheWithBudget(budget)
+	c.Set("id1", SegmentData{Body: []byte("v1"), Size: 2})
+	c.Set("id2", SegmentData{Body: []byte("v2"), Size: 2})
+
+	_, ok := c.Get("id1")
+	if !ok {
+		t.Fatal("expected id1 to be present")
+	}
+
+	// Set id3 (2 bytes), should evict id2 (oldest) to fit
+	c.Set("id3", SegmentData{Body: []byte("v3"), Size: 2})
+
+	_, ok = c.Get("id1")
+	if !ok {
+		t.Fatal("expected id1 to be present (accessed last)")
+	}
+	_, ok = c.Get("id2")
+	if ok {
+		t.Fatal("expected id2 to be evicted")
+	}
+	_, ok = c.Get("id3")
+	if !ok {
+		t.Fatal("expected id3 to be present")
 	}
 }

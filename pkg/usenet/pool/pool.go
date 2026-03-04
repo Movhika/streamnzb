@@ -137,12 +137,27 @@ func (p *Pool) FetchSegmentFirst(ctx context.Context, segment *nzb.Segment, grou
 			}
 		}
 		go func(exclude []string) {
-			conn, release, _, providerID, err := p.getConnection(fetchCtx, exclude, 999, false)
+			conn, release, discard, providerID, err := p.getConnection(fetchCtx, exclude, 999, false)
 			if err != nil {
 				ch <- segResult{err: err}
 				return
 			}
-			defer release()
+
+			// Connection leak guard: if fetchCtx is cancelled (e.g. another provider succeeded
+			// or the caller gave up), discard the connection to interrupt the blocking read.
+			stopWatch := make(chan struct{})
+			go func() {
+				select {
+				case <-fetchCtx.Done():
+					discard()
+				case <-stopWatch:
+				}
+			}()
+			defer func() {
+				close(stopWatch)
+				release()
+			}()
+
 			if len(groups) > 0 {
 				if err := conn.Group(groups[0]); err != nil {
 					logger.Debug("fetch segment group failed", "provider", providerID, "err", err)
@@ -200,7 +215,7 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 	var exclude []string
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		conn, release, _, providerID, err := p.getConnection(fetchCtx, exclude, 999, false)
+		conn, release, discard, providerID, err := p.getConnection(fetchCtx, exclude, 999, false)
 		if err != nil {
 			if errors.Is(err, ErrNoProvidersAvailable) && len(exclude) > 0 {
 				exclude = nil
@@ -209,8 +224,19 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 			return SegmentData{}, err
 		}
 
+		// Interrupt pending body read if session is closed/cancelled.
+		stopWatch := make(chan struct{})
+		go func() {
+			select {
+			case <-fetchCtx.Done():
+				discard()
+			case <-stopWatch:
+			}
+		}()
+
 		if len(groups) > 0 {
 			if err := conn.Group(groups[0]); err != nil {
+				close(stopWatch)
 				release()
 				logger.Debug("fetch segment group failed", "provider", providerID, "err", err)
 				exclude = append(exclude, providerID)
@@ -220,6 +246,7 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 
 		r, err := conn.Body(messageID)
 		if err != nil {
+			close(stopWatch)
 			release()
 			lastErr = err
 			logger.Debug("fetch segment body failed", "provider", providerID, "err", err)
@@ -232,8 +259,9 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 
 		cr := &countReader{Reader: r}
 		frame, err := decode.DecodeToBytes(cr)
-		release()
+		close(stopWatch)
 		if err != nil {
+			discard()
 			errStr := err.Error()
 			if strings.Contains(errStr, "expected size") && strings.Contains(errStr, "but got") {
 				logger.Debug("fetch segment decode failed", "provider", providerID, "err", err, "raw_body_bytes", cr.n)
@@ -243,6 +271,7 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 			exclude = append(exclude, providerID)
 			continue
 		}
+		release()
 
 		data := SegmentData{
 			Body: frame.Data,
@@ -375,8 +404,17 @@ func (p *Pool) getConnection(ctx context.Context, exclude []string, maxPriority 
 
 		pool := prov.ClientPool
 		pid := prov.ID
-		release := func() { pool.Put(c) }
-		discard := func() { pool.Discard(c) }
+		var once sync.Once
+		release := func() {
+			once.Do(func() {
+				pool.Put(c)
+			})
+		}
+		discard := func() {
+			once.Do(func() {
+				pool.Discard(c)
+			})
+		}
 		return c, release, discard, pid, nil
 	}
 

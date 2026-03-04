@@ -92,20 +92,20 @@ type Indexer struct {
 }
 
 type ConfigOverrides struct {
-	AddonPort      int
-	AddonBaseURL   string
-	LogLevel       string
-	AvailNZBURL    string
-	AvailNZBAPIKey string
-	TMDBAPIKey     string
-	TVDBAPIKey     string
-	ProxyPort      int
-	ProxyHost      string
-	ProxyAuthUser  string
-	ProxyAuthPass  string
-	AdminUsername  string
-	Providers      []Provider
-	Indexers       []Indexer
+	AddonPort         int
+	AddonBaseURL      string
+	LogLevel          string
+	AvailNZBURL       string
+	AvailNZBAPIKey    string
+	TMDBAPIKey        string
+	TVDBAPIKey        string
+	ProxyPort         int
+	ProxyHost         string
+	ProxyAuthUser     string
+	ProxyAuthPass     string
+	AdminUsername string
+	Providers     []Provider
+	Indexers          []Indexer
 }
 
 func ReadConfigOverrides() (ConfigOverrides, []string) {
@@ -149,7 +149,6 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 		o.AdminUsername = v
 		keys = append(keys, KeyAdminUsername)
 	}
-
 	o.Providers = readProvidersFromEnv()
 	if len(o.Providers) > 0 {
 		keys = append(keys, KeyProviders)

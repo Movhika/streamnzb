@@ -1886,10 +1886,25 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		}
 	}
 
+	var mergedCtx context.Context
+	var mergedCancel context.CancelFunc
 	for {
 		s.prefetchNextFallbackNZB(nextFallbackSessionID(sess), device)
-		stream, name, size, err = s.tryPlaySlot(r.Context(), sess)
+		// Use a context that cancels when either the request ends or the session is closed (e.g. user closed from dashboard).
+		// That way closing the session aborts playback and stops downloading immediately.
+		mergedCtx, mergedCancel = context.WithCancel(r.Context())
+		go func(sess *session.Session, cancel context.CancelFunc) {
+			select {
+			case <-mergedCtx.Done():
+				return
+			case <-sess.Done():
+				logger.Debug("playback aborted: session closed", "session", sess.ID)
+				cancel()
+			}
+		}(sess, mergedCancel)
+		stream, name, size, err = s.tryPlaySlot(mergedCtx, sess)
 		if err != nil {
+			mergedCancel()
 			if isSegmentUnavailableErr(err) {
 				s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
 				if s.availReporter != nil {
@@ -1912,6 +1927,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		probeBuf := make([]byte, probeSize)
 		_, readErr := stream.Read(probeBuf)
 		if readErr != nil && readErr != io.EOF {
+			mergedCancel()
 			if isSegmentUnavailableErr(readErr) {
 				s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
 				if s.availReporter != nil {
@@ -1931,6 +1947,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			return
 		}
 		if _, seekErr := stream.Seek(0, io.SeekStart); seekErr != nil {
+			mergedCancel()
 			stream.Close()
 			stream = nil
 			s.sessionManager.DeleteSession(sessionID)
@@ -1944,8 +1961,10 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		}
 		break
 	}
+	defer mergedCancel()
 	defer func() {
 		if stream != nil {
+			logger.Debug("play handler closing stream", "session", sessionID)
 			stream.Close()
 		}
 	}()
@@ -1968,7 +1987,14 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		clientIP = r.RemoteAddr
 	}
 	s.sessionManager.StartPlayback(sessionID, clientIP)
-	defer s.sessionManager.EndPlayback(sessionID, clientIP)
+	var endPlaybackOnce sync.Once
+	endPlayback := func() { s.sessionManager.EndPlayback(sessionID, clientIP) }
+	defer endPlaybackOnce.Do(endPlayback)
+	// When client cancels (e.g. stop in Stremio), request context is cancelled; end playback so we stop downloading and session can be evicted.
+	go func() {
+		<-r.Context().Done()
+		endPlaybackOnce.Do(endPlayback)
+	}()
 
 	onReadError := func(slotPath string, readErr error) {
 		if !isSegmentUnavailableErr(readErr) {
@@ -1988,6 +2014,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		lastUpdate:     time.Now(),
 	}
 
+	logger.Debug("play handler serving stream", "session", sessionID, "name", name, "size", size)
 	logger.Info("Serving media", "name", name, "size", size, "session", sessionID)
 
 	ext := strings.ToLower(filepath.Ext(name))
@@ -2233,7 +2260,19 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	if sess.NZB != nil {
 		password = sess.NZB.Password()
 	}
-	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), unpackFiles, sess.Blueprint, password)
+	// Cancel stream when either request ends or session is closed (e.g. from dashboard).
+	mergedCtx, mergedCancel := context.WithCancel(r.Context())
+	go func() {
+		select {
+		case <-mergedCtx.Done():
+			return
+		case <-sess.Done():
+			logger.Debug("debug play aborted: session closed", "session", sessionID)
+			mergedCancel()
+		}
+	}()
+	defer mergedCancel()
+	stream, name, size, bp, err := unpack.GetMediaStream(mergedCtx, unpackFiles, sess.Blueprint, password)
 	if bp != nil && sess.Blueprint == nil {
 		sess.SetBlueprint(bp)
 	}
@@ -2242,7 +2281,10 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		http.Error(w, "Failed to open media stream: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer stream.Close()
+	defer func() {
+		logger.Debug("debug play closing stream", "session", sessionID)
+		stream.Close()
+	}()
 
 	if tStr := r.URL.Query().Get("t"); tStr != "" && r.Header.Get("Range") == "" {
 		if tSec, parseOK := seek.ParseTSeconds(tStr); parseOK {
@@ -2258,7 +2300,13 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	}
 
 	s.sessionManager.StartPlayback(sessionID, clientIP)
-	defer s.sessionManager.EndPlayback(sessionID, clientIP)
+	var endPlaybackOnce sync.Once
+	endPlayback := func() { s.sessionManager.EndPlayback(sessionID, clientIP) }
+	defer endPlaybackOnce.Do(endPlayback)
+	go func() {
+		<-r.Context().Done()
+		endPlaybackOnce.Do(endPlayback)
+	}()
 
 	monitoredStream := &StreamMonitor{
 		ReadSeekCloser: stream,

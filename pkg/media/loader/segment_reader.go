@@ -55,6 +55,8 @@ func NewSegmentReader(parent context.Context, f *File, startOffset int64) *Segme
 	return sr
 }
 
+const maxPrefetchAhead = 16 // cap "ahead" cache so memory stays bounded during playback
+
 func (r *SegmentReader) Read(p []byte) (int, error) {
 	r.mu.Lock()
 	if r.closed {
@@ -68,6 +70,11 @@ func (r *SegmentReader) Read(p []byte) (int, error) {
 	segIdx := r.segIdx
 	segOff := r.segOff
 	r.mu.Unlock()
+
+	// Evict already-played segments on every Read so cache doesn't grow with playback position.
+	r.file.EvictCachedSegmentsBefore(segIdx)
+	// Cap how far ahead we keep; prefetch will refill only up to this window.
+	r.file.EvictCachedSegmentsAfter(segIdx + maxPrefetchAhead)
 
 	data, err := r.waitForSegment(segIdx)
 	if err != nil {
@@ -93,7 +100,6 @@ func (r *SegmentReader) Read(p []byte) (int, error) {
 	if r.segOff >= int64(len(data)) {
 		r.segIdx++
 		r.segOff = 0
-		r.file.EvictCachedSegmentsBefore(r.segIdx - 2)
 	}
 	r.mu.Unlock()
 
@@ -124,10 +130,8 @@ func (r *SegmentReader) startPrefetch() {
 		maxWorkers = 1
 	}
 
-	ahead := 40
-
 	r.mu.Lock()
-	for i := 0; i < ahead; i++ {
+	for i := 0; i < maxPrefetchAhead; i++ {
 		idx := current + i
 		if idx >= len(r.file.segments) {
 			break
@@ -225,6 +229,7 @@ func (r *SegmentReader) Close() error {
 	r.closed = true
 	r.mu.Unlock()
 
+	logger.Debug("loader SegmentReader Close", "file", r.file.Name())
 	r.cancel()
 
 	done := make(chan struct{})
@@ -236,6 +241,8 @@ func (r *SegmentReader) Close() error {
 	case <-done:
 	case <-time.After(3 * time.Second):
 	}
+	// Drop cached segments for this file so already-played data is released (single file: at stream end; RAR: when we move to the next volume).
+	r.file.ClearSegmentCache()
 	return nil
 }
 

@@ -42,6 +42,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       tv_categories: '',
       extra_search_terms: '',
       use_season_episode_params: undefined,
+      memory_limit_mb: 512,
       providers: [],
       indexers: []
     }
@@ -70,6 +71,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         tv_categories: initialConfig.tv_categories ?? '',
         extra_search_terms: initialConfig.extra_search_terms ?? '',
         use_season_episode_params: initialConfig.use_season_episode_params,
+        memory_limit_mb: Number(initialConfig.memory_limit_mb || 0),
         providers: initialConfig.providers?.map((p, index) => ({
           ...p,
           priority: p.priority != null ? p.priority : index + 1,
@@ -155,6 +157,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       };
 
       const trimmedData = trimData(data);
+      if (typeof trimmedData.memory_limit_mb !== 'number') {
+        trimmedData.memory_limit_mb = Number(trimmedData.memory_limit_mb) || 0
+      }
 
       sendCommand('save_config', trimmedData)
       setHasUnsavedChanges(false)
@@ -279,6 +284,16 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                     </FormControl>
                     <FormMessage />
                     <EnvOverrideNote show={envOverrides.includes('log_level')} />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="memory_limit_mb" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Memory limit (MB)</FormLabel>
+                    <FormControl>
+                      <Input type="number" min={0} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; field.onChange(v === '' ? 0 : Number(v) || 0) }} />
+                    </FormControl>
+                    <FormDescription>Soft limit on total process memory (0 = no limit). Segment cache uses 80% of this. Restart required.</FormDescription>
+                    <FormMessage />
                   </FormItem>
                 )} />
               </div>

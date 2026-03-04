@@ -25,6 +25,7 @@ type InitializedComponents struct {
 	ProviderOrder        []string
 	StreamingPools       []*nntp.ClientPool
 	UsenetPool           *pool.Pool
+	SegmentCacheBudget   *pool.SegmentCacheBudget
 	AvailNZBIndexerHosts []string
 	IndexerCaps          map[string]*indexer.Caps
 }
@@ -229,6 +230,16 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 	}
 
 	var usenetPool *pool.Pool
+	var segmentCacheBudget *pool.SegmentCacheBudget
+	// Reserve headroom for non-cache memory (session + 100+ loader Files, NZB, RAR blueprint, runtime, stacks).
+	// Otherwise segment cache uses 80% of limit and the remaining 20% is too small, so we exceed the limit.
+	const reservedMB = 150
+	if cfg.MemoryLimitMB > reservedMB {
+		segmentCacheMB := cfg.MemoryLimitMB - reservedMB
+		segmentCacheBudget = pool.NewSegmentCacheBudget(segmentCacheMB)
+		logger.Info("Segment cache set (memory limit minus reserved)", "segment_cache_mb", segmentCacheMB, "memory_limit_mb", cfg.MemoryLimitMB, "reserved_mb", reservedMB)
+	}
+
 	if len(providerOrder) > 0 {
 		providerConfigs := make([]pool.ProviderConfig, 0, len(providerOrder))
 		for i, name := range providerOrder {
@@ -247,7 +258,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 			var err error
 			usenetPool, err = pool.NewPool(&pool.Config{
 				Providers:    providerConfigs,
-				SegmentCache: pool.NewMemorySegmentCache(),
+				SegmentCache: pool.NewMemorySegmentCacheWithBudget(segmentCacheBudget),
 			})
 			if err != nil {
 				logger.Error("Failed to build usenet pool", "err", err)
@@ -264,6 +275,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		ProviderOrder:        providerOrder,
 		StreamingPools:       streamingPools,
 		UsenetPool:           usenetPool,
+		SegmentCacheBudget:   segmentCacheBudget,
 		AvailNZBIndexerHosts: availNzbHosts,
 		IndexerCaps:          indexerCaps,
 	}, nil

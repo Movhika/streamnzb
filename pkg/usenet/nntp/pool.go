@@ -125,14 +125,14 @@ func (p *ClientPool) TotalMegabytes() float64 {
 }
 
 func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
-	logger.Trace("pool.Get start", "host", p.host)
+	logger.Debug("nntp pool Get", "host", p.host)
 
 	select {
 	case <-ctx.Done():
 		logger.Trace("pool.Get ctx.Done (idle check)", "host", p.host)
 		return nil, ctx.Err()
 	case c := <-p.idleClients:
-		logger.Trace("pool.Get from idle", "host", p.host)
+		logger.Debug("nntp pool Get from idle", "host", p.host)
 		return c, nil
 	default:
 	}
@@ -154,18 +154,18 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 			p.slots <- struct{}{}
 			return nil, err
 		}
-		logger.Trace("pool.Get new client", "host", p.host)
+		logger.Debug("nntp pool Get new client", "host", p.host)
 		return c, nil
 	default:
 	}
 
-	logger.Trace("pool.Get blocking", "host", p.host)
+	logger.Debug("nntp pool Get blocking", "host", p.host)
 	select {
 	case <-ctx.Done():
 		logger.Trace("pool.Get ctx.Done (blocking)", "host", p.host)
 		return nil, ctx.Err()
 	case c := <-p.idleClients:
-		logger.Trace("pool.Get from idle (after block)", "host", p.host)
+		logger.Debug("nntp pool Get from idle (after block)", "host", p.host)
 		return c, nil
 	case <-p.slots:
 
@@ -180,7 +180,7 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 			p.slots <- struct{}{}
 			return nil, err
 		}
-		logger.Trace("pool.Get new client (after block)", "host", p.host)
+		logger.Debug("nntp pool Get new client (after block)", "host", p.host)
 		return c, nil
 	}
 }
@@ -230,12 +230,13 @@ func (p *ClientPool) Put(c *Client) {
 		return
 	}
 	c.LastUsed = time.Now()
-	logger.Trace("pool.Put", "host", p.host)
+	logger.Debug("nntp pool Put", "host", p.host)
 
 	select {
 	case p.idleClients <- c:
+		// returned to idle
 	default:
-
+		logger.Debug("nntp pool Put idle full, closing connection", "host", p.host)
 		c.Quit()
 		p.slots <- struct{}{}
 	}
@@ -245,7 +246,7 @@ func (p *ClientPool) Discard(c *Client) {
 	if c == nil {
 		return
 	}
-	logger.Trace("pool.Discard", "host", p.host)
+	logger.Debug("nntp pool Discard connection not returned to pool", "host", p.host)
 	c.Quit()
 	p.slots <- struct{}{}
 }

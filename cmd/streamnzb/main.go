@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"streamnzb/pkg/auth"
@@ -52,6 +53,14 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("configuration error: %w", err))
 	}
 	logger.SetLevel(cfg.LogLevel)
+
+	if cfg.MemoryLimitMB > 0 {
+		limit := int64(cfg.MemoryLimitMB) * 1024 * 1024
+		debug.SetMemoryLimit(limit)
+		logger.Info("Go memory limit set", "mb", cfg.MemoryLimitMB)
+		// Note: SetMemoryLimit is soft — the runtime may temporarily exceed it. We reserve 150 MB
+		// for non-cache (session, NZB, runtime) and use the rest for segment cache so we stay closer to the limit.
+	}
 
 	availNZBUrl := os.Getenv(env.AvailNZBURL)
 	if availNZBUrl == "" {
@@ -178,7 +187,7 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to build components: %w", err))
 	}
 
-	sessionManager := session.NewManager(comp.StreamingPools, comp.UsenetPool, 30*time.Minute)
+	sessionManager := session.NewManager(comp.StreamingPools, comp.UsenetPool, 30*time.Minute, comp.SegmentCacheBudget)
 	logger.Info("Session manager initialized", "ttl", 30*time.Minute)
 
 	saveConfig := func() error { return cfg.Save() }

@@ -110,6 +110,11 @@ type Config struct {
 
 	Streams []*StreamEntry `json:"streams,omitempty"`
 
+	// MemoryLimitMB sets a soft limit on total Go heap (runtime/debug.SetMemoryLimit). 0 = no limit.
+	// When set, segment cache is automatically 80% of this limit.
+	// Use this to stop memory climbing; the runtime will GC more aggressively to stay under the limit.
+	MemoryLimitMB int `json:"memory_limit_mb,omitempty"`
+
 	LoadedPath string `json:"-"`
 }
 
@@ -238,6 +243,7 @@ func Load() (*Config, error) {
 		AdminUsername: "admin",
 		ProxyPort:     119,
 		ProxyHost:     "0.0.0.0",
+		MemoryLimitMB: 512,
 		LoadedPath:    configPath,
 	}
 

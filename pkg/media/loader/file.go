@@ -37,9 +37,8 @@ type SegmentStatter interface {
 const MaxZeroFills = 10
 
 // MaxCachedSegments is the maximum number of segments to keep in segCache per file.
-// Prefetch can pull ~40 ahead; we allow a small window behind. Capping prevents
-// unbounded memory growth when many segments are read or prefetched.
-const MaxCachedSegments = 48
+// SegmentReader evicts before current and caps ahead (maxPrefetchAhead); this is a hard ceiling.
+const MaxCachedSegments = 24
 
 // isArticleNotFound reports whether err indicates the article is missing (430 No Such Article).
 // Used to fail fast on the first segment instead of zero-filling through many segments.
@@ -77,11 +76,13 @@ type File struct {
 	segCache   map[int][]byte
 	segCacheMu sync.RWMutex
 
+	cacheBudget *pool.SegmentCacheBudget // optional global byte limit
+
 	zeroFillMu    sync.Mutex
 	zeroFillCount int
 }
 
-func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstimator, fetcher SegmentFetcher) *File {
+func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstimator, fetcher SegmentFetcher, cacheBudget *pool.SegmentCacheBudget) *File {
 	segments := make([]*Segment, len(f.Segments))
 	var offset int64
 	for i, s := range f.Segments {
@@ -93,14 +94,15 @@ func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimat
 		offset += s.Bytes
 	}
 	return &File{
-		nzbFile:   f,
-		pools:     pools,
-		fetcher:   fetcher,
-		estimator: estimator,
-		segments:  segments,
-		totalSize: offset,
-		ctx:       ctx,
-		segCache:  make(map[int][]byte),
+		nzbFile:     f,
+		pools:       pools,
+		fetcher:     fetcher,
+		estimator:   estimator,
+		segments:    segments,
+		totalSize:   offset,
+		ctx:         ctx,
+		segCache:    make(map[int][]byte),
+		cacheBudget: cacheBudget,
 	}
 }
 
@@ -243,9 +245,46 @@ func (f *File) GetCachedSegment(index int) ([]byte, bool) {
 	return data, ok
 }
 
+func (f *File) releaseSegmentBytes(data []byte) {
+	if len(data) > 0 && f.cacheBudget != nil {
+		f.cacheBudget.Release(int64(len(data)))
+	}
+}
+
 func (f *File) PutCachedSegment(index int, data []byte) {
+	size := int64(len(data))
 	f.segCacheMu.Lock()
-	// Evict oldest (smallest index) when at cap to bound memory.
+	// If overwriting an existing segment, release its size so the budget is accurate.
+	if old, exists := f.segCache[index]; exists {
+		f.releaseSegmentBytes(old)
+		logger.Trace("loader PutCachedSegment overwrite", "file", f.Name(), "index", index, "size", len(data))
+	}
+	// If using a global byte budget, reserve space. Evict oldest in this file until Reserve succeeds; if we can't, don't cache.
+	if f.cacheBudget != nil && size > 0 {
+		reserved := false
+		for !reserved {
+			reserved = f.cacheBudget.Reserve(size)
+			if reserved {
+				break
+			}
+			minIdx := -1
+			for idx := range f.segCache {
+				if minIdx == -1 || idx < minIdx {
+					minIdx = idx
+				}
+			}
+			if minIdx == -1 {
+				// Budget full and nothing to evict in this file — don't cache this segment so we stay under cap.
+				f.segCacheMu.Unlock()
+				logger.Trace("loader PutCachedSegment skip over budget", "file", f.Name(), "index", index, "size", len(data))
+				return
+			}
+			old := f.segCache[minIdx]
+			delete(f.segCache, minIdx)
+			f.cacheBudget.Release(int64(len(old)))
+		}
+	}
+	// Evict oldest (smallest index) when at segment count cap.
 	for len(f.segCache) >= MaxCachedSegments {
 		minIdx := -1
 		for idx := range f.segCache {
@@ -256,20 +295,50 @@ func (f *File) PutCachedSegment(index int, data []byte) {
 		if minIdx == -1 {
 			break
 		}
+		old := f.segCache[minIdx]
 		delete(f.segCache, minIdx)
+		f.releaseSegmentBytes(old)
+		logger.Trace("loader PutCachedSegment evict for count", "file", f.Name(), "evicted_index", minIdx)
 	}
 	f.segCache[index] = data
+	cachedCount := len(f.segCache)
 	f.segCacheMu.Unlock()
+	logger.Trace("loader PutCachedSegment", "file", f.Name(), "index", index, "size", len(data), "cached_count", cachedCount)
 }
 
 func (f *File) EvictCachedSegmentsBefore(minIndex int) {
 	f.segCacheMu.Lock()
-	for idx := range f.segCache {
+	for idx, data := range f.segCache {
 		if idx < minIndex {
 			delete(f.segCache, idx)
+			f.releaseSegmentBytes(data)
 		}
 	}
 	f.segCacheMu.Unlock()
+}
+
+// EvictCachedSegmentsAfter drops segments with index > maxIndex so the "ahead" window is bounded.
+func (f *File) EvictCachedSegmentsAfter(maxIndex int) {
+	f.segCacheMu.Lock()
+	for idx, data := range f.segCache {
+		if idx > maxIndex {
+			delete(f.segCache, idx)
+			f.releaseSegmentBytes(data)
+		}
+	}
+	f.segCacheMu.Unlock()
+}
+
+// ClearSegmentCache drops all cached segment data so memory can be released when the session ends.
+func (f *File) ClearSegmentCache() {
+	f.segCacheMu.Lock()
+	n := len(f.segCache)
+	for _, data := range f.segCache {
+		f.releaseSegmentBytes(data)
+	}
+	f.segCache = make(map[int][]byte)
+	f.segCacheMu.Unlock()
+	logger.Debug("loader ClearSegmentCache", "file", f.Name(), "segments_cleared", n)
 }
 
 func (f *File) PrewarmSegment(index int) {
@@ -349,7 +418,8 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int) ([]by
 		f.PutCachedSegment(index, zeroData)
 		return zeroData, nil
 	}
-	f.PutCachedSegment(index, data.Body)
+	// Don't cache here when using the pool fetcher: the pool already cached by message ID.
+	// Caching again would double memory use (same segment in pool cache + loader segCache) and double-count the budget.
 	return data.Body, nil
 }
 

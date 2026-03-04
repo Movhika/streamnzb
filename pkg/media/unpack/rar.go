@@ -187,6 +187,11 @@ func (e *encryptedRARStream) Close() error {
 	return err
 }
 
+// maxFirstVolumesToScan caps how many "first" volumes we try when many files are
+// treated as first volumes (e.g. non-standard names like .100, .101). Prevents
+// failing slowly across hundreds of volumes; we try a few and fail fast.
+const maxFirstVolumesToScan = 5
+
 func ScanArchive(files []UnpackableFile, password string) (*ArchiveBlueprint, error) {
 	rarFiles := filterRarFiles(files)
 	if len(rarFiles) == 0 {
@@ -194,6 +199,14 @@ func ScanArchive(files []UnpackableFile, password string) (*ArchiveBlueprint, er
 	}
 
 	firstVols := filterFirstVolumes(rarFiles)
+	tryingCount := len(firstVols)
+	if tryingCount > maxFirstVolumesToScan {
+		sort.Slice(firstVols, func(i, j int) bool {
+			return ExtractFilename(firstVols[i].Name()) < ExtractFilename(firstVols[j].Name())
+		})
+		firstVols = firstVols[:maxFirstVolumesToScan]
+		logger.Debug("Limiting RAR first-volume scan to fail fast", "trying", len(firstVols), "skipped", tryingCount-len(firstVols))
+	}
 	logger.Debug("Scanning RAR first volumes", "count", len(firstVols), "total", len(rarFiles))
 
 	start := time.Now()

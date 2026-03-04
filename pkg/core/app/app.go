@@ -42,6 +42,7 @@ type Components struct {
 	AvailClient          *availnzb.Client
 	TMDBClient           *tmdb.Client
 	TVDBClient           *tvdb.Client
+	SegmentCacheBudget   *pool.SegmentCacheBudget
 }
 
 type App struct {
@@ -106,6 +107,7 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 		AvailClient:          availClient,
 		TMDBClient:           tmdbClient,
 		TVDBClient:           tvdbClient,
+		SegmentCacheBudget:   base.SegmentCacheBudget,
 	}, nil
 }
 

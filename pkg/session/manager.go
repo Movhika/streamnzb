@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,7 @@ type Session struct {
 	LastAccess        time.Time
 	ActivePlays       int32
 	PlaybackStartedAt time.Time // when ActivePlays went from 0 to >0; used to evict stuck sessions
+	PlaybackEndedAt   time.Time // when ActivePlays went to 0; used to evict session soon after stream stops
 	Clients           map[string]time.Time
 	mu                sync.Mutex
 
@@ -47,6 +49,15 @@ type Session struct {
 	FallbackStreamURLs []string
 
 	bytesRead atomic.Int64 // bytes read during playback; used for AvailNZB good-report threshold
+}
+
+// Done returns a channel that is closed when the session is closed (e.g. user closed from dashboard).
+// Use with request context so playback aborts when either the client disconnects or the session is closed.
+func (s *Session) Done() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.ctx.Done()
 }
 
 func (s *Session) ReleaseURL() string {
@@ -112,23 +123,28 @@ const MaxPlaybackDuration = 6 * time.Hour
 // FailoverOrderTTL is how long device failover order entries are kept before expiry in cleanup().
 const FailoverOrderTTL = 24 * time.Hour
 
+// PostPlaybackEvictTTL is how long a session stays in memory after playback ends (ActivePlays=0)
+// before being evicted. Keeps memory from staying high with 100+ loader Files per session.
+const PostPlaybackEvictTTL = 2 * time.Minute
+
 type failoverOrderEntry struct {
 	order     []string
 	expiresAt time.Time
 }
 
 type Manager struct {
-	sessions                map[string]*Session
-	pools                   []*nntp.ClientPool
-	usenetPool              *pool.Pool
-	estimator               *loader.SegmentSizeEstimator
-	ttl                     time.Duration
-	maxPlaybackDuration     time.Duration
-	mu                      sync.RWMutex
-	failoverOrder           sync.Map
-	knownGoodSlots          sync.Map
+	sessions                 map[string]*Session
+	pools                    []*nntp.ClientPool
+	usenetPool               *pool.Pool
+	estimator                *loader.SegmentSizeEstimator
+	cacheBudget              *pool.SegmentCacheBudget // optional global segment cache byte limit
+	ttl                      time.Duration
+	maxPlaybackDuration      time.Duration
+	mu                       sync.RWMutex
+	failoverOrder            sync.Map
+	knownGoodSlots           sync.Map
 	slotFailedDuringPlayback sync.Map // slotPath -> *failedSlotEntry (430 during streaming)
-	aioStreamsDevices       sync.Map  // deviceToken -> true (device has sent AIOStreams User-Agent)
+	aioStreamsDevices        sync.Map // deviceToken -> true (device has sent AIOStreams User-Agent)
 }
 
 type failedSlotEntry struct {
@@ -141,14 +157,15 @@ func (s *Session) SetBlueprint(bp interface{}) {
 	s.Blueprint = bp
 }
 
-func NewManager(pools []*nntp.ClientPool, usenetPool *pool.Pool, ttl time.Duration) *Manager {
+func NewManager(pools []*nntp.ClientPool, usenetPool *pool.Pool, ttl time.Duration, cacheBudget *pool.SegmentCacheBudget) *Manager {
 	m := &Manager{
 		sessions:            make(map[string]*Session),
-		pools:                pools,
-		usenetPool:           usenetPool,
-		estimator:            loader.NewSegmentSizeEstimator(),
-		ttl:                  ttl,
-		maxPlaybackDuration:  MaxPlaybackDuration,
+		pools:               pools,
+		usenetPool:          usenetPool,
+		estimator:           loader.NewSegmentSizeEstimator(),
+		cacheBudget:         cacheBudget,
+		ttl:                 ttl,
+		maxPlaybackDuration: MaxPlaybackDuration,
 	}
 
 	go m.cleanupLoop()
@@ -184,6 +201,7 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 	pools := m.pools
 	usenetPool := m.usenetPool
 	estimator := m.estimator
+	cacheBudget := m.cacheBudget
 	m.mu.RUnlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -191,9 +209,9 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 	for _, info := range contentFiles {
 		var lf *loader.File
 		if usenetPool != nil {
-			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool)
+			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool, cacheBudget)
 		} else {
-			lf = loader.NewFile(ctx, info.File, pools, estimator, nil)
+			lf = loader.NewFile(ctx, info.File, pools, estimator, nil, cacheBudget)
 		}
 		loaderFiles = append(loaderFiles, lf)
 	}
@@ -212,7 +230,7 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 		cancel:     cancel,
 	}
 
-	logger.Trace("session CreateSession insert", "id", sessionID)
+	logger.Debug("session CreateSession", "id", sessionID, "files", len(loaderFiles))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing, ok := m.sessions[sessionID]; ok {
@@ -330,15 +348,16 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	pools := manager.pools
 	usenetPool := manager.usenetPool
 	estimator := manager.estimator
+	cacheBudget := manager.cacheBudget
 	manager.mu.RUnlock()
 
 	var loaderFiles []*loader.File
 	for _, info := range contentFiles {
 		var lf *loader.File
 		if usenetPool != nil {
-			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool)
+			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool, cacheBudget)
 		} else {
-			lf = loader.NewFile(ctx, info.File, pools, estimator, nil)
+			lf = loader.NewFile(ctx, info.File, pools, estimator, nil, cacheBudget)
 		}
 		loaderFiles = append(loaderFiles, lf)
 	}
@@ -351,6 +370,7 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	s.NZB = parsedNZB
 	s.Files = loaderFiles
 	s.File = loaderFiles[0]
+	logger.Debug("session GetOrDownloadNZB created loader files", "id", s.ID, "files", len(loaderFiles))
 	return s.NZB, nil
 }
 
@@ -487,22 +507,52 @@ func (m *Manager) GetSession(sessionID string) (*Session, error) {
 	return session, nil
 }
 
+// freeOSMemory runs GC and returns unused memory to the OS so RSS drops after session close.
+func freeOSMemory() {
+	debug.FreeOSMemory()
+}
+
 func (m *Manager) DeleteSession(sessionID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if sess, ok := m.sessions[sessionID]; ok {
-		sess.Close()
+	sess, ok := m.sessions[sessionID]
+	if ok {
 		delete(m.sessions, sessionID)
+	}
+	m.mu.Unlock()
+
+	if sess != nil {
+		logger.Debug("session DeleteSession closing", "id", sessionID)
+		sess.Close()
+		// Suggest returning freed memory to the OS so RSS drops (Go keeps heap by default).
+		go freeOSMemory()
+	} else {
+		logger.Trace("session DeleteSession no session", "id", sessionID)
 	}
 }
 
 func (s *Session) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	logger.Debug("session Close", "id", s.ID)
 	if s.cancel != nil {
 		s.cancel()
 	}
+	// Drop segment caches so memory is released immediately instead of waiting for GC.
+	n := 0
+	for _, f := range s.Files {
+		if f != nil {
+			f.ClearSegmentCache()
+			n++
+		}
+	}
+	if s.File != nil && len(s.Files) == 0 {
+		s.File.ClearSegmentCache()
+		n++
+	}
+	logger.Debug("session Close cleared segment caches", "id", s.ID, "files_cleared", n)
+	// Release references so session doesn't keep loader files alive after cache clear.
+	s.Files = nil
+	s.File = nil
 }
 
 func (m *Manager) cleanupLoop() {
@@ -524,15 +574,20 @@ func (m *Manager) cleanup() {
 		session.mu.Lock()
 		hasActivePlayback := session.ActivePlays > 0 || len(session.Clients) > 0
 		evictIdle := !hasActivePlayback && now.Sub(session.LastAccess) > m.ttl
+		evictPostPlayback := !hasActivePlayback && !session.PlaybackEndedAt.IsZero() && now.Sub(session.PlaybackEndedAt) > PostPlaybackEvictTTL
 		evictStuckPlayback := hasActivePlayback && !session.PlaybackStartedAt.IsZero() && now.Sub(session.PlaybackStartedAt) > m.maxPlaybackDuration
-		if evictIdle || evictStuckPlayback {
+		if evictIdle || evictPostPlayback || evictStuckPlayback {
 			delete(m.sessions, id)
 			toClose = append(toClose, session)
 		}
 		session.mu.Unlock()
 	}
 	for _, s := range toClose {
+		logger.Debug("session cleanup evicting", "id", s.ID)
 		s.Close()
+	}
+	if len(toClose) > 0 {
+		go freeOSMemory()
 	}
 
 	m.knownGoodSlots.Range(func(key, val any) bool {
@@ -584,6 +639,7 @@ func (m *Manager) EndPlayback(id, ip string) {
 		}
 		if s.ActivePlays == 0 {
 			s.PlaybackStartedAt = time.Time{}
+			s.PlaybackEndedAt = time.Now() // so cleanup can evict session after PostPlaybackEvictTTL
 		}
 		s.Clients[ip] = time.Now()
 		s.mu.Unlock()
