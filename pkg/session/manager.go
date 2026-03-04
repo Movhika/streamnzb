@@ -25,12 +25,13 @@ type Session struct {
 	Files []*loader.File
 	File  *loader.File
 
-	Blueprint   interface{}
-	CreatedAt   time.Time
-	LastAccess  time.Time
-	ActivePlays int32
-	Clients     map[string]time.Time
-	mu          sync.Mutex
+	Blueprint         interface{}
+	CreatedAt         time.Time
+	LastAccess        time.Time
+	ActivePlays       int32
+	PlaybackStartedAt time.Time // when ActivePlays went from 0 to >0; used to evict stuck sessions
+	Clients           map[string]time.Time
+	mu                sync.Mutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -89,12 +90,17 @@ type knownGoodSlotEntry struct {
 	expiresAt time.Time
 }
 
+// MaxPlaybackDuration is the maximum time a session can stay in "active playback"
+// before being evicted even if EndPlayback was never called (e.g. stuck connection).
+const MaxPlaybackDuration = 6 * time.Hour
+
 type Manager struct {
 	sessions                map[string]*Session
 	pools                   []*nntp.ClientPool
 	usenetPool              *pool.Pool
 	estimator               *loader.SegmentSizeEstimator
 	ttl                     time.Duration
+	maxPlaybackDuration     time.Duration
 	mu                      sync.RWMutex
 	failoverOrder           sync.Map
 	knownGoodSlots          sync.Map
@@ -114,11 +120,12 @@ func (s *Session) SetBlueprint(bp interface{}) {
 
 func NewManager(pools []*nntp.ClientPool, usenetPool *pool.Pool, ttl time.Duration) *Manager {
 	m := &Manager{
-		sessions:   make(map[string]*Session),
-		pools:      pools,
-		usenetPool: usenetPool,
-		estimator:  loader.NewSegmentSizeEstimator(),
-		ttl:        ttl,
+		sessions:            make(map[string]*Session),
+		pools:                pools,
+		usenetPool:           usenetPool,
+		estimator:            loader.NewSegmentSizeEstimator(),
+		ttl:                  ttl,
+		maxPlaybackDuration:  MaxPlaybackDuration,
 	}
 
 	go m.cleanupLoop()
@@ -488,7 +495,9 @@ func (m *Manager) cleanup() {
 	for id, session := range m.sessions {
 		session.mu.Lock()
 		hasActivePlayback := session.ActivePlays > 0 || len(session.Clients) > 0
-		if !hasActivePlayback && now.Sub(session.LastAccess) > m.ttl {
+		evictIdle := !hasActivePlayback && now.Sub(session.LastAccess) > m.ttl
+		evictStuckPlayback := hasActivePlayback && !session.PlaybackStartedAt.IsZero() && now.Sub(session.PlaybackStartedAt) > m.maxPlaybackDuration
+		if evictIdle || evictStuckPlayback {
 			delete(m.sessions, id)
 			toClose = append(toClose, session)
 		}
@@ -517,6 +526,9 @@ func (m *Manager) StartPlayback(id, ip string) {
 	s, err := m.GetSession(id)
 	if err == nil {
 		s.mu.Lock()
+		if s.ActivePlays == 0 {
+			s.PlaybackStartedAt = time.Now()
+		}
 		s.ActivePlays++
 		s.Clients[ip] = time.Now()
 		s.mu.Unlock()
@@ -530,7 +542,9 @@ func (m *Manager) EndPlayback(id, ip string) {
 		if s.ActivePlays > 0 {
 			s.ActivePlays--
 		}
-
+		if s.ActivePlays == 0 {
+			s.PlaybackStartedAt = time.Time{}
+		}
 		s.Clients[ip] = time.Now()
 		s.mu.Unlock()
 	}
