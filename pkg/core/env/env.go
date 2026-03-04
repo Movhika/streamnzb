@@ -11,6 +11,7 @@ const (
 	ADDONPort             = "ADDON_PORT"
 	ADDONBaseURL          = "ADDON_BASE_URL"
 	LOGLevel              = "LOG_LEVEL"
+	KeepLogFiles          = "KEEP_LOG_FILES"
 	AvailNZBURL           = "AVAILNZB_URL"
 	AvailNZBAPIKey        = "AVAILNZB_API_KEY"
 	TMDBAPIKey            = "TMDB_API_KEY"
@@ -30,6 +31,7 @@ const (
 	KeyAddonPort      = "addon_port"
 	KeyAddonBaseURL   = "addon_base_url"
 	KeyLogLevel       = "log_level"
+	KeyKeepLogFiles   = "keep_log_files"
 	KeyProxyPort      = "proxy_port"
 	KeyProxyHost      = "proxy_host"
 	KeyProxyAuthUser  = "proxy_auth_user"
@@ -95,6 +97,7 @@ type ConfigOverrides struct {
 	AddonPort         int
 	AddonBaseURL      string
 	LogLevel          string
+	KeepLogFiles      int
 	AvailNZBURL       string
 	AvailNZBAPIKey    string
 	TMDBAPIKey        string
@@ -125,6 +128,12 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 	if v := os.Getenv(LOGLevel); v != "" {
 		o.LogLevel = v
 		keys = append(keys, KeyLogLevel)
+	}
+	if v := os.Getenv(KeepLogFiles); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
+			o.KeepLogFiles = n
+			keys = append(keys, KeyKeepLogFiles)
+		}
 	}
 
 	if v := os.Getenv(NNTPProxyPort); v != "" {

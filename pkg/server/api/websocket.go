@@ -602,6 +602,9 @@ func (s *Server) broadcastUsersList() {
 
 func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 	errors := make(map[string]string)
+	if cfg.KeepLogFiles < 1 || cfg.KeepLogFiles > 50 {
+		errors["keep_log_files"] = "Must be between 1 and 50"
+	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 

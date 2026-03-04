@@ -115,6 +115,9 @@ type Config struct {
 	// Use this to stop memory climbing; the runtime will GC more aggressively to stay under the limit.
 	MemoryLimitMB int `json:"memory_limit_mb,omitempty"`
 
+	// KeepLogFiles is how many log files to keep (current streamnzb.log + rotated streamnzb-*.log). Default 9.
+	KeepLogFiles int `json:"keep_log_files,omitempty"`
+
 	LoadedPath string `json:"-"`
 }
 
@@ -244,6 +247,7 @@ func Load() (*Config, error) {
 		ProxyPort:     119,
 		ProxyHost:     "0.0.0.0",
 		MemoryLimitMB: 512,
+		KeepLogFiles:  9,
 		LoadedPath:    configPath,
 	}
 
@@ -255,6 +259,9 @@ func Load() (*Config, error) {
 		}
 	} else {
 		logger.Info("Loaded configuration", "path", configPath)
+	}
+	if cfg.KeepLogFiles < 1 {
+		cfg.KeepLogFiles = 9
 	}
 
 	overrides, keys := env.ReadConfigOverrides()
@@ -377,6 +384,9 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	if keySet(keys, env.KeyLogLevel) {
 		cfg.LogLevel = o.LogLevel
 	}
+	if keySet(keys, env.KeyKeepLogFiles) {
+		cfg.KeepLogFiles = o.KeepLogFiles
+	}
 	if keySet(keys, env.KeyProxyPort) {
 		cfg.ProxyPort = o.ProxyPort
 	}
@@ -458,6 +468,8 @@ func CopyEnvOverridesFrom(src, dst *Config) {
 			dst.AddonBaseURL = src.AddonBaseURL
 		case env.KeyLogLevel:
 			dst.LogLevel = src.LogLevel
+		case env.KeyKeepLogFiles:
+			dst.KeepLogFiles = src.KeepLogFiles
 		case env.KeyProxyPort:
 			dst.ProxyPort = src.ProxyPort
 		case env.KeyProxyHost:

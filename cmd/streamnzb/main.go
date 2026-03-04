@@ -53,6 +53,7 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("configuration error: %w", err))
 	}
 	logger.SetLevel(cfg.LogLevel)
+	logger.PurgeOldLogs(cfg.KeepLogFiles)
 
 	if cfg.MemoryLimitMB > 0 {
 		limit := int64(cfg.MemoryLimitMB) * 1024 * 1024

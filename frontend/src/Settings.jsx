@@ -43,6 +43,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       extra_search_terms: '',
       use_season_episode_params: undefined,
       memory_limit_mb: 512,
+      keep_log_files: 9,
       providers: [],
       indexers: []
     }
@@ -72,6 +73,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         extra_search_terms: initialConfig.extra_search_terms ?? '',
         use_season_episode_params: initialConfig.use_season_episode_params,
         memory_limit_mb: Number(initialConfig.memory_limit_mb || 0),
+        keep_log_files: Number(initialConfig.keep_log_files ?? 9) || 9,
         providers: initialConfig.providers?.map((p, index) => ({
           ...p,
           priority: p.priority != null ? p.priority : index + 1,
@@ -160,6 +162,8 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       if (typeof trimmedData.memory_limit_mb !== 'number') {
         trimmedData.memory_limit_mb = Number(trimmedData.memory_limit_mb) || 0
       }
+      const keepLog = Number(trimmedData.keep_log_files)
+      trimmedData.keep_log_files = Math.min(50, Math.max(1, isNaN(keepLog) ? 9 : keepLog))
 
       sendCommand('save_config', trimmedData)
       setHasUnsavedChanges(false)
@@ -293,6 +297,17 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                       <Input type="number" min={0} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; field.onChange(v === '' ? 0 : Number(v) || 0) }} />
                     </FormControl>
                     <FormDescription>Soft limit on total process memory (0 = no limit). Segment cache uses 80% of this. Restart required.</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={control} name="keep_log_files" render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-sm font-medium">Keep log files</FormLabel>
+                    <FormControl>
+                      <Input type="number" min={1} max={50} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; field.onChange(v === '' ? 9 : Math.min(50, Math.max(1, Number(v) || 9))) }} />
+                    </FormControl>
+                    <FormDescription>Number of log files to keep (current streamnzb.log plus rotated archives). Oldest rotated logs are purged on restart.</FormDescription>
+                    <EnvOverrideNote show={envOverrides.includes('keep_log_files')} />
                     <FormMessage />
                   </FormItem>
                 )} />
