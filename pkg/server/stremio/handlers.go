@@ -1950,10 +1950,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		}
 	}()
 
-	if s.availReporter != nil {
-		s.availReporter.ReportGood(sess)
-	}
-
 	// After internal failover we serve a different file; don't apply the original request's Range or t= to it.
 	failedOver := sessionID != requestedSessionID
 	if failedOver {
@@ -2008,6 +2004,13 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
 	bufW := newBufferedResponseWriter(w, 256*1024)
 	defer bufW.Flush()
+
+	// Report good only after serving, so bytes-read threshold can be met (StreamMonitor tracks bytes).
+	defer func() {
+		if s.availReporter != nil {
+			s.availReporter.ReportGood(sess)
+		}
+	}()
 
 	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
 	logger.Trace("Finished serving media", "session", sessionID)
@@ -2373,17 +2376,20 @@ func (b *bufferedResponseWriter) Flush() {
 
 type StreamMonitor struct {
 	io.ReadSeekCloser
-	sessionID    string
-	clientIP     string
-	manager      *session.Manager
-	onReadError  func(slotPath string, err error) // called when Read returns an error (e.g. 430)
-	lastUpdate   time.Time
-	mu           sync.Mutex
+	sessionID     string
+	clientIP      string
+	manager       *session.Manager
+	onReadError   func(slotPath string, err error) // called when Read returns an error (e.g. 430)
+	lastUpdate    time.Time
+	mu            sync.Mutex
 	readErrorOnce sync.Once
 }
 
 func (s *StreamMonitor) Read(p []byte) (n int, err error) {
 	n, err = s.ReadSeekCloser.Read(p)
+	if n > 0 {
+		s.manager.AddBytesRead(s.sessionID, int64(n))
+	}
 	if err != nil && s.onReadError != nil {
 		s.readErrorOnce.Do(func() {
 			s.onReadError(s.sessionID, err)

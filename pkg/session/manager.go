@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"streamnzb/pkg/core/logger"
@@ -44,6 +45,8 @@ type Session struct {
 	indexer     indexer.Indexer
 
 	FallbackStreamURLs []string
+
+	bytesRead atomic.Int64 // bytes read during playback; used for AvailNZB good-report threshold
 }
 
 func (s *Session) ReleaseURL() string {
@@ -68,6 +71,18 @@ func (s *Session) ReportReleaseName() string {
 		return s.Release.Title
 	}
 	return ""
+}
+
+// BytesRead returns the number of bytes read from this session during playback.
+func (s *Session) BytesRead() int64 {
+	return s.bytesRead.Load()
+}
+
+// AddBytesRead adds n to the session's bytes-read counter (called from stream read path).
+func (s *Session) AddBytesRead(n int64) {
+	if n > 0 {
+		s.bytesRead.Add(n)
+	}
 }
 
 func (s *Session) FirstFallbackStreamURL() string {
@@ -582,6 +597,19 @@ func (m *Manager) KeepAlive(id, ip string) {
 		s.LastAccess = time.Now()
 		s.Clients[ip] = time.Now()
 		s.mu.Unlock()
+	}
+}
+
+// AddBytesRead adds n to the session's bytes-read counter. Used by the stream read path to track data downloaded before reporting good to AvailNZB.
+func (m *Manager) AddBytesRead(sessionID string, n int64) {
+	if n <= 0 {
+		return
+	}
+	m.mu.RLock()
+	s := m.sessions[sessionID]
+	m.mu.RUnlock()
+	if s != nil {
+		s.AddBytesRead(n)
 	}
 }
 

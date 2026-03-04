@@ -8,21 +8,33 @@ import (
 	"sync"
 )
 
+// DefaultMinBytesToReportGood is the minimum bytes read during playback before reporting a release as good.
+// Avoids reporting too early before we know the release actually streams.
+const DefaultMinBytesToReportGood = 50 * 1024 * 1024 // 50 MiB
+
 type ProviderHostsSource interface {
 	GetProviderHosts() []string
 }
 
 type Reporter struct {
-	client      *Client
-	providerSrc ProviderHostsSource
-	reported    sync.Map
+	client               *Client
+	providerSrc          ProviderHostsSource
+	reported             sync.Map
+	MinBytesToReportGood int64 // minimum bytes read before reporting good; 0 = no threshold
 }
 
 func NewReporter(client *Client, providerSrc ProviderHostsSource) *Reporter {
-	return &Reporter{client: client, providerSrc: providerSrc}
+	return &Reporter{
+		client:               client,
+		providerSrc:          providerSrc,
+		MinBytesToReportGood: DefaultMinBytesToReportGood,
+	}
 }
 
 func (r *Reporter) ReportGood(sess *session.Session) {
+	if r.MinBytesToReportGood > 0 && sess.BytesRead() < r.MinBytesToReportGood {
+		return
+	}
 	if _, loaded := r.reported.LoadOrStore(sess.ID, struct{}{}); loaded {
 		return
 	}
@@ -83,10 +95,6 @@ func (r *Reporter) report(sess *session.Session, available bool) {
 		if len(hosts) == 0 {
 			return
 		}
-		if !available {
-			_ = r.client.ReportAvailability(releaseURL, strings.Join(hosts, ","), false, meta)
-		} else {
-			_ = r.client.ReportAvailability(releaseURL, hosts[0], true, meta)
-		}
+		_ = r.client.ReportAvailability(releaseURL, strings.Join(hosts, ","), available, meta)
 	}()
 }
