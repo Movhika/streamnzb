@@ -94,6 +94,14 @@ type knownGoodSlotEntry struct {
 // before being evicted even if EndPlayback was never called (e.g. stuck connection).
 const MaxPlaybackDuration = 6 * time.Hour
 
+// FailoverOrderTTL is how long device failover order entries are kept before expiry in cleanup().
+const FailoverOrderTTL = 24 * time.Hour
+
+type failoverOrderEntry struct {
+	order     []string
+	expiresAt time.Time
+}
+
 type Manager struct {
 	sessions                map[string]*Session
 	pools                   []*nntp.ClientPool
@@ -370,16 +378,21 @@ func (m *Manager) SetDeviceFailoverOrder(deviceToken, streamKey string, order []
 	}
 	cp := make([]string, len(order))
 	copy(cp, order)
-	m.failoverOrder.Store(failoverOrderMapKey(deviceToken, streamKey), cp)
+	m.failoverOrder.Store(failoverOrderMapKey(deviceToken, streamKey), &failoverOrderEntry{
+		order:     cp,
+		expiresAt: time.Now().Add(FailoverOrderTTL),
+	})
 }
 
 // GetDeviceFailoverOrder returns the stored failover order for this device and stream key.
 // It tries key-specific storage first, then falls back to device-only (legacy) if streamKey is set.
+// Returns nil if the entry is missing or expired.
 func (m *Manager) GetDeviceFailoverOrder(deviceToken, streamKey string) []string {
+	now := time.Now()
 	if streamKey != "" {
 		if val, ok := m.failoverOrder.Load(failoverOrderMapKey(deviceToken, streamKey)); ok && val != nil {
-			if order, ok := val.([]string); ok {
-				return order
+			if ent, ok := val.(*failoverOrderEntry); ok && ent != nil && now.Before(ent.expiresAt) {
+				return ent.order
 			}
 		}
 	}
@@ -387,11 +400,11 @@ func (m *Manager) GetDeviceFailoverOrder(deviceToken, streamKey string) []string
 	if !ok || val == nil {
 		return nil
 	}
-	order, ok := val.([]string)
-	if !ok {
+	ent, ok := val.(*failoverOrderEntry)
+	if !ok || ent == nil || now.After(ent.expiresAt) {
 		return nil
 	}
-	return order
+	return ent.order
 }
 
 func (m *Manager) SetKnownGoodSlot(requestedSlot, successfulSlot string) {
@@ -518,6 +531,18 @@ func (m *Manager) cleanup() {
 		if ent, ok := val.(*failedSlotEntry); ok && now.After(ent.expiresAt) {
 			m.slotFailedDuringPlayback.Delete(key)
 		}
+		return true
+	})
+
+	m.failoverOrder.Range(func(key, val any) bool {
+		if ent, ok := val.(*failoverOrderEntry); ok {
+			if now.After(ent.expiresAt) {
+				m.failoverOrder.Delete(key)
+			}
+			return true
+		}
+		// Legacy: value was stored as []string without TTL; remove so next store uses failoverOrderEntry
+		m.failoverOrder.Delete(key)
 		return true
 	})
 }

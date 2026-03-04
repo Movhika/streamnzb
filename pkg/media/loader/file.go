@@ -529,6 +529,9 @@ func (f *File) OpenReaderAt(ctx context.Context, offset int64) (io.ReadCloser, e
 	return NewSegmentReader(ctx, f, offset), nil
 }
 
+// MaxSegmentSizeEstimatorEntries caps the number of size entries to prevent unbounded growth.
+const MaxSegmentSizeEstimatorEntries = 128
+
 type SegmentSizeEstimator struct {
 	entries []sizeEntry
 	mu      sync.RWMutex
@@ -569,6 +572,9 @@ func (e *SegmentSizeEstimator) Set(encodedSize, decodedSize int64) {
 		if diff < 4096 {
 			return
 		}
+	}
+	if len(e.entries) >= MaxSegmentSizeEstimatorEntries {
+		e.entries = e.entries[1:]
 	}
 	e.entries = append(e.entries, sizeEntry{encoded: encodedSize, decoded: decodedSize})
 }
