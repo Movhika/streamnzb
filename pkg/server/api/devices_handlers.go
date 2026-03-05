@@ -51,6 +51,7 @@ func (s *Server) handleDevicesList(w http.ResponseWriter, r *http.Request) {
 			"username":          d.Username,
 			"token":             d.Token,
 			"indexer_overrides": d.IndexerOverrides,
+			"stream_ids":        d.StreamIDs,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -124,6 +125,7 @@ func (s *Server) handleDeviceByUsername(w http.ResponseWriter, r *http.Request) 
 			"username":          d.Username,
 			"token":             d.Token,
 			"indexer_overrides": d.IndexerOverrides,
+			"stream_ids":        d.StreamIDs,
 		})
 	case http.MethodDelete:
 		if suffix != "" {
@@ -172,6 +174,7 @@ func (s *Server) handlePutDeviceConfigs(w http.ResponseWriter, r *http.Request) 
 	}
 	var deviceConfigs map[string]struct {
 		IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides"`
+		StreamIDs        []string                              `json:"stream_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&deviceConfigs); err != nil {
 		s.writeSaveStatus(w, "error", "Invalid device config data", nil)
@@ -184,6 +187,9 @@ func (s *Server) handlePutDeviceConfigs(w http.ResponseWriter, r *http.Request) 
 		}
 		if err := s.deviceManager.UpdateDeviceIndexerOverrides(username, dc.IndexerOverrides); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to update indexer overrides for %s: %v", username, err))
+		}
+		if err := s.deviceManager.UpdateDeviceStreamIDs(username, dc.StreamIDs); err != nil {
+			errors = append(errors, fmt.Sprintf("Failed to update stream IDs for %s: %v", username, err))
 		}
 	}
 	if len(errors) > 0 {

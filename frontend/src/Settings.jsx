@@ -132,7 +132,8 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           for (const [username, deviceConfig] of Object.entries(deviceConfigs)) {
             if (username === adminUsername || !deviceConfig) continue
             configsToSave[username] = {
-              indexer_overrides: deviceConfig.indexer_overrides ?? {}
+              indexer_overrides: deviceConfig.indexer_overrides ?? {},
+              stream_ids: deviceConfig.stream_ids ?? []
             }
           }
           if (Object.keys(configsToSave).length > 0) {

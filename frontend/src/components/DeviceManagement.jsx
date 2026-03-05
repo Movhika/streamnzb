@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback } from 'react'
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { AlertCircle, Plus, Trash2, RefreshCw, Copy, Check, Loader2 } from "lucide-react"
+import { getApiUrl } from "@/api"
 
 const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws, globalConfig: globalConfigProp }, ref) {
   const [devices, setDevices] = useState([])
+  const [streams, setStreams] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
   const [addDeviceLoading, setAddDeviceLoading] = useState(false)
@@ -19,11 +22,22 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
   const globalConfig = globalConfigProp ?? null
   const hasLoadedRef = React.useRef(false)
 
+  // Fetch available streams for assignment
+  useEffect(() => {
+    fetch(getApiUrl('/api/stream/configs'), { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => setStreams(Array.isArray(data) ? data : []))
+      .catch(() => {})
+  }, [])
+
   useImperativeHandle(ref, () => {
     const buildConfigs = () => {
       const out = {}
       devices.forEach((d) => {
-        out[d.username] = { indexer_overrides: d.indexer_overrides ?? {} }
+        out[d.username] = {
+          indexer_overrides: d.indexer_overrides ?? {},
+          stream_ids: d.stream_ids ?? []
+        }
       })
       return out
     }
@@ -32,6 +46,18 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
       getUserConfigs: buildConfigs
     }
   }, [devices])
+
+  // Toggle a stream ID for a device (local state only; saved via parent save button)
+  const handleStreamToggle = useCallback((username, streamId, checked) => {
+    setDevices(prev => prev.map(d => {
+      if (d.username !== username) return d
+      const current = d.stream_ids ?? []
+      const next = checked
+        ? [...current, streamId]
+        : current.filter(id => id !== streamId)
+      return { ...d, stream_ids: next }
+    }))
+  }, [])
 
   // Fetch devices list (uses API via sendCommand)
   const fetchDevices = useCallback((showLoader = true) => {
@@ -294,6 +320,33 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
                             </Button>
                           </div>
                         </div>
+                        {streams.length > 0 && (
+                          <div className="mt-3 space-y-1">
+                            <Label className="text-xs text-muted-foreground block">
+                              Allowed streams <span className="font-normal">(leave all unchecked to allow all)</span>:
+                            </Label>
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
+                              {streams.map((st) => {
+                                const checked = (device.stream_ids ?? []).includes(st.id)
+                                return (
+                                  <div key={st.id} className="flex items-center gap-1.5">
+                                    <Checkbox
+                                      id={`stream-${device.username}-${st.id}`}
+                                      checked={checked}
+                                      onCheckedChange={(v) => handleStreamToggle(device.username, st.id, !!v)}
+                                    />
+                                    <label
+                                      htmlFor={`stream-${device.username}-${st.id}`}
+                                      className="text-xs cursor-pointer select-none"
+                                    >
+                                      {st.name}
+                                    </label>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <div className="flex flex-wrap gap-2 sm:shrink-0 sm:ml-4">
                         <Button

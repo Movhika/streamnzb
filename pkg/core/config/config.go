@@ -141,6 +141,7 @@ type DeviceEntry struct {
 	Username         string                         `json:"username"`
 	Token            string                         `json:"token"`
 	IndexerOverrides map[string]IndexerSearchConfig `json:"indexer_overrides,omitempty"`
+	StreamIDs        []string                       `json:"stream_ids,omitempty"`
 }
 
 type StreamEntry struct {

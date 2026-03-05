@@ -20,7 +20,8 @@ func TestNewznabSearch(t *testing.T) {
 			return
 		}
 
-		if r.URL.Query().Get("t") != "movie" {
+		t := r.URL.Query().Get("t")
+		if t != "movie" && t != "search" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}

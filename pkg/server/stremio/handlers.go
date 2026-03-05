@@ -316,7 +316,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 
 	logger.Trace("stream request start", "type", contentType, "id", id)
 	baseURL := s.baseURLWithToken(device)
-	streamsList := s.streamConfigsForStreamRequest()
+	streamsList := s.streamConfigsForDevice(device)
 	var streams []Stream
 	for _, str := range streamsList {
 		key := StreamSlotKey{StreamID: str.ID, ContentType: contentType, ID: id}
@@ -609,7 +609,7 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, device 
 	ctx, cancel := context.WithTimeout(ctx, streamRequestTimeout)
 	defer cancel()
 	baseURL := s.baseURLWithToken(device)
-	streamsList := s.streamConfigsForStreamRequest()
+	streamsList := s.streamConfigsForDevice(device)
 	var streams []Stream
 	for _, str := range streamsList {
 		key := StreamSlotKey{StreamID: str.ID, ContentType: contentType, ID: id}
@@ -678,7 +678,10 @@ func (s *Server) getDefaultStreamID() string {
 	return stream.GlobalStreamID
 }
 
-func (s *Server) streamConfigsForStreamRequest() []*stream.Stream {
+// streamConfigsForDevice returns the ordered list of streams to use for a request.
+// If device is non-nil and has StreamIDs set, only streams in that list are returned
+// (preserving the device's order). Admin/nil device always gets all streams.
+func (s *Server) streamConfigsForDevice(device *auth.Device) []*stream.Stream {
 	s.mu.RLock()
 	sm := s.streamManager
 	s.mu.RUnlock()
@@ -693,6 +696,27 @@ func (s *Server) streamConfigsForStreamRequest() []*stream.Stream {
 		if g := s.getGlobalStream(); g != nil {
 			return []*stream.Stream{g}
 		}
+	}
+
+	// Filter by device's allowed stream IDs when set.
+	if device != nil && len(device.StreamIDs) > 0 {
+		allowed := make(map[string]int, len(device.StreamIDs))
+		for i, id := range device.StreamIDs {
+			allowed[id] = i
+		}
+		filtered := make([]*stream.Stream, 0, len(device.StreamIDs))
+		byID := make(map[string]*stream.Stream, len(list))
+		for _, s := range list {
+			if s != nil {
+				byID[s.ID] = s
+			}
+		}
+		for _, id := range device.StreamIDs {
+			if st, ok := byID[id]; ok {
+				filtered = append(filtered, st)
+			}
+		}
+		return filtered
 	}
 
 	sort.Slice(list, func(i, j int) bool {
@@ -710,6 +734,11 @@ func (s *Server) streamConfigsForStreamRequest() []*stream.Stream {
 		return a.ID < b.ID
 	})
 	return list
+}
+
+// streamConfigsForStreamRequest returns all streams (used by admin/search views).
+func (s *Server) streamConfigsForStreamRequest() []*stream.Stream {
+	return s.streamConfigsForDevice(nil)
 }
 
 func (s *Server) triageCandidates(str *stream.Stream, releases []*release.Release) []triage.Candidate {

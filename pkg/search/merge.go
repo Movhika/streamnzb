@@ -34,17 +34,8 @@ func parseFilterQuery(filterQuery string) (normTitle string, year int) {
 	return norm, 0
 }
 
-// titleArticles contains common English articles that may legally precede a show title
-// in a release name (e.g. "The.Paradise.S01E01" for the show "Paradise").
 var titleArticles = map[string]bool{"the": true, "a": true, "an": true}
 
-// fuzzyTitleMatches returns true if the expected title appears as a contiguous block
-// of words inside the release title. Only common articles ("the", "a", "an") are
-// permitted to appear before the matched block; any other leading word means the
-// release title is a different show (e.g. "Love.Paradise" must not match "Paradise").
-// Extra words after the match are allowed as qualifiers (year, quality, group, etc.).
-// The release must not add far more words than the expected title overall, so that
-// "The.Science.of.Interstellar" still cannot match "Interstellar".
 func fuzzyTitleMatches(expect, gotTitle string) bool {
 	expectWords := strings.Fields(release.NormalizeTitleLettersOnly(expect))
 	gotNorm := release.NormalizeTitleLettersOnly(gotTitle)
