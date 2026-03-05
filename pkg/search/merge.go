@@ -34,10 +34,17 @@ func parseFilterQuery(filterQuery string) (normTitle string, year int) {
 	return norm, 0
 }
 
-// fuzzyTitleMatches returns true if every word in the expected title (letters only, &→and)
-// appears as a whole word in the release title, and the release does not add too many
-// extra words (so "The.Science.of.Interstellar" does not match "Interstellar").
-// Numbers/years/versions are ignored; FilterResults still filters by year and season/episode separately.
+// titleArticles contains common English articles that may legally precede a show title
+// in a release name (e.g. "The.Paradise.S01E01" for the show "Paradise").
+var titleArticles = map[string]bool{"the": true, "a": true, "an": true}
+
+// fuzzyTitleMatches returns true if the expected title appears as a contiguous block
+// of words inside the release title. Only common articles ("the", "a", "an") are
+// permitted to appear before the matched block; any other leading word means the
+// release title is a different show (e.g. "Love.Paradise" must not match "Paradise").
+// Extra words after the match are allowed as qualifiers (year, quality, group, etc.).
+// The release must not add far more words than the expected title overall, so that
+// "The.Science.of.Interstellar" still cannot match "Interstellar".
 func fuzzyTitleMatches(expect, gotTitle string) bool {
 	expectWords := strings.Fields(release.NormalizeTitleLettersOnly(expect))
 	gotNorm := release.NormalizeTitleLettersOnly(gotTitle)
@@ -48,21 +55,34 @@ func fuzzyTitleMatches(expect, gotTitle string) bool {
 		return false
 	}
 	gotWords := strings.Fields(gotNorm)
-	// Allow at most 2 extra words (e.g. year, edition/quality); reject titles that are
-	// clearly a different product (e.g. "The Science of Interstellar" vs "Interstellar").
+	if len(gotWords) < len(expectWords) {
+		return false
+	}
+	// Reject when the release title has far more words than expected
+	// (prevents "The Science of Interstellar" matching "Interstellar").
 	if len(gotWords) > len(expectWords)+2 {
 		return false
 	}
-	padded := " " + gotNorm + " "
-	for _, w := range expectWords {
-		if w == "" {
-			continue
+	// Find expectWords as a contiguous block in gotWords.
+	// Words before the block must all be common articles.
+	for i := 0; i <= len(gotWords)-len(expectWords); i++ {
+		match := true
+		for j, w := range expectWords {
+			if gotWords[i+j] != w {
+				match = false
+				break
+			}
 		}
-		if !strings.Contains(padded, " "+w+" ") {
-			return false
+		if match {
+			for _, pre := range gotWords[:i] {
+				if !titleArticles[pre] {
+					return false
+				}
+			}
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func normalizedTitleMatches(expect, gotTitle string) bool {
