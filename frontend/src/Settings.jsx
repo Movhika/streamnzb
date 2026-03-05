@@ -44,6 +44,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       use_season_episode_params: undefined,
       memory_limit_mb: 512,
       keep_log_files: 9,
+      availnzb_mode: '',
       providers: [],
       indexers: []
     }
@@ -194,7 +195,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
     <Form {...form}>
       <form onSubmit={handleSubmit(onSubmit)}>
         {activePage === 'general' && (
-          <div className="space-y-8">
+          <>
             <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -311,11 +312,29 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                     <FormMessage />
                   </FormItem>
                 )} />
+                <FormField control={control} name="availnzb_mode" render={({ field }) => (
+                  <FormItem className="space-y-2 col-span-full">
+                    <FormLabel className="text-sm font-medium">AvailNZB mode</FormLabel>
+                    <FormControl>
+                      <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" {...field}>
+                        <option value="">GET status + POST report</option>
+                        <option value="status_only">GET status only</option>
+                        <option value="disabled">Disabled</option>
+                      </select>
+                    </FormControl>
+                    <FormDescription>
+                      Controls how StreamNZB interacts with AvailNZB.
+                      "GET status only" fetches availability data but does not report your playback results back to the community.
+                      "Disabled" skips AvailNZB entirely.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )} />
               </div>
               </CardContent>
             </Card>
             </div>
-          </div>
+          </>
         )}
 
         {activePage === 'indexers' && (

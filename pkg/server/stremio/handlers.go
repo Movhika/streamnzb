@@ -103,9 +103,20 @@ func NewServer(opts *ServerOptions) (*Server, error) {
 	if version == "" {
 		version = "dev"
 	}
+	availNZBMode := ""
+	if opts.Config != nil {
+		availNZBMode = opts.Config.AvailNZBMode
+	}
+	var resolvedAvailClient *availnzb.Client
+	if availNZBMode != "disabled" {
+		resolvedAvailClient = opts.AvailClient
+	}
 	var availReporter *availnzb.Reporter
-	if opts.AvailClient != nil {
-		availReporter = availnzb.NewReporter(opts.AvailClient, opts.Validator)
+	if resolvedAvailClient != nil {
+		availReporter = availnzb.NewReporter(resolvedAvailClient, opts.Validator)
+		if availNZBMode == "status_only" {
+			availReporter.Disabled = true
+		}
 	}
 	s := &Server{
 		manifest:             NewManifest(version),
@@ -116,7 +127,7 @@ func NewServer(opts *ServerOptions) (*Server, error) {
 		validator:            opts.Validator,
 		sessionManager:       opts.SessionManager,
 		triageService:        opts.TriageService,
-		availClient:          opts.AvailClient,
+		availClient:          resolvedAvailClient,
 		availReporter:        availReporter,
 		availNZBIndexerHosts: opts.AvailNZBIndexerHosts,
 		tmdbClient:           opts.TMDBClient,
@@ -2598,13 +2609,24 @@ func (s *Server) Reload(opts *ServerOptions) {
 	s.indexer = opts.Indexer
 	s.validator = opts.Validator
 	s.triageService = opts.TriageService
-	s.availClient = opts.AvailClient
-	if opts.AvailClient != nil {
+	reloadMode := ""
+	if opts.Config != nil {
+		reloadMode = opts.Config.AvailNZBMode
+	}
+	if reloadMode == "disabled" {
+		s.availClient = nil
+		s.availReporter = nil
+	} else if opts.AvailClient != nil {
+		s.availClient = opts.AvailClient
 		s.availReporter = availnzb.NewReporter(opts.AvailClient, opts.Validator)
+		if reloadMode == "status_only" {
+			s.availReporter.Disabled = true
+		}
 		if err := opts.AvailClient.RefreshBackbones(); err != nil {
 			logger.Debug("AvailNZB backbones refresh on reload", "err", err)
 		}
 	} else {
+		s.availClient = nil
 		s.availReporter = nil
 	}
 	s.availNZBIndexerHosts = opts.AvailNZBIndexerHosts

@@ -128,6 +128,12 @@ type Config struct {
 	// KeepLogFiles is how many log files to keep (current streamnzb.log + rotated streamnzb-*.log). Default 9.
 	KeepLogFiles int `json:"keep_log_files,omitempty"`
 
+	// AvailNZBMode controls how the AvailNZB integration behaves.
+	// "" or "full"        – fetch availability status AND report playback results (default).
+	// "status_only"       – fetch availability status but never report back (leeching).
+	// "disabled"          – disable AvailNZB entirely (no GET, no POST).
+	AvailNZBMode string `json:"availnzb_mode,omitempty"`
+
 	LoadedPath string `json:"-"`
 }
 

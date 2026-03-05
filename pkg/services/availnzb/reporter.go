@@ -23,6 +23,7 @@ type Reporter struct {
 	providerSrc          ProviderHostsSource
 	reported             sync.Map
 	MinBytesToReportGood int64 // minimum bytes read before reporting good; 0 = no threshold
+	Disabled             bool  // when true, all reporting is silently skipped
 }
 
 func NewReporter(client *Client, providerSrc ProviderHostsSource) *Reporter {
@@ -57,6 +58,10 @@ func (r *Reporter) ReportRAR(sess *session.Session) {
 }
 
 func (r *Reporter) report(sess *session.Session, available bool) {
+	if r.Disabled {
+		logger.Debug("AvailNZB reporting disabled by configuration, skipping report")
+		return
+	}
 	if r.client == nil || r.client.BaseURL == "" {
 		return
 	}
