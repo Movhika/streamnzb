@@ -29,7 +29,7 @@ import {
 } from "@/constants/pttOptions"
 
 const defaultFilters = {
-  quality_included: [], quality_required: [], quality_excluded: [],
+  quality_included: [], quality_required: [], quality_excluded: ['CAM', 'TeleSync', 'TeleCine', 'SCR'],
   resolution_included: [], resolution_required: [], resolution_excluded: [],
   codec_included: [], codec_required: [], codec_excluded: [],
   audio_included: [], audio_required: [], audio_excluded: [],
@@ -43,7 +43,7 @@ const defaultFilters = {
   network_included: [], network_required: [], network_excluded: [],
   region_included: [], region_required: [], region_excluded: [],
   group_included: [], group_required: [], group_excluded: [],
-  dubbed_excluded: undefined, hardcoded_excluded: undefined, proper_required: undefined,
+  dubbed_excluded: true, hardcoded_excluded: undefined, proper_required: undefined,
   repack_required: undefined, repack_excluded: undefined, extended_required: undefined, unrated_required: undefined,
   min_size_gb: 0, max_size_gb: 0, min_year: 0, max_year: 0,
   min_age_hours: 0, max_age_hours: 0,
@@ -53,12 +53,17 @@ const defaultFilters = {
   min_bitrate_kbps: 0, max_bitrate_kbps: 0
 }
 
-const defaultSortCriteriaOrder = ['resolution', 'quality', 'codec', 'visual_tag', 'audio', 'channels', 'bit_depth', 'container', 'languages', 'group', 'edition', 'network', 'region', 'three_d', 'size', 'keywords', 'regex', 'availnzb']
+const defaultSortCriteriaOrder = ['availnzb', 'resolution', 'quality', 'codec', 'visual_tag', 'audio', 'channels', 'bit_depth', 'container', 'languages', 'group', 'edition', 'network', 'region', 'three_d', 'size', 'keywords', 'regex']
 
 const defaultSorting = {
   sort_criteria_order: defaultSortCriteriaOrder,
   preferred_resolution: DefaultResolutionOrder,
-  preferred_quality: DefaultQualityOrder,
+  preferred_quality: [
+    'BluRay REMUX', 'REMUX', 'BluRay', 'BRRip', 'BDRip', 'UHDRip', 'HDRip',
+    'WEB-DL', 'WEBRip', 'WEB-DLRip', 'WEB',
+    'HDTV', 'HDTVRip', 'PDTV', 'TVRip', 'SATRip',
+    'DVD', 'DVDRip', 'PPVRip', 'R5', 'XviD', 'DivX',
+  ],
   preferred_codec: [],
   grab_weight: 0.5,
   age_weight: 1.0,
@@ -77,7 +82,7 @@ const defaultSorting = {
   preferred_network: [],
   preferred_region: [],
   preferred_three_d: [],
-  preferred_availnzb: []
+  preferred_availnzb: ['available']
 }
 
 function toItems(options, labelMap = {}) {

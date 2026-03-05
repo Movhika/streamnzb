@@ -29,7 +29,7 @@ type Provider struct {
 
 func DefaultFilterConfig() FilterConfig {
 	return FilterConfig{
-		QualityExcluded: []string{"CAM", "TeleSync"},
+		QualityExcluded: []string{"CAM", "TeleSync", "TeleCine", "SCR"},
 		DubbedExcluded:  ptrBool(true),
 	}
 }
@@ -37,10 +37,20 @@ func DefaultFilterConfig() FilterConfig {
 func DefaultSortConfig() SortConfig {
 	return SortConfig{
 		PreferredResolution: []string{"4k", "1080p", "720p", "sd"},
-		PreferredQuality:    []string{"BluRay", "Blu-ray", "WEB-DL", "WEBRip", "HDTV"},
-		SortCriteriaOrder:   []string{"resolution", "quality", "codec", "visual_tag", "audio", "channels"},
-		GrabWeight:          0.5,
-		AgeWeight:           1.0,
+		PreferredQuality: []string{
+			"BluRay REMUX", "REMUX", "BluRay", "BRRip", "BDRip", "UHDRip", "HDRip",
+			"WEB-DL", "WEBRip", "WEB-DLRip", "WEB",
+			"HDTV", "HDTVRip", "PDTV", "TVRip", "SATRip",
+			"DVD", "DVDRip", "PPVRip", "R5", "XviD", "DivX",
+		},
+		PreferredAvailNZB: []string{"available"},
+		SortCriteriaOrder: []string{
+			"availnzb", "resolution", "quality", "codec", "visual_tag", "audio", "channels",
+			"bit_depth", "container", "languages", "group", "edition", "network", "region",
+			"three_d", "size", "keywords", "regex",
+		},
+		GrabWeight: 0.5,
+		AgeWeight:  1.0,
 	}
 }
 

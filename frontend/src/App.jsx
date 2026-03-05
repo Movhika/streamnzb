@@ -19,6 +19,7 @@ const MAX_HISTORY = 60
 const MAX_LOGS = 200
 
 function App() {
+  const [authChecked, setAuthChecked] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
   const [authToken, setAuthToken] = useState(localStorage.getItem('auth_token') || '')
@@ -59,32 +60,51 @@ function App() {
 
   useEffect(() => {
     const token = localStorage.getItem('auth_token')
-    if (!token) {
-      const pathParts = window.location.pathname.split('/').filter(p => p !== '')
-      if (pathParts.length > 0 && pathParts[0] !== 'api') {
-        hasLoggedOutRef.current = false
-        setAuthenticated(true)
-        setCurrentUser('legacy')
-      } else {
-        setAuthenticated(false)
-      }
-    } else {
+    const pathParts = window.location.pathname.split('/').filter(p => p !== '')
+    const isLegacyPath = pathParts.length > 0 && pathParts[0] !== 'api'
+
+    if (!token && isLegacyPath) {
+      // Stremio token-in-URL path — no cookie/localStorage auth needed
       hasLoggedOutRef.current = false
-      setAuthToken(token)
       setAuthenticated(true)
-      authCheckTimeoutRef.current = setTimeout(() => {
-        if (authenticated && !currentUser && wsStatus !== 'connected') {
+      setCurrentUser('legacy')
+      setAuthChecked(true)
+      return
+    }
+
+    if (!token) {
+      setAuthenticated(false)
+      setAuthChecked(true)
+      return
+    }
+
+    // Verify the stored token against the server before showing the UI.
+    // This catches the case where the container was restarted and a new
+    // AdminToken was generated, making the stored cookie/token stale.
+    fetch('/api/auth/check', { credentials: 'include' })
+      .then(res => res.json().then(data => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok && data.authenticated) {
+          hasLoggedOutRef.current = false
+          setAuthToken(token)
+          setAuthenticated(true)
+          setCurrentUser(data.username)
+          setMustChangePassword(data.must_change_password || false)
+          if (data.version) setVersion(data.version)
+        } else {
+          // Server rejected the token — clear stale state and show login
           setAuthenticated(false)
           setAuthToken('')
           localStorage.removeItem('auth_token')
         }
-      }, 5000)
-    }
-    return () => {
-      if (authCheckTimeoutRef.current) {
-        clearTimeout(authCheckTimeoutRef.current)
-      }
-    }
+      })
+      .catch(() => {
+        // Server unreachable on startup — fall back to login screen
+        setAuthenticated(false)
+      })
+      .finally(() => {
+        setAuthChecked(true)
+      })
   }, [])
 
   const handleLogin = (username, token, mustChange) => {
@@ -363,6 +383,15 @@ function App() {
           });
       }
   };
+
+  if (!authChecked) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background/80 backdrop-blur-sm gap-4">
+        <Loader2 className="h-12 w-12 text-primary animate-spin" />
+        <div className="text-xl font-semibold tracking-tight">Verifying session...</div>
+      </div>
+    )
+  }
 
   if (!authenticated) {
     return <Login onLogin={handleLogin} version={version} />

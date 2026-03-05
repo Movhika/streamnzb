@@ -42,6 +42,15 @@ func AuthMiddleware(deviceManager *DeviceManager, getAdminUsername, getAdminToke
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
+				// Cookie present but invalid (e.g. after container restart with a new token).
+				// Clear it so the browser doesn't keep sending a stale credential.
+				http.SetCookie(w, &http.Cookie{
+					Name:     "auth_session",
+					Value:    "",
+					Path:     "/",
+					HttpOnly: true,
+					MaxAge:   -1,
+				})
 			}
 
 			authHeader := r.Header.Get("Authorization")
