@@ -9,8 +9,10 @@ import (
 )
 
 // DefaultMinBytesToReportGood is the minimum bytes read during playback before reporting a release as good.
-// Avoids reporting too early before we know the release actually streams.
-const DefaultMinBytesToReportGood = 50 * 1024 * 1024 // 50 MiB
+// Set to 0: the stream is already validated by unpack.ProbeMediaStream before handlePlay reaches the
+// serve path, and mid-stream failures are caught by onReadError (ErrTooManyZeroFills / segment unavailable
+// / data corruption) which calls ReportBad. A separate bytes threshold is therefore redundant.
+const DefaultMinBytesToReportGood = 0
 
 type ProviderHostsSource interface {
 	GetProviderHosts() []string

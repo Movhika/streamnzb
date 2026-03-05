@@ -364,21 +364,36 @@ func (f *File) StartDownloadSegment(ctx context.Context, index int) <-chan struc
 	return done
 }
 
+// DownloadSegment fetches segment index, returning cached data if available.
+// On all-provider failure, it zero-fills the segment and counts it toward IsFailed().
+// Use PrefetchSegment for background prefetch goroutines.
 func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 	if data, ok := f.GetCachedSegment(index); ok {
 		return data, nil
 	}
-	return f.doDownloadSegment(ctx, index)
+	return f.doDownloadSegment(ctx, index, true)
 }
 
-func (f *File) doDownloadSegment(ctx context.Context, index int) ([]byte, error) {
-	if f.fetcher != nil {
-		return f.doDownloadSegmentViaFetcher(ctx, index)
+// PrefetchSegment fetches segment index without counting failures toward IsFailed().
+// Background prefetch goroutines use this so transient provider errors do not poison the
+// zero-fill counter and prematurely mark the file as failed before the player reads it.
+// On all-provider failure the error is returned and nothing is cached (the blocking read
+// path via DownloadSegment will retry and count the failure if it also exhausts all providers).
+func (f *File) PrefetchSegment(ctx context.Context, index int) ([]byte, error) {
+	if data, ok := f.GetCachedSegment(index); ok {
+		return data, nil
 	}
-	return f.doDownloadSegmentViaPools(ctx, index)
+	return f.doDownloadSegment(ctx, index, false)
 }
 
-func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int) ([]byte, error) {
+func (f *File) doDownloadSegment(ctx context.Context, index int, countFailures bool) ([]byte, error) {
+	if f.fetcher != nil {
+		return f.doDownloadSegmentViaFetcher(ctx, index, countFailures)
+	}
+	return f.doDownloadSegmentViaPools(ctx, index, countFailures)
+}
+
+func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int, countFailures bool) ([]byte, error) {
 	downloadCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -400,6 +415,11 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int) ([]by
 		}
 		if index == 0 {
 			return nil, fmt.Errorf("first segment fetch failed: %w", err)
+		}
+		// Prefetch calls (countFailures=false) must not zero-fill or increment the counter.
+		// The blocking read path will retry and count the failure if all providers also fail.
+		if !countFailures {
+			return nil, fmt.Errorf("prefetch fetch failed (not counted): %w", err)
 		}
 		f.zeroFillMu.Lock()
 		count := f.zeroFillCount
@@ -423,7 +443,7 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int) ([]by
 	return data.Body, nil
 }
 
-func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int) ([]byte, error) {
+func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int, countFailures bool) ([]byte, error) {
 	downloadCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -522,6 +542,12 @@ func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int) ([]byte
 
 	if index == 0 {
 		return nil, fmt.Errorf("first segment failed on all providers: %w", lastErr)
+	}
+
+	// Prefetch calls (countFailures=false) must not zero-fill or increment the counter.
+	// The blocking read path will retry and count the failure if all providers also fail.
+	if !countFailures {
+		return nil, fmt.Errorf("prefetch failed on all providers (not counted): %w", lastErr)
 	}
 
 	f.zeroFillMu.Lock()

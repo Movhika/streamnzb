@@ -107,6 +107,18 @@ func (s *Session) IsActivelyServing() bool {
 	return s.ActivePlays > 0
 }
 
+// HasPreviouslyServed returns true if this session has completed at least one full serve cycle
+// (i.e. StartPlayback was called and then EndPlayback dropped ActivePlays back to 0).
+// PlaybackEndedAt is set when ActivePlays reaches zero, so a non-zero value means the file
+// was successfully probed and streamed at least once. Used by tryPlaySlot to skip IsFailed()
+// for sessions that proved their file was good but whose ActivePlays is momentarily 0 between
+// the client cancelling the initial probe and sending a follow-up range request.
+func (s *Session) HasPreviouslyServed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.PlaybackEndedAt.IsZero()
+}
+
 // MaxPlaybackDuration is the maximum time a session can stay in "active playback"
 // before being evicted even if EndPlayback was never called (e.g. stuck connection).
 const MaxPlaybackDuration = 6 * time.Hour
@@ -445,6 +457,29 @@ func (m *Manager) GetSlotFailedDuringPlayback(slotPath string) bool {
 		return false
 	}
 	return true
+}
+
+// HasActiveSessionForContentID returns true if any session with the given content type
+// and content ID exists in the session map (regardless of whether it is actively serving).
+// Used to detect Stremio's next-episode preload: Stremio sends E04's play request within
+// milliseconds of the user clicking E03, before E03 has incremented ActivePlays. Checking
+// for session existence (not ActivePlays > 0) avoids the 2–3 second race window.
+func (m *Manager) HasActiveSessionForContentID(contentType, contentID string) bool {
+	if contentType == "" || contentID == "" {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, s := range m.sessions {
+		s.mu.Lock()
+		ct := s.ContentType
+		cid := s.ContentID
+		s.mu.Unlock()
+		if ct == contentType && cid == contentID {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) GetSession(sessionID string) (*Session, error) {

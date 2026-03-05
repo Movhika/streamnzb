@@ -715,6 +715,43 @@ var streamSinkKey = streamSinkKeyType{}
 
 const streamSlotPrefix = "stream:"
 
+// MaxPreloadFailovers is the maximum number of internal slot failovers allowed when Stremio
+// is detected to be preloading the next episode while the previous episode is actively playing.
+// Stremio probes the next episode's streams in the background; we cap failovers so a run of
+// bad releases doesn't exhaust all candidates while the user is still watching the current one.
+const MaxPreloadFailovers = 5
+
+// prevEpisodeContentID returns the content ID for the preceding episode of the same series.
+// Series content IDs are formatted as "imdbID:season:episode", e.g. "tt0944947:2:2".
+// Returns "" when not applicable (movie, episode 1, or unrecognised format).
+func prevEpisodeContentID(contentID string) string {
+	parts := strings.Split(contentID, ":")
+	if len(parts) < 3 {
+		return ""
+	}
+	episode, err := strconv.Atoi(parts[len(parts)-1])
+	if err != nil || episode <= 1 {
+		return ""
+	}
+	prevParts := make([]string, len(parts))
+	copy(prevParts, parts)
+	prevParts[len(prevParts)-1] = strconv.Itoa(episode - 1)
+	return strings.Join(prevParts, ":")
+}
+
+// isStremioPreload returns true when this play request appears to be Stremio background-preloading
+// the next episode: contentType is "series" and the preceding episode is actively being served.
+func (s *Server) isStremioPreload(contentType, contentID string) bool {
+	if contentType != "series" {
+		return false
+	}
+	prevID := prevEpisodeContentID(contentID)
+	if prevID == "" {
+		return false
+	}
+	return s.sessionManager.HasActiveSessionForContentID(contentType, prevID)
+}
+
 type StreamSlotKey struct {
 	StreamID    string
 	ContentType string
@@ -1880,14 +1917,30 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		return
 	}
 
+	// Detect if this request is Stremio preloading the next episode while the current one is actively
+	// playing. In preload mode we cap internal failovers so a run of bad releases doesn't burn through
+	// all candidates for content the user hasn't started watching yet.
+	_, preloadContentType, preloadContentID, _, _ := parseStreamSlotID(sessionID)
+	isPreload := s.isStremioPreload(preloadContentType, preloadContentID)
+	if isPreload {
+		logger.Debug("Detected Stremio next-episode preload, limiting failovers", "session", sessionID, "max_failovers", MaxPreloadFailovers)
+	}
+	failoverCount := 0
+
 	var mergedCtx context.Context
 	var mergedCancel context.CancelFunc
 	// No response (headers or body) is sent until we pass the probe below and call ServeContent. That way we can fail over without the client having seen any response.
 	for {
 		// Skip slots we've already marked as failed; use cache so we never try them.
 		if s.sessionManager.GetSlotFailedDuringPlayback(sessionID) {
+			if isPreload && failoverCount >= MaxPreloadFailovers {
+				logger.Info("Preload failover limit reached, stopping preload", "session", sessionID, "failovers", failoverCount)
+				forceDisconnect(w, s.baseURL)
+				return
+			}
 			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
 				logger.Info("Skipping known-failed slot, trying next fallback", "from", sessionID, "to", nextID)
+				failoverCount++
 				sess, sessionID = nextSess, nextID
 				continue
 			}
@@ -1940,8 +1993,14 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 				}(sessionID, sess.Done())
 			}
 			s.sessionManager.DeleteSession(sessionID)
+			if isPreload && failoverCount >= MaxPreloadFailovers {
+				logger.Info("Preload failover limit reached, stopping preload", "session", sessionID, "failovers", failoverCount)
+				forceDisconnect(w, s.baseURL)
+				return
+			}
 			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
 				logger.Info("Trying next fallback slot (internal)", "from", sessionID, "to", nextID, "err", err)
+				failoverCount++
 				sess, sessionID = nextSess, nextID
 				continue
 			}
@@ -1970,8 +2029,14 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			stream.Close()
 			stream = nil
 			s.sessionManager.DeleteSession(sessionID)
+			if isPreload && failoverCount >= MaxPreloadFailovers {
+				logger.Info("Preload failover limit reached (probe), stopping preload", "session", sessionID, "failovers", failoverCount)
+				forceDisconnect(w, s.baseURL)
+				return
+			}
 			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
 				logger.Info("Probe failed, trying next fallback", "from", sessionID, "to", nextID, "err", probeErr)
+				failoverCount++
 				sess, sessionID = nextSess, nextID
 				continue
 			}
@@ -2021,7 +2086,14 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	// overwrites a Failure with an OK (the "flip-flop" bug).
 	serveFailureRecorded := false
 	onReadError := func(slotPath string, readErr error) {
-		if !isSegmentUnavailableErr(readErr) && !isDataCorruptErr(readErr) {
+		// Trigger slot failover for any permanent mid-stream error:
+		//   - 430 No Such Article (segment missing on all providers)
+		//   - yEnc decode failure (data corruption)
+		//   - ErrTooManyZeroFills (too many segments failed across all providers)
+		// All three mean the slot is unrecoverable. SetSlotFailedDuringPlayback marks it so the
+		// existing redirect logic at the top of handlePlay redirects the player to the next slot
+		// on reconnect, without requiring the user to manually switch in Stremio.
+		if !isSegmentUnavailableErr(readErr) && !isDataCorruptErr(readErr) && !errors.Is(readErr, unpack.ErrTooManyZeroFills) {
 			return
 		}
 		s.sessionManager.SetSlotFailedDuringPlayback(slotPath)
@@ -2125,10 +2197,12 @@ func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.Rea
 		}
 	}
 
-	// Skip IsFailed() when the session is already actively serving (ActivePlays > 0).
-	// A concurrent seek/range request must trust that the first goroutine already passed
-	// the probe; if the file is truly bad, onReadError will handle it during streaming.
-	if !sess.IsActivelyServing() {
+	// Skip IsFailed() when the session is actively serving OR has previously completed a serve cycle.
+	// Stremio often cancels the initial probe request (dropping ActivePlays back to 0) immediately
+	// before sending a follow-up range request. During that brief gap IsActivelyServing() is false,
+	// but HasPreviouslyServed() (PlaybackEndedAt != zero) tells us the file was already validated.
+	// If the file is truly bad during streaming, onReadError will catch it.
+	if !sess.IsActivelyServing() && !sess.HasPreviouslyServed() {
 		for _, f := range files {
 			if f.IsFailed() {
 				logger.Error("Session file has too many failures", "session", sessionID, "file", f.Name())

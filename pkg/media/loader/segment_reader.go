@@ -151,7 +151,12 @@ func (r *SegmentReader) startPrefetch() {
 				delete(r.prefetching, segIdx)
 				r.mu.Unlock()
 			}()
-			_, err := r.file.DownloadSegment(r.ctx, segIdx)
+			// Use PrefetchSegment instead of DownloadSegment so that transient provider
+			// failures in background goroutines do not increment zeroFillCount and
+			// prematurely mark the file as failed via IsFailed() before the player reads it.
+			// The blocking read path (DownloadSegment) will count failures if it also
+			// exhausts all providers for the same segment.
+			_, err := r.file.PrefetchSegment(r.ctx, segIdx)
 			if err != nil && !isContextErr(err) {
 				logger.Trace("Prefetch failed", "seg", segIdx, "err", err)
 			}
