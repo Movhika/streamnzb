@@ -9,3 +9,4 @@ state.json
 *.log
 .cursor
 .agents
+streamnzb.db*

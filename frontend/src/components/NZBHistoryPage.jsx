@@ -1,0 +1,165 @@
+import { useState, useEffect, useCallback } from 'react'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { History, Loader2, ExternalLink, RefreshCw } from 'lucide-react'
+import { getApiUrl, apiFetch } from '../api'
+import { cn } from '@/lib/utils'
+
+function formatSize(bytes) {
+  if (bytes <= 0) return '—'
+  const gb = bytes / (1024 * 1024 * 1024)
+  if (gb >= 1) return `${gb.toFixed(1)} GB`
+  const mb = bytes / (1024 * 1024)
+  if (mb >= 1) return `${mb.toFixed(0)} MB`
+  const kb = bytes / 1024
+  return `${kb.toFixed(0)} KB`
+}
+
+export function NZBHistoryPage({ refreshTrigger }) {
+  const [attempts, setAttempts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState(null)
+
+  const fetchAttempts = useCallback((showLoadingSpinner = true) => {
+    if (showLoadingSpinner) setLoading(true)
+    else setRefreshing(true)
+    setError(null)
+    const url = getApiUrl('/api/nzb-attempts?limit=200')
+    apiFetch(url)
+      .then((data) => {
+        if (Array.isArray(data)) setAttempts(data)
+      })
+      .catch((err) => {
+        setError(err.message || 'Failed to load NZB history')
+      })
+      .finally(() => {
+        setLoading(false)
+        setRefreshing(false)
+      })
+  }, [])
+
+  useEffect(() => {
+    fetchAttempts(true)
+  }, [fetchAttempts])
+
+  useEffect(() => {
+    if (refreshTrigger == null || refreshTrigger === 0) return
+    fetchAttempts(false)
+  }, [refreshTrigger, fetchAttempts])
+
+  return (
+    <div className={cn('flex flex-col gap-4 py-4 md:gap-6 md:py-6 px-4 lg:px-6')}>
+      <Card className="flex flex-col overflow-hidden flex-1 min-h-0">
+        <CardHeader className="pb-2">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <History className="size-5" />
+                NZB play attempts
+              </CardTitle>
+              <CardDescription>
+                Recent attempts to play releases: title requested, release tried, and whether it succeeded or failed.
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchAttempts(false)}
+              disabled={refreshing || loading}
+              className="shrink-0"
+            >
+              {refreshing ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              Refresh
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="flex-1 p-0 overflow-hidden flex flex-col min-h-0">
+          {loading && (
+            <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
+              <Loader2 className="size-5 animate-spin" />
+              Loading…
+            </div>
+          )}
+          {error && (
+            <div className="px-6 pb-4 text-destructive">{error}</div>
+          )}
+          {!loading && !error && (
+            <ScrollArea className="flex-1 min-h-[360px] px-4 pb-4">
+              <div className="pr-4">
+                {attempts.length === 0 ? (
+                  <div className="text-muted-foreground italic py-8">No NZB attempts recorded yet. Play something from Stremio to see history here.</div>
+                ) : (
+                  <table className="w-full text-sm border-collapse">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="text-left py-2 font-medium">Time</th>
+                        <th className="text-left py-2 font-medium">Content</th>
+                        <th className="text-left py-2 font-medium">Release</th>
+                        <th className="text-right py-2 font-medium">Size</th>
+                        <th className="text-center py-2 font-medium">Result</th>
+                        <th className="text-left py-2 font-medium">Reason</th>
+                        <th className="text-center py-2 font-medium w-12">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {attempts.map((a) => (
+                        <tr key={a.id} className="border-b border-border/60 hover:bg-muted/50">
+                          <td className="py-2 text-muted-foreground whitespace-nowrap">
+                            {new Date(a.tried_at).toLocaleString()}
+                          </td>
+                          <td className="py-2 max-w-[140px] truncate" title={a.content_title || a.content_id}>
+                            {a.content_title || a.content_id || '—'}
+                          </td>
+                          <td className="py-2 max-w-[220px] truncate" title={a.release_title}>
+                            {a.release_title}
+                          </td>
+                          <td className="py-2 text-right text-muted-foreground">
+                            {formatSize(a.release_size)}
+                          </td>
+                          <td className="py-2 text-center">
+                            {a.preload ? (
+                              <Badge variant="secondary" className="font-normal">Preload</Badge>
+                            ) : a.success ? (
+                              <Badge variant="default" className="bg-green-600 hover:bg-green-600">OK</Badge>
+                            ) : (
+                              <Badge variant="destructive">Failed</Badge>
+                            )}
+                          </td>
+                          <td className="py-2 max-w-[200px] truncate text-muted-foreground" title={a.failure_reason}>
+                            {a.failure_reason || '—'}
+                          </td>
+                          <td className="py-2 text-center">
+                            {a.release_url ? (
+                              <a
+                                href={a.release_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center justify-center text-muted-foreground hover:text-primary"
+                                title="Open release details"
+                              >
+                                <ExternalLink className="size-4" />
+                              </a>
+                            ) : (
+                              <span className="text-muted-foreground/50">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </ScrollArea>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}

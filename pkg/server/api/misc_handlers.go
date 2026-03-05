@@ -5,10 +5,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
+	"time"
 
 	"streamnzb/pkg/auth"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/indexer"
 )
 
@@ -109,4 +112,50 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	}()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "Restarting..."})
+}
+
+func (s *Server) handleNZBAttempts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.RLock()
+	lister := s.attemptLister
+	s.mu.RUnlock()
+	if lister == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]persistence.NZBAttempt{})
+		return
+	}
+	q := r.URL.Query()
+	opts := persistence.ListAttemptsOptions{
+		ContentType: q.Get("content_type"),
+		ContentID:   q.Get("content_id"),
+	}
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			opts.Limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			opts.Offset = n
+		}
+	}
+	if v := q.Get("since"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			opts.Since = &t
+		}
+	}
+	list, err := lister.ListAttempts(opts)
+	if err != nil {
+		logger.Error("ListAttempts failed", "err", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []persistence.NZBAttempt{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(list)
 }

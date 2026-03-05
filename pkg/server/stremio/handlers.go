@@ -23,6 +23,7 @@ import (
 	"streamnzb/pkg/auth"
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/media/nzb"
@@ -62,12 +63,16 @@ type Server struct {
 	tvdbClient           *tvdb.Client
 	deviceManager        *auth.DeviceManager
 	streamManager        *stream.Manager
-	recentFailures       sync.Map
-	playListCache        sync.Map
-	rawSearchCache       sync.Map
-	nextReleaseIndex     sync.Map
-	webHandler           http.Handler
-	apiHandler           http.Handler
+	playListCache             sync.Map
+	rawSearchCache            sync.Map
+	recordedSuccessSessionIDs sync.Map // session ID -> struct{}; record success only once per stream
+	recordedPreloadSessionIDs sync.Map // session ID -> struct{}; record preload only once per session lifetime
+	recordedFailureSessionIDs sync.Map // session ID -> struct{}; record failure only once per session lifetime (prevents concurrent goroutines from inserting duplicate rows)
+	nextReleaseIndex          sync.Map // key: deviceToken|key.CacheKey() → *nextReleaseCursor; tracks manual "next" progression
+	webHandler               http.Handler
+	apiHandler               http.Handler
+	attemptRecorder          *persistence.StateManager
+	onAttemptRecorded        func()
 }
 
 const FailoverOrderPath = "/failover_order"
@@ -87,6 +92,7 @@ type ServerOptions struct {
 	DeviceManager        *auth.DeviceManager
 	StreamManager        *stream.Manager
 	Version              string
+	AttemptRecorder      *persistence.StateManager
 }
 
 func NewServer(opts *ServerOptions) (*Server, error) {
@@ -117,6 +123,7 @@ func NewServer(opts *ServerOptions) (*Server, error) {
 		tvdbClient:           opts.TVDBClient,
 		deviceManager:        opts.DeviceManager,
 		streamManager:        opts.StreamManager,
+		attemptRecorder:      opts.AttemptRecorder,
 	}
 
 	if err := s.CheckPort(opts.Port); err != nil {
@@ -142,6 +149,11 @@ func (s *Server) SetWebHandler(h http.Handler) {
 
 func (s *Server) SetAPIHandler(h http.Handler) {
 	s.apiHandler = h
+}
+
+// SetOnAttemptRecorded sets a callback invoked after each NZB attempt is recorded (e.g. to broadcast to WS clients).
+func (s *Server) SetOnAttemptRecorded(f func()) {
+	s.onAttemptRecorded = f
 }
 
 func (s *Server) Version() string {
@@ -191,6 +203,11 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 					r.URL.Path = path
 
 					r = r.WithContext(auth.ContextWithDevice(r.Context(), device))
+
+					// Detect AIOStreams client once per request, centrally, to avoid redundant checks in every handler.
+					if strings.Contains(r.Header.Get("User-Agent"), "AIOStreams") {
+						s.sessionManager.SetAIOStreamsDevice(device.Token)
+					}
 				} else if isStremioRoute {
 
 					logger.Error("Unauthorized request - invalid device token", "path", path, "remote", r.RemoteAddr)
@@ -287,9 +304,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	defer cancel()
 
 	logger.Trace("stream request start", "type", contentType, "id", id)
-	if device != nil && strings.Contains(r.Header.Get("User-Agent"), "AIOStreams") {
-		s.sessionManager.SetAIOStreamsDevice(device.Token)
-	}
 	baseURL := s.baseURLWithToken(device)
 	streamsList := s.streamConfigsForStreamRequest()
 	var streams []Stream
@@ -331,9 +345,6 @@ type failoverOrderRequest struct {
 
 func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	logger.Debug("Failover order request", "device", device.Username, "method", r.Method, "url", r.URL.Path)
-	if device != nil && strings.Contains(r.Header.Get("User-Agent"), "AIOStreams") {
-		s.sessionManager.SetAIOStreamsDevice(device.Token)
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -576,7 +587,8 @@ func (s *Server) buildStreamsForKey(ctx context.Context, key StreamSlotKey, str 
 	if order := s.sessionManager.GetDeviceFailoverOrder(deviceToken(device), key.CacheKey()); len(order) > 0 {
 		list = filterPlayListByOrder(list, key, order)
 	}
-	s.clearNextReleaseBound(device, key)
+	// Create deferred sessions for each slot path we will expose, so handlePlay can serve without hitting indexers.
+	s.ensureDeferredSessionsForPlayList(list, key, device)
 	showAll := str.ShowAllStream || isAIOStreams
 	return buildStreamsFromPlayList(list, key, str.Name, baseURL, showAll), list, nil
 }
@@ -736,12 +748,7 @@ func deviceToken(device *auth.Device) string {
 	return ""
 }
 
-func nextReleaseStateKey(device *auth.Device, key StreamSlotKey) string {
-	if device != nil && device.Token != "" {
-		return device.Token + ":" + key.CacheKey()
-	}
-	return ":" + key.CacheKey()
-}
+
 
 func formatStreamSlotPath(streamID, contentType, id string, index int) string {
 	return streamSlotPrefix + streamID + ":" + contentType + ":" + id + ":" + strconv.Itoa(index)
@@ -1287,26 +1294,6 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 	}
 	merged = filtered
 
-	{
-		const recentFailureTTL = 5 * time.Minute
-		now := time.Now()
-		filtered := merged[:0]
-		for _, c := range merged {
-			if c.Release == nil || c.Release.Title == "" {
-				continue
-			}
-			key := release.NormalizeTitle(c.Release.Title)
-			if v, ok := s.recentFailures.Load(key); ok {
-				if failedAt, ok := v.(time.Time); ok && now.Sub(failedAt) < recentFailureTTL {
-					continue
-				}
-				s.recentFailures.Delete(key)
-			}
-			filtered = append(filtered, c)
-		}
-		merged = filtered
-	}
-
 	if raw.AvailResult != nil && s.availClient != nil {
 		ourBackbones, _ := s.availClient.OurBackbones(s.validator.GetProviderHosts())
 		cachedUnhealthyForUs := make(map[string]bool)
@@ -1587,7 +1574,7 @@ func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, str
 		seen[norm] = true
 		downloadURL := addAPIKeyToDownloadURL(rel.Link, s.config.Indexers)
 		sessionID := fmt.Sprintf("%x", md5.Sum([]byte(rel.DetailsURL)))
-		_, err := s.sessionManager.CreateDeferredSession(sessionID, downloadURL, rel, s.indexer, contentIDs)
+		_, err := s.sessionManager.CreateDeferredSession(sessionID, downloadURL, rel, s.indexer, contentIDs, params.ContentType, params.ID)
 		if err != nil {
 			logger.Debug("AvailNZB deferred session failed", "title", rel.Title, "err", err)
 			continue
@@ -1620,48 +1607,33 @@ func (s *Server) GetAvailNZBStreams(ctx context.Context, contentType, id string,
 	return streams, nil
 }
 
-// buildFallbackURLsForSlot returns URLs for the next fallback slots: from device order (entries after sessionID)
-// if present and valid, otherwise from play list rest (index+1 .. end). Order entries must match key and be in range.
-func buildFallbackURLsForSlot(sessionID string, key StreamSlotKey, index int, numCandidates int, order []string, base string) []string {
-	maxIndex := numCandidates - 1
-	if maxIndex < 0 {
-		return nil
+// ensureDeferredSessionsForPlayList creates deferred sessions for every candidate in the play list,
+// keyed by the same slot path used in stream URLs, so handlePlay can serve without resolving or hitting indexers.
+func (s *Server) ensureDeferredSessionsForPlayList(list *orderedPlayListResult, key StreamSlotKey, device *auth.Device) {
+	if list == nil || list.Params == nil {
+		return
 	}
-	var urls []string
-	if len(order) > 0 {
-		ourPosition := -1
-		for p, entry := range order {
-			if entry == sessionID {
-				ourPosition = p
-				break
+	n := len(list.Candidates)
+	for i := 0; i < n; i++ {
+		cand := list.Candidates[i]
+		if cand.Release == nil || cand.Release.Link == "" {
+			continue
+		}
+		playPath := key.SlotPath(i)
+		if len(list.SlotPaths) == n {
+			playPath = list.SlotPaths[i]
+		}
+		downloadURL := addAPIKeyToDownloadURL(cand.Release.Link, s.config.Indexers)
+		idx := s.indexer
+		if cand.Release.SourceIndexer != nil {
+			if ii, ok := cand.Release.SourceIndexer.(indexer.Indexer); ok {
+				idx = ii
 			}
 		}
-		if ourPosition >= 0 {
-			for j := ourPosition + 1; j < len(order); j++ {
-				entry := order[j]
-				if !strings.HasPrefix(entry, streamSlotPrefix) {
-					continue
-				}
-				sid, ct, id, orderIndex, ok := parseStreamSlotID(entry)
-				if !ok || orderIndex < 0 || orderIndex > maxIndex {
-					continue
-				}
-				if ct != key.ContentType || id != key.ID {
-					continue
-				}
-				if sid != "" && sid != key.StreamID {
-					continue
-				}
-				urls = append(urls, base+"/play/"+entry)
-			}
+		if _, err := s.sessionManager.CreateDeferredSession(playPath, downloadURL, cand.Release, idx, list.Params.ContentIDs, list.Params.ContentType, list.Params.ID); err != nil {
+			logger.Debug("Create deferred session for play list failed", "slot", playPath, "err", err)
 		}
 	}
-	if len(urls) == 0 {
-		for i := index + 1; i < numCandidates; i++ {
-			urls = append(urls, base+"/play/"+key.SlotPath(i))
-		}
-	}
-	return urls
 }
 
 func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index int, device *auth.Device) (*session.Session, error) {
@@ -1690,14 +1662,10 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 		}
 	}
 	sessionID := key.SlotPath(index)
-	_, err = s.sessionManager.CreateDeferredSession(sessionID, downloadURL, rel, idx, list.Params.ContentIDs)
+	_, err = s.sessionManager.CreateDeferredSession(sessionID, downloadURL, rel, idx, list.Params.ContentIDs, list.Params.ContentType, list.Params.ID)
 	if err != nil {
 		return nil, fmt.Errorf("create deferred session: %w", err)
 	}
-	base := s.baseURLWithToken(device)
-	order := s.sessionManager.GetDeviceFailoverOrder(deviceToken(device), key.CacheKey())
-	fallbackURLs := buildFallbackURLsForSlot(sessionID, key, index, n, order, base)
-	s.sessionManager.SetFallbackStreams(sessionID, fallbackURLs)
 	sess, err := s.sessionManager.GetSession(sessionID)
 	if err != nil {
 		return nil, err
@@ -1705,37 +1673,17 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 	return sess, nil
 }
 
-type nextReleaseState struct {
-	mu         sync.Mutex
-	NextIndex  int
-	BoundIndex int
-}
-
-func (s *Server) isSlotFailed(key StreamSlotKey, slotIndex int) bool {
-	slotSessionID := key.SlotPath(slotIndex)
-	sess, err := s.sessionManager.GetSession(slotSessionID)
-	if err != nil || sess == nil {
-		return false
-	}
-	files := sess.Files
-	if len(files) == 0 && sess.File != nil {
-		files = []*loader.File{sess.File}
-	}
-	for _, f := range files {
-		if f != nil && f.IsFailed() {
-			return true
-		}
-	}
-	return false
-}
-
+// handleNextRelease redirects the client to the next non-failed slot.
+// For slot :0 (the "next release" stream URL, which is always anchored to slot 0), a per-device cursor
+// advances through releases so repeated clicks return :1, :2, :3, ... rather than always :1.
+// For slot :N (direct progression from a known position), deriveNextSlotID is used as-is.
 func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/next/")
 	if sessionID == "" {
 		http.Error(w, "Missing stream slot", http.StatusBadRequest)
 		return
 	}
-	streamId, contentType, id, index, ok := parseStreamSlotID(sessionID)
+	streamId, contentType, id, currentIndex, ok := parseStreamSlotID(sessionID)
 	if !ok {
 		http.Error(w, "Invalid stream slot", http.StatusBadRequest)
 		return
@@ -1743,68 +1691,96 @@ func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, devic
 	if streamId == "" {
 		streamId = s.getDefaultStreamID()
 	}
-	slotKey := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
+	key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
 
-	var playIndex int
-	if index == 0 {
-		if device != nil && strings.Contains(r.Header.Get("User-Agent"), "AIOStreams") {
-			s.sessionManager.SetAIOStreamsDevice(device.Token)
-		}
-		stateKey := nextReleaseStateKey(device, slotKey)
-		isAIOStreams := s.sessionManager.IsAIOStreamsDevice(deviceToken(device))
-		list, err := s.buildOrderedPlayList(r.Context(), slotKey, isAIOStreams)
-		maxIdx := 0
-		if err == nil && list != nil && len(list.Candidates) > 1 {
-			maxIdx = len(list.Candidates) - 1
-		}
-		v, _ := s.nextReleaseIndex.LoadOrStore(stateKey, &nextReleaseState{NextIndex: 1, BoundIndex: -1})
-		state := v.(*nextReleaseState)
-		state.mu.Lock()
-		if state.BoundIndex >= 0 {
-			playIndex = state.BoundIndex
-			if playIndex > maxIdx {
-				playIndex = maxIdx
-			}
-			state.mu.Unlock()
-		} else {
-			playIndex = state.NextIndex
-			if playIndex > maxIdx {
-				playIndex = maxIdx
-			}
-			for playIndex <= maxIdx && s.isSlotFailed(slotKey, playIndex) {
-				playIndex++
-			}
-			if playIndex > maxIdx {
-				playIndex = maxIdx
-			}
-			state.NextIndex = playIndex + 1
-			state.BoundIndex = playIndex
-			state.mu.Unlock()
-		}
+	var nextSlotID string
+	var err error
+	if currentIndex == 0 {
+		// The "next release" stream URL is always anchored to slot :0 regardless of how many times the
+		// user has already clicked "next". Use a cursor so successive clicks advance through the list.
+		nextSlotID, err = s.advanceNextReleaseCursor(r.Context(), key, device)
 	} else {
-		playIndex = index + 1
+		// Called from a specific non-zero slot (e.g. AIOStreams failover order progression).
+		nextSlotID, err = s.deriveNextSlotID(r.Context(), sessionID, device)
 	}
-
-	nextSlot := slotKey.SlotPath(playIndex)
-	nextURL := s.baseURLWithToken(device) + "/play/" + nextSlot + "?next=1"
-	logger.Info("Next release redirect", "from", sessionID, "to", nextSlot)
+	if err != nil || nextSlotID == "" {
+		http.Error(w, "No next release available", http.StatusNotFound)
+		return
+	}
+	nextURL := s.baseURLWithToken(device) + "/play/" + nextSlotID + "?next=1"
+	logger.Info("Next release redirect", "from", sessionID, "to", nextSlotID)
 	w.Header().Set("Location", nextURL)
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	http.Redirect(w, r, nextURL, http.StatusTemporaryRedirect)
 }
 
-func (s *Server) clearNextReleaseBound(device *auth.Device, key StreamSlotKey) {
-	if key.StreamID == "" || key.ContentType == "" || key.ID == "" {
-		return
+type nextReleaseCursor struct {
+	mu          sync.Mutex
+	pendingSlot string // slot we last redirected to; held idempotent until it commits or fails
+	nextIndex   int    // next index to search from when advancing; starts at 1
+}
+
+// advanceNextReleaseCursor returns the next non-failed slot for the given (device, key).
+// It is commit-gated: after redirecting to a slot, all subsequent calls return the same slot
+// until it either commits (was successfully served, tracked by recordedSuccessSessionIDs) or
+// fails (marked by SetSlotFailedDuringPlayback). This prevents Stremio's automatic re-requests
+// of the /next/ URL from prematurely advancing through the playlist.
+func (s *Server) advanceNextReleaseCursor(ctx context.Context, key StreamSlotKey, device *auth.Device) (string, error) {
+	if key.StreamID == "" {
+		key.StreamID = s.getDefaultStreamID()
 	}
-	stateKey := nextReleaseStateKey(device, key)
-	if v, ok := s.nextReleaseIndex.Load(stateKey); ok {
-		if state, _ := v.(*nextReleaseState); state != nil {
-			state.mu.Lock()
-			state.BoundIndex = -1
-			state.mu.Unlock()
+	isAIOStreams := s.sessionManager.IsAIOStreamsDevice(deviceToken(device))
+	list, err := s.buildOrderedPlayList(ctx, key, isAIOStreams)
+	if err != nil || list == nil {
+		return "", err
+	}
+	n := len(list.Candidates)
+	useSlotPaths := len(list.SlotPaths) == n
+
+	stateKey := deviceToken(device) + "|" + key.CacheKey()
+	v, _ := s.nextReleaseIndex.LoadOrStore(stateKey, &nextReleaseCursor{nextIndex: 1})
+	cursor := v.(*nextReleaseCursor)
+
+	cursor.mu.Lock()
+	defer cursor.mu.Unlock()
+
+	// If we have a pending slot, decide whether to stay or advance.
+	if cursor.pendingSlot != "" {
+		if s.sessionManager.GetSlotFailedDuringPlayback(cursor.pendingSlot) {
+			// Pending slot failed; fall through to find the next.
+			cursor.pendingSlot = ""
+		} else if _, committed := s.recordedSuccessSessionIDs.Load(cursor.pendingSlot); !committed {
+			// Pending slot is alive but not yet committed (still loading/probing).
+			// This is a Stremio automatic retry of the /next/ URL – return the same slot
+			// so we don't prematurely skip to the next release.
+			return cursor.pendingSlot, nil
+		} else {
+			// Committed successfully; the user is intentionally advancing. Fall through.
+			cursor.pendingSlot = ""
 		}
 	}
+
+	// Find the next non-failed slot starting from nextIndex.
+	startIdx := cursor.nextIndex
+	if startIdx < 1 {
+		startIdx = 1
+	}
+	for i := startIdx; i < n; i++ {
+		slotPath := key.SlotPath(i)
+		if useSlotPaths {
+			slotPath = list.SlotPaths[i]
+		}
+		if !s.sessionManager.GetSlotFailedDuringPlayback(slotPath) {
+			cursor.pendingSlot = slotPath
+			cursor.nextIndex = i + 1
+			return slotPath, nil
+		}
+	}
+	// All candidates exhausted. Reset so the next call starts fresh (e.g. after
+	// failed states are cleared or the user circles back to try again).
+	cursor.nextIndex = 1
+	cursor.pendingSlot = ""
+	return "", nil
 }
 
 func parseStreamSlotID(sessionID string) (streamId, contentType, id string, index int, ok bool) {
@@ -1841,16 +1817,25 @@ func isSegmentUnavailableErr(err error) bool {
 	return false
 }
 
+// isDataCorruptErr returns true for yEnc decode failures that indicate a segment is corrupt
+// across all providers (i.e. the article data itself is damaged on Usenet). These should
+// trigger slot failover and AvailNZB bad reporting just like missing articles.
+func isDataCorruptErr(err error) bool {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		s := e.Error()
+		if strings.Contains(s, "rapidyenc") || strings.Contains(s, "data corruption") || strings.Contains(s, "yend") {
+			return true
+		}
+	}
+	return false
+}
+
 // handlePlay: resolve session (by slot path or existing), optionally redirect if slot previously failed,
 // then loop: try play → on error/probe/seek failure switch to next fallback → serve content.
 func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/play/")
 	requestedSessionID := sessionID
 	logger.Info("Play request", "session", sessionID)
-
-	if device != nil && strings.Contains(r.Header.Get("User-Agent"), "AIOStreams") {
-		s.sessionManager.SetAIOStreamsDevice(device.Token)
-	}
 
 	var (
 		sess   *session.Session
@@ -1862,28 +1847,37 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	var err error
 	sess, err = s.sessionManager.GetSession(sessionID)
 	if err != nil {
-		if streamId, contentType, id, index, ok := parseStreamSlotID(sessionID); ok {
-			key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
-			sess, err = s.resolveStreamSlot(r.Context(), key, index, device)
-			if err != nil {
-				logger.Debug("Resolve stream slot failed", "slot", sessionID, "err", err)
-				http.Error(w, "Stream slot not found or invalid", http.StatusNotFound)
+		// The session may have been deleted by a concurrent internal failover (e.g. exceeded failure threshold).
+		// If the slot was marked as failed, redirect the client to the next working slot rather than 404.
+		if s.sessionManager.GetSlotFailedDuringPlayback(sessionID) {
+			if nextID, deriveErr := s.deriveNextSlotID(r.Context(), sessionID, device); nextID != "" && deriveErr == nil {
+				nextURL := s.baseURLWithToken(device) + "/play/" + nextID
+				logger.Info("Session deleted (slot failed during playback), redirecting to next", "from", sessionID, "to", nextID)
+				w.Header().Set("Location", nextURL)
+				w.WriteHeader(http.StatusFound)
 				return
 			}
-		} else {
-			http.Error(w, "Session expired or not found", http.StatusNotFound)
+			forceDisconnect(w, s.baseURL)
 			return
 		}
+		// Never resolve or create sessions in the play handler; do not hit indexers here.
+		// If the session was evicted (e.g. after pause), the client must get a new stream from the catalog.
+		logger.Debug("Play: session not found", "slot", sessionID, "err", err)
+		http.Error(w, "Session expired or not found", http.StatusNotFound)
+		return
 	}
 
 	// If this slot failed during playback (430), redirect client to next fallback so retries get a working stream.
 	if s.sessionManager.GetSlotFailedDuringPlayback(sessionID) {
-		if nextURL := sess.FirstFallbackStreamURL(); nextURL != "" {
-			logger.Info("Redirecting to next fallback (slot failed during playback)", "from", sessionID, "to", nextURL)
+		if nextID, deriveErr := s.deriveNextSlotID(r.Context(), sessionID, device); nextID != "" && deriveErr == nil {
+			nextURL := s.baseURLWithToken(device) + "/play/" + nextID
+			logger.Info("Redirecting to next fallback (slot failed during playback)", "from", sessionID, "to", nextID)
 			w.Header().Set("Location", nextURL)
 			w.WriteHeader(http.StatusFound)
 			return
 		}
+		forceDisconnect(w, s.baseURL)
+		return
 	}
 
 	var mergedCtx context.Context
@@ -1900,7 +1894,9 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			forceDisconnect(w, s.baseURL)
 			return
 		}
-		s.prefetchNextFallbackNZB(nextFallbackSessionID(sess), device)
+		if nextSlotID, deriveErr := s.deriveNextSlotID(r.Context(), sess.ID, device); deriveErr == nil {
+			s.prefetchNextFallbackNZB(nextSlotID, device)
+		}
 		// Use a context that cancels when either the request ends or the session is closed (e.g. user closed from dashboard).
 		// That way closing the session aborts playback and stops downloading immediately.
 		mergedCtx, mergedCancel = context.WithCancel(r.Context())
@@ -1913,16 +1909,36 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 				cancel()
 			}
 		}(sess, mergedCancel)
+		// Record preload at most once per session: subsequent HTTP requests (seeks, range retries)
+		// for the same session must not insert another "Preload" row that would never be resolved.
+		if _, alreadyPreloaded := s.recordedPreloadSessionIDs.LoadOrStore(sessionID, struct{}{}); !alreadyPreloaded {
+			s.recordPreloadAttempt(sess)
+			// When the session is evicted, clear the key so future plays of the same slot get a fresh row.
+			go func(id string, done <-chan struct{}) {
+				<-done
+				s.recordedPreloadSessionIDs.Delete(id)
+			}(sessionID, sess.Done())
+		}
 		stream, name, size, err = s.tryPlaySlot(mergedCtx, sess)
 		if err != nil {
 			mergedCancel()
+			// Always mark slot as permanently failed when we abandon it, so future retries on the same URL
+			// get a redirect instead of a 404. isSegmentUnavailableErr gates AvailNZB reporting only.
+			s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
 			if isSegmentUnavailableErr(err) {
-				s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
 				if s.availReporter != nil {
 					s.availReporter.ReportBad(sess, err.Error())
 				}
 			}
-			s.sessionManager.ClearKnownGoodForSlot(sessionID)
+			// Gate failure recording: concurrent goroutines for the same session (Stremio's automatic
+			// re-requests) must not each insert a Failure row. Only the first one wins.
+			if _, alreadyFailed := s.recordedFailureSessionIDs.LoadOrStore(sessionID, struct{}{}); !alreadyFailed {
+				s.recordAttempt(sess, false, err.Error())
+				go func(id string, done <-chan struct{}) {
+					<-done
+					s.recordedFailureSessionIDs.Delete(id)
+				}(sessionID, sess.Done())
+			}
 			s.sessionManager.DeleteSession(sessionID)
 			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
 				logger.Info("Trying next fallback slot (internal)", "from", sessionID, "to", nextID, "err", err)
@@ -1937,17 +1953,25 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		probeErr := unpack.ProbeMediaStream(stream, name, size)
 		if probeErr != nil {
 			mergedCancel()
-			if isSegmentUnavailableErr(probeErr) {
-				s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
+			// Always mark slot as permanently failed when we abandon it; AvailNZB reporting is selective.
+			s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
+			if isSegmentUnavailableErr(probeErr) || isDataCorruptErr(probeErr) {
 				if s.availReporter != nil {
 					s.availReporter.ReportBad(sess, probeErr.Error())
 				}
+			}
+			if _, alreadyFailed := s.recordedFailureSessionIDs.LoadOrStore(sessionID, struct{}{}); !alreadyFailed {
+				s.recordAttempt(sess, false, probeErr.Error())
+				go func(id string, done <-chan struct{}) {
+					<-done
+					s.recordedFailureSessionIDs.Delete(id)
+				}(sessionID, sess.Done())
 			}
 			stream.Close()
 			stream = nil
 			s.sessionManager.DeleteSession(sessionID)
 			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
-				logger.Info("Probe failed (430 or invalid headers), trying next fallback", "from", sessionID, "to", nextID, "err", probeErr)
+				logger.Info("Probe failed, trying next fallback", "from", sessionID, "to", nextID, "err", probeErr)
 				sess, sessionID = nextSess, nextID
 				continue
 			}
@@ -1964,9 +1988,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			stream.Close()
 		}
 	}()
-
-	// Cache that this slot works for this request (requestedSessionID may differ after failover). Next time we can redirect to it before serving anything.
-	s.sessionManager.SetKnownGoodSlot(requestedSessionID, sessionID)
 
 	// After internal failover we serve a different file; don't apply the original request's Range or t= to it.
 	failedOver := sessionID != requestedSessionID
@@ -1995,13 +2016,29 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		endPlaybackOnce.Do(endPlayback)
 	}()
 
+	// serveFailureRecorded is set to true when onReadError records a failure for the
+	// currently-served session. The success defer checks this flag so it never
+	// overwrites a Failure with an OK (the "flip-flop" bug).
+	serveFailureRecorded := false
 	onReadError := func(slotPath string, readErr error) {
-		if !isSegmentUnavailableErr(readErr) {
+		if !isSegmentUnavailableErr(readErr) && !isDataCorruptErr(readErr) {
 			return
 		}
 		s.sessionManager.SetSlotFailedDuringPlayback(slotPath)
-		if sess, _ := s.sessionManager.GetSession(slotPath); sess != nil && s.availReporter != nil {
-			s.availReporter.ReportBad(sess, readErr.Error())
+		if errSess, _ := s.sessionManager.GetSession(slotPath); errSess != nil {
+			if s.availReporter != nil {
+				s.availReporter.ReportBad(errSess, readErr.Error())
+			}
+			if _, alreadyFailed := s.recordedFailureSessionIDs.LoadOrStore(slotPath, struct{}{}); !alreadyFailed {
+				s.recordAttempt(errSess, false, readErr.Error())
+				go func(id string, done <-chan struct{}) {
+					<-done
+					s.recordedFailureSessionIDs.Delete(id)
+				}(slotPath, errSess.Done())
+			}
+			if slotPath == sessionID {
+				serveFailureRecorded = true
+			}
 		}
 	}
 	monitoredStream := &StreamMonitor{
@@ -2032,9 +2069,23 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	defer bufW.Flush()
 
 	// Report good only after serving, so bytes-read threshold can be met (StreamMonitor tracks bytes).
+	// Record success at most once per session: multiple HTTP requests (e.g. range/seek) for the same stream
+	// would otherwise each run this defer and create duplicate "OK" entries in NZB history.
+	// If onReadError already recorded a failure for this session, skip — we must not flip it back to OK.
 	defer func() {
+		if serveFailureRecorded {
+			return
+		}
 		if s.availReporter != nil {
 			s.availReporter.ReportGood(sess)
+		}
+		if _, already := s.recordedSuccessSessionIDs.LoadOrStore(sessionID, struct{}{}); !already {
+			s.recordAttempt(sess, true, "")
+			// When session is gone, allow recording success again for a future play of the same release.
+			go func() {
+				<-sess.Done()
+				s.recordedSuccessSessionIDs.Delete(sessionID)
+			}()
 		}
 	}()
 
@@ -2074,14 +2125,19 @@ func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.Rea
 		}
 	}
 
-	for _, f := range files {
-		if f.IsFailed() {
-			logger.Error("Session file has too many failures", "session", sessionID, "file", f.Name())
-			s.reportBadRelease(sess, unpack.ErrTooManyZeroFills)
-			if sess.NZB != nil {
-				s.validator.InvalidateCache(sess.NZB.Hash())
+	// Skip IsFailed() when the session is already actively serving (ActivePlays > 0).
+	// A concurrent seek/range request must trust that the first goroutine already passed
+	// the probe; if the file is truly bad, onReadError will handle it during streaming.
+	if !sess.IsActivelyServing() {
+		for _, f := range files {
+			if f.IsFailed() {
+				logger.Error("Session file has too many failures", "session", sessionID, "file", f.Name())
+				s.reportBadRelease(sess, unpack.ErrTooManyZeroFills)
+				if sess.NZB != nil {
+					s.validator.InvalidateCache(sess.NZB.Hash())
+				}
+				return nil, "", 0, fmt.Errorf("file %s exceeded failure threshold", f.Name())
 			}
-			return nil, "", 0, fmt.Errorf("file %s exceeded failure threshold", f.Name())
 		}
 	}
 
@@ -2108,18 +2164,6 @@ func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.Rea
 	return stream, name, size, nil
 }
 
-func nextFallbackSessionID(sess *session.Session) string {
-	nextURL := sess.FirstFallbackStreamURL()
-	if nextURL == "" {
-		return ""
-	}
-	idx := strings.Index(nextURL, "/play/")
-	if idx < 0 {
-		return ""
-	}
-	return nextURL[idx+len("/play/"):]
-}
-
 // prefetchNextFallbackNZB starts a background goroutine to resolve the next fallback slot and
 // download its NZB so that when we fail over to it, tryPlaySlot may find the NZB already loaded.
 func (s *Server) prefetchNextFallbackNZB(nextSlotID string, device *auth.Device) {
@@ -2138,11 +2182,72 @@ func (s *Server) prefetchNextFallbackNZB(nextSlotID string, device *auth.Device)
 	}(nextSlotID, device)
 }
 
-// switchToNextFallback returns the next fallback session and its ID, or (nil, "", nil) if none, or (nil, "", err) on resolve error.
+// deriveNextSlotID returns the next non-failed slot path after currentID by consulting the cached play list.
+// If the device has a failover order (AIOStreams), it advances through that order; otherwise it increments the index.
+func (s *Server) deriveNextSlotID(ctx context.Context, currentID string, device *auth.Device) (string, error) {
+	streamId, contentType, id, currentIndex, ok := parseStreamSlotID(currentID)
+	if !ok {
+		return "", nil
+	}
+	key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
+	isAIOStreams := s.sessionManager.IsAIOStreamsDevice(deviceToken(device))
+	list, err := s.buildOrderedPlayList(ctx, key, isAIOStreams)
+	if err != nil || list == nil {
+		return "", err
+	}
+	n := len(list.Candidates)
+	useSlotPaths := len(list.SlotPaths) == n
+
+	// If the device has a failover order (AIOStreams), advance through that order.
+	order := s.sessionManager.GetDeviceFailoverOrder(deviceToken(device), key.CacheKey())
+	if len(order) > 0 {
+		ourPosition := -1
+		for p, entry := range order {
+			if entry == currentID {
+				ourPosition = p
+				break
+			}
+		}
+		if ourPosition >= 0 {
+			for j := ourPosition + 1; j < len(order); j++ {
+				entry := order[j]
+				if !strings.HasPrefix(entry, streamSlotPrefix) {
+					continue
+				}
+				_, ct, eid, orderIndex, ok := parseStreamSlotID(entry)
+				if !ok || orderIndex < 0 || orderIndex >= n {
+					continue
+				}
+				if ct != key.ContentType || eid != key.ID {
+					continue
+				}
+				if !s.sessionManager.GetSlotFailedDuringPlayback(entry) {
+					return entry, nil
+				}
+			}
+			return "", nil // exhausted the device-provided order
+		}
+	}
+
+	// Sequential fallback: increment index, skip slots already marked as failed.
+	for i := currentIndex + 1; i < n; i++ {
+		slotPath := key.SlotPath(i)
+		if useSlotPaths {
+			slotPath = list.SlotPaths[i]
+		}
+		if !s.sessionManager.GetSlotFailedDuringPlayback(slotPath) {
+			return slotPath, nil
+		}
+	}
+	return "", nil
+}
+
+// switchToNextFallback derives the next fallback slot from the cached play list and returns its session.
+// Returns (nil, "", nil) when there is no next slot, or (nil, "", err) on a resolve error.
 func (s *Server) switchToNextFallback(ctx context.Context, sess *session.Session, device *auth.Device) (*session.Session, string, error) {
-	nextID := nextFallbackSessionID(sess)
-	if nextID == "" {
-		return nil, "", nil
+	nextID, err := s.deriveNextSlotID(ctx, sess.ID, device)
+	if err != nil || nextID == "" {
+		return nil, "", err
 	}
 	nextSess, err := s.getOrResolveSession(ctx, nextID, device)
 	if err != nil {
@@ -2175,6 +2280,64 @@ func (s *Server) reportBadRelease(sess *session.Session, streamErr error) {
 	}
 	if s.availReporter != nil {
 		s.availReporter.ReportBad(sess, errMsg)
+	}
+	// Do NOT call recordAttempt here. The caller (tryPlaySlot → handlePlay) always calls
+	// recordAttempt after tryPlaySlot returns an error, so calling it here too would insert
+	// a duplicate Failure row (the first call updates preload=1→0, the second falls through
+	// to INSERT because no preload=1 row remains).
+}
+
+// recordAttemptParams builds persistence params from a session.
+func (s *Server) recordAttemptParams(sess *session.Session) persistence.RecordAttemptParams {
+	contentType := sess.ContentType
+	if contentType == "" {
+		contentType = "movie"
+		if sess.ContentIDs != nil && (sess.ContentIDs.Season > 0 || sess.ContentIDs.Episode > 0) {
+			contentType = "series"
+		}
+	}
+	contentID := sess.ContentID
+	if contentID == "" && sess.ContentIDs != nil {
+		if sess.ContentIDs.ImdbID != "" {
+			contentID = sess.ContentIDs.ImdbID
+		} else if sess.ContentIDs.TvdbID != "" {
+			contentID = fmt.Sprintf("tvdb:%s:%d:%d", sess.ContentIDs.TvdbID, sess.ContentIDs.Season, sess.ContentIDs.Episode)
+		}
+	}
+	return persistence.RecordAttemptParams{
+		ContentType:   contentType,
+		ContentID:     contentID,
+		ContentTitle:  "",
+		ReleaseTitle:  sess.ReportReleaseName(),
+		ReleaseURL:    sess.ReleaseURL(),
+		ReleaseSize:   sess.ReportSize(),
+		SlotPath:      sess.ID,
+	}
+}
+
+// recordPreloadAttempt inserts a preload row when we are about to try playing a slot (result not yet known).
+func (s *Server) recordPreloadAttempt(sess *session.Session) {
+	if s.attemptRecorder == nil || sess == nil {
+		return
+	}
+	p := s.recordAttemptParams(sess)
+	s.attemptRecorder.RecordPreloadAttempt(p)
+	if s.onAttemptRecorded != nil {
+		s.onAttemptRecorded()
+	}
+}
+
+// recordAttempt writes one NZB attempt to the persistence layer when attemptRecorder is set (or updates existing preload row).
+func (s *Server) recordAttempt(sess *session.Session, success bool, failureReason string) {
+	if s.attemptRecorder == nil || sess == nil {
+		return
+	}
+	p := s.recordAttemptParams(sess)
+	p.Success = success
+	p.FailureReason = failureReason
+	s.attemptRecorder.RecordAttempt(p)
+	if s.onAttemptRecorded != nil {
+		s.onAttemptRecorded()
 	}
 }
 

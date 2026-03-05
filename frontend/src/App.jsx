@@ -8,6 +8,7 @@ import { SiteHeader } from "@/components/SiteHeader"
 import { DashboardPage } from "@/components/DashboardPage"
 import { SearchPage } from "@/components/SearchPage"
 import { LogsPage } from "@/components/LogsPage"
+import { NZBHistoryPage } from "@/components/NZBHistoryPage"
 import { StreamsPage } from "@/components/StreamsPage"
 import { ProfilePage } from "@/components/ProfilePage"
 import { AlertCircle, Loader2 } from "lucide-react"
@@ -41,6 +42,7 @@ function App() {
   const [copied, setCopied] = useState(false)
   const [activePage, setActivePage] = useState('dashboard')
   const [indexerCaps, setIndexerCaps] = useState({})
+  const [nzbAttemptsRefreshTrigger, setNzbAttemptsRefreshTrigger] = useState(0)
 
   const chartData = history.map((h, i) => ({
     time: h.time,
@@ -171,6 +173,9 @@ function App() {
             break
           case 'log_history':
             setLogs(msg.payload.slice(-MAX_LOGS))
+            break
+          case 'nzb_attempts_updated':
+            setNzbAttemptsRefreshTrigger((v) => v + 1)
             break
           case 'auth_info': {
             if (msg.payload?.version) setVersion(msg.payload.version)
@@ -416,6 +421,9 @@ function App() {
               sendCommand={sendCommand}
               config={config}
             />
+          )}
+          {activePage === 'nzb-history' && (
+            <NZBHistoryPage refreshTrigger={nzbAttemptsRefreshTrigger} />
           )}
           {activePage === 'search' && (
             <SearchPage

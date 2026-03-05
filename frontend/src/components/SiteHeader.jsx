@@ -4,6 +4,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 const pageTitles = {
   dashboard: "Dashboard",
   search: "Search",
+  "nzb-history": "NZB History",
   logs: "Logs",
   profile: "Profile",
   general: "General",

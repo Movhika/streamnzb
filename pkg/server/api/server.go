@@ -13,6 +13,7 @@ import (
 	"streamnzb/pkg/core/app"
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/search/triage"
 	"streamnzb/pkg/server/stremio"
@@ -45,9 +46,10 @@ type Server struct {
 	tmdbAPIKey     string
 	tvdbAPIKey     string
 
-	clients   map[*Client]bool
-	clientsMu sync.Mutex
-	logCh     chan string
+	clients        map[*Client]bool
+	clientsMu      sync.Mutex
+	logCh          chan string
+	attemptLister  *persistence.StateManager
 }
 
 type Client struct {
@@ -109,6 +111,19 @@ func (s *Server) broadcastLogs() {
 	}
 }
 
+// BroadcastNZBAttemptsUpdate notifies all WebSocket clients that NZB attempts have changed so they can refetch.
+func (s *Server) BroadcastNZBAttemptsUpdate() {
+	msg := WSMessage{Type: "nzb_attempts_updated", Payload: json.RawMessage("null")}
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+	for client := range s.clients {
+		select {
+		case client.send <- msg:
+		default:
+		}
+	}
+}
+
 func (s *Server) AddClient(client *Client) {
 	s.clientsMu.Lock()
 	s.clients[client] = true
@@ -126,6 +141,12 @@ func (s *Server) SetIndexerCaps(caps map[string]*indexer.Caps) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexerCaps = caps
+}
+
+func (s *Server) SetAttemptLister(m *persistence.StateManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attemptLister = m
 }
 
 func (s *Server) SetProxyServer(p *proxy.Server) {
@@ -290,6 +311,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/stream/config", authMiddleware(http.HandlerFunc(s.handleStreamConfig)))
 	mux.Handle("/api/stream/configs/", authMiddleware(http.HandlerFunc(s.handleStreamConfigByID)))
 	mux.Handle("/api/stream/configs", authMiddleware(http.HandlerFunc(s.handleStreamConfigs)))
+	mux.Handle("/api/nzb-attempts", authMiddleware(http.HandlerFunc(s.handleNZBAttempts)))
 
 	return mux
 }

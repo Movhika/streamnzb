@@ -43,10 +43,12 @@ type Session struct {
 
 	ContentIDs *AvailReportMeta
 
+	// ContentType and ContentID are the request context (e.g. "movie"/"series" and "tt123" or "tmdb:123:1:2") for NZB attempt history.
+	ContentType string
+	ContentID   string
+
 	downloadURL string
 	indexer     indexer.Indexer
-
-	FallbackStreamURLs []string
 
 	bytesRead atomic.Int64 // bytes read during playback; used for AvailNZB good-report threshold
 }
@@ -96,24 +98,13 @@ func (s *Session) AddBytesRead(n int64) {
 	}
 }
 
-func (s *Session) FirstFallbackStreamURL() string {
+// IsActivelyServing returns true if at least one goroutine is currently serving this session
+// (i.e. http.ServeContent is running). Used by tryPlaySlot to avoid killing an active stream
+// when a concurrent background request (e.g. Stremio's /next/ poll) re-enters the play handler.
+func (s *Session) IsActivelyServing() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.FallbackStreamURLs) == 0 {
-		return ""
-	}
-	return s.FallbackStreamURLs[0]
-}
-
-func (s *Session) SetFallbackStreams(urls []string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.FallbackStreamURLs = urls
-}
-
-type knownGoodSlotEntry struct {
-	slotPath  string
-	expiresAt time.Time
+	return s.ActivePlays > 0
 }
 
 // MaxPlaybackDuration is the maximum time a session can stay in "active playback"
@@ -124,8 +115,8 @@ const MaxPlaybackDuration = 6 * time.Hour
 const FailoverOrderTTL = 24 * time.Hour
 
 // PostPlaybackEvictTTL is how long a session stays in memory after playback ends (ActivePlays=0)
-// before being evicted. Keeps memory from staying high with 100+ loader Files per session.
-const PostPlaybackEvictTTL = 2 * time.Minute
+// before being evicted. Long enough that pause/resume does not require a new stream from the catalog.
+const PostPlaybackEvictTTL = 15 * time.Minute
 
 type failoverOrderEntry struct {
 	order     []string
@@ -142,7 +133,6 @@ type Manager struct {
 	maxPlaybackDuration      time.Duration
 	mu                       sync.RWMutex
 	failoverOrder            sync.Map
-	knownGoodSlots           sync.Map
 	slotFailedDuringPlayback sync.Map // slotPath -> *failedSlotEntry (430 during streaming)
 	aioStreamsDevices        sync.Map // deviceToken -> true (device has sent AIOStreams User-Agent)
 }
@@ -244,7 +234,7 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 	return session, nil
 }
 
-func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *release.Release, idx indexer.Indexer, contentIDs *AvailReportMeta) (*Session, error) {
+func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *release.Release, idx indexer.Indexer, contentIDs *AvailReportMeta, contentType, contentID string) (*Session, error) {
 	logger.Trace("session CreateDeferredSession start", "id", sessionID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -263,6 +253,8 @@ func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *rele
 		NZB:         nil,
 		Release:     rel,
 		ContentIDs:  contentIDs,
+		ContentType:  contentType,
+		ContentID:    contentID,
 		downloadURL: downloadURL,
 		indexer:     idx,
 		CreatedAt:   time.Now(),
@@ -374,16 +366,6 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	return s.NZB, nil
 }
 
-func (m *Manager) SetFallbackStreams(sessionID string, urls []string) {
-	m.mu.RLock()
-	session, ok := m.sessions[sessionID]
-	m.mu.RUnlock()
-	if !ok || session == nil {
-		return
-	}
-	session.SetFallbackStreams(urls)
-}
-
 // SetAIOStreamsDevice marks this device as an AIOStreams client. Call when User-Agent contains "AIOStreams".
 func (m *Manager) SetAIOStreamsDevice(deviceToken string) {
 	if deviceToken != "" {
@@ -440,32 +422,6 @@ func (m *Manager) GetDeviceFailoverOrder(deviceToken, streamKey string) []string
 		return nil
 	}
 	return ent.order
-}
-
-func (m *Manager) SetKnownGoodSlot(requestedSlot, successfulSlot string) {
-	expiresAt := time.Now().Add(m.ttl)
-	m.knownGoodSlots.Store(requestedSlot, &knownGoodSlotEntry{slotPath: successfulSlot, expiresAt: expiresAt})
-}
-
-func (m *Manager) GetKnownGoodSlot(requestedSlot string) (slotPath string, ok bool) {
-	val, ok := m.knownGoodSlots.Load(requestedSlot)
-	if !ok || val == nil {
-		return "", false
-	}
-	ent, ok := val.(*knownGoodSlotEntry)
-	if !ok || ent == nil || time.Now().After(ent.expiresAt) {
-		return "", false
-	}
-	return ent.slotPath, true
-}
-
-func (m *Manager) ClearKnownGoodForSlot(slot string) {
-	m.knownGoodSlots.Range(func(key, value interface{}) bool {
-		if ent, ok := value.(*knownGoodSlotEntry); ok && ent != nil && ent.slotPath == slot {
-			m.knownGoodSlots.Delete(key)
-		}
-		return true
-	})
 }
 
 // SetSlotFailedDuringPlayback marks the slot as having failed with 430 during playback.
@@ -589,13 +545,6 @@ func (m *Manager) cleanup() {
 	if len(toClose) > 0 {
 		go freeOSMemory()
 	}
-
-	m.knownGoodSlots.Range(func(key, val any) bool {
-		if ent, ok := val.(*knownGoodSlotEntry); ok && now.After(ent.expiresAt) {
-			m.knownGoodSlots.Delete(key)
-		}
-		return true
-	})
 
 	m.slotFailedDuringPlayback.Range(func(key, val any) bool {
 		if ent, ok := val.(*failedSlotEntry); ok && now.After(ent.expiresAt) {

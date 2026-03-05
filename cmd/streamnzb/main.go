@@ -216,6 +216,7 @@ func main() {
 		DeviceManager:        deviceManager,
 		StreamManager:        streamManager,
 		Version:              Version,
+		AttemptRecorder:      stateMgr,
 	})
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize Stremio server: %v", err))
@@ -223,9 +224,11 @@ func main() {
 
 	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, streamManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
 	apiServer.SetIndexerCaps(comp.IndexerCaps)
+	apiServer.SetAttemptLister(stateMgr)
 
 	stremioServer.SetWebHandler(web.Handler())
 	stremioServer.SetAPIHandler(apiServer.Handler())
+	stremioServer.SetOnAttemptRecorded(apiServer.BroadcastNZBAttemptsUpdate)
 
 	mux := http.NewServeMux()
 	stremioServer.SetupRoutes(mux)
