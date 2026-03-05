@@ -48,7 +48,7 @@ Or run the binary from the [releases](https://github.com/Gaisberg/streamnzb/rele
 
 ## AvailNZB
 
-[AvailNZB](https://check.snzb.stream) is a community availability database. We don’t download or validate NZBs before showing results—we build an ordered play list from indexer search plus AvailNZB (skipping releases already reported bad), then try on play. StreamNZB reports success/failure so the shared DB stays current. Official builds use the project’s AvailNZB instance; to opt out, build the binary yourself.
+[AvailNZB](https://check.snzb.stream) is a community availability database. We don’t download or validate NZBs before showing results—we build an ordered play list from indexer search plus AvailNZB (skipping releases already reported bad), then try on play. StreamNZB reports success/failure so the shared DB stays current. Official builds can utilize the project’s AvailNZB instance, but you can change the mode in **Settings → AvailNZB**.
 
 
 ## Troubleshooting
