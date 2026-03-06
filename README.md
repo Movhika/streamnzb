@@ -66,4 +66,4 @@ If StreamNZB is useful to you, you can support development here:
 ## Credits
 
 - [javi11](https://github.com/javi11) for Go-based RAR and 7z streaming ([altmount](https://github.com/javi11/altmount)).
-- [Cursor](https://cursor.com) for helping with the project.
+- [Augment](https://www.augmentcode.com/) for helping with the project.

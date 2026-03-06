@@ -7,6 +7,5 @@ config.json
 pkg/server/web/static
 state.json
 *.log
-.cursor
-.agents
+.augment
 streamnzb.db*

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 )
 
 type virtualPart struct {
@@ -27,7 +28,14 @@ type VirtualStream struct {
 	closed        bool
 }
 
+var liveVirtualStreams atomic.Int64
+
+func LiveVirtualStreams() int64 {
+	return liveVirtualStreams.Load()
+}
+
 func NewVirtualStream(ctx context.Context, parts []virtualPart, totalSize int64, startOffset int64) *VirtualStream {
+	liveVirtualStreams.Add(1)
 	return &VirtualStream{
 		parts:       parts,
 		totalSize:   totalSize,
@@ -160,6 +168,7 @@ func (s *VirtualStream) Close() error {
 	}
 	s.closed = true
 	s.closeReader()
+	liveVirtualStreams.Add(-1)
 	return nil
 }
 

@@ -34,6 +34,15 @@ type SegmentStatter interface {
 	StatSegment(ctx context.Context, messageID string, groups []string) (exists bool, err error)
 }
 
+func shouldPersistDownloadedSegment(ctx context.Context) bool {
+	return ctx == nil || ctx.Err() == nil
+}
+
+func decodeAndCloseBody(body io.ReadCloser, decodeFn func(io.Reader) (*decode.Frame, error)) (*decode.Frame, error) {
+	defer body.Close()
+	return decodeFn(body)
+}
+
 const MaxZeroFills = 10
 
 // MaxCachedSegments is the maximum number of segments to keep in segCache per file.
@@ -71,6 +80,7 @@ type File struct {
 	totalSize int64
 	detected  bool
 	ctx       context.Context
+	ownerID   string
 	mu        sync.Mutex
 
 	segCache   map[int][]byte
@@ -107,6 +117,18 @@ func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimat
 }
 
 func (f *File) Name() string { return f.nzbFile.Subject }
+
+func (f *File) SetOwnerSessionID(sessionID string) {
+	f.mu.Lock()
+	f.ownerID = sessionID
+	f.mu.Unlock()
+}
+
+func (f *File) OwnerSessionID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ownerID
+}
 
 func (f *File) Size() int64 {
 	f.mu.Lock()
@@ -416,6 +438,12 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int, count
 		if index == 0 {
 			return nil, fmt.Errorf("first segment fetch failed: %w", err)
 		}
+		if isContextErr(err) || !shouldPersistDownloadedSegment(downloadCtx) {
+			if ctxErr := downloadCtx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			return nil, err
+		}
 		// Prefetch calls (countFailures=false) must not zero-fill or increment the counter.
 		// The blocking read path will retry and count the failure if all providers also fail.
 		if !countFailures {
@@ -437,6 +465,9 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int, count
 		zeroData := make([]byte, size)
 		f.PutCachedSegment(index, zeroData)
 		return zeroData, nil
+	}
+	if !shouldPersistDownloadedSegment(downloadCtx) {
+		return nil, downloadCtx.Err()
 	}
 	// Don't cache here when using the pool fetcher: the pool already cached by message ID.
 	// Caching again would double memory use (same segment in pool cache + loader segCache) and double-count the budget.
@@ -514,10 +545,10 @@ func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int, countFa
 			err   error
 		}
 		done := make(chan decodeResult, 1)
-		go func() {
-			frame, err := decode.DecodeToBytes(r)
+		go func(body io.ReadCloser) {
+			frame, err := decodeAndCloseBody(body, decode.DecodeToBytes)
 			done <- decodeResult{frame, err}
-		}()
+		}(r)
 
 		select {
 		case <-downloadCtx.Done():
@@ -531,6 +562,9 @@ func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int, countFa
 				continue
 			}
 			clientPool.Put(client)
+			if !shouldPersistDownloadedSegment(downloadCtx) {
+				return nil, downloadCtx.Err()
+			}
 			f.PutCachedSegment(index, res.frame.Data)
 			return res.frame.Data, nil
 		}
@@ -542,6 +576,13 @@ func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int, countFa
 
 	if index == 0 {
 		return nil, fmt.Errorf("first segment failed on all providers: %w", lastErr)
+	}
+
+	if isContextErr(lastErr) || !shouldPersistDownloadedSegment(downloadCtx) {
+		if ctxErr := downloadCtx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, lastErr
 	}
 
 	// Prefetch calls (countFailures=false) must not zero-fill or increment the counter.

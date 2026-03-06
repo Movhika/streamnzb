@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,7 @@ import (
 	"streamnzb/pkg/media/fileutil"
 	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/media/nzb"
+	"streamnzb/pkg/media/unpack"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/usenet/nntp"
 	"streamnzb/pkg/usenet/pool"
@@ -130,6 +133,14 @@ const FailoverOrderTTL = 24 * time.Hour
 // before being evicted. Long enough that pause/resume does not require a new stream from the catalog.
 const PostPlaybackEvictTTL = 15 * time.Minute
 
+// clientStaleTTL is how long a Clients map entry is kept before it is treated as stale in cleanup().
+// Matches the 60-second window used in GetActiveSessions.
+const clientStaleTTL = 60 * time.Second
+
+// AIOStreamsDeviceTTL is how long an AIOStreams device entry is retained before cleanup() removes it.
+// Prevents aioStreamsDevices from growing unbounded over the lifetime of the process.
+const AIOStreamsDeviceTTL = 48 * time.Hour
+
 type failoverOrderEntry struct {
 	order     []string
 	expiresAt time.Time
@@ -146,7 +157,8 @@ type Manager struct {
 	mu                       sync.RWMutex
 	failoverOrder            sync.Map
 	slotFailedDuringPlayback sync.Map // slotPath -> *failedSlotEntry (430 during streaming)
-	aioStreamsDevices        sync.Map // deviceToken -> true (device has sent AIOStreams User-Agent)
+	aioStreamsDevices        sync.Map // deviceToken -> time.Time (last seen; cleaned up after AIOStreamsDeviceTTL)
+	stopCh                   chan struct{}
 }
 
 type failedSlotEntry struct {
@@ -168,10 +180,21 @@ func NewManager(pools []*nntp.ClientPool, usenetPool *pool.Pool, ttl time.Durati
 		cacheBudget:         cacheBudget,
 		ttl:                 ttl,
 		maxPlaybackDuration: MaxPlaybackDuration,
+		stopCh:              make(chan struct{}),
 	}
 
 	go m.cleanupLoop()
 	return m
+}
+
+// Shutdown stops the background cleanup goroutine. Call during application shutdown.
+func (m *Manager) Shutdown() {
+	select {
+	case <-m.stopCh:
+		// already closed
+	default:
+		close(m.stopCh)
+	}
 }
 
 type AvailReportMeta struct {
@@ -215,6 +238,7 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 		} else {
 			lf = loader.NewFile(ctx, info.File, pools, estimator, nil, cacheBudget)
 		}
+		lf.SetOwnerSessionID(sessionID)
 		loaderFiles = append(loaderFiles, lf)
 	}
 
@@ -265,8 +289,8 @@ func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *rele
 		NZB:         nil,
 		Release:     rel,
 		ContentIDs:  contentIDs,
-		ContentType:  contentType,
-		ContentID:    contentID,
+		ContentType: contentType,
+		ContentID:   contentID,
 		downloadURL: downloadURL,
 		indexer:     idx,
 		CreatedAt:   time.Now(),
@@ -363,6 +387,7 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 		} else {
 			lf = loader.NewFile(ctx, info.File, pools, estimator, nil, cacheBudget)
 		}
+		lf.SetOwnerSessionID(s.ID)
 		loaderFiles = append(loaderFiles, lf)
 	}
 
@@ -379,9 +404,10 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 }
 
 // SetAIOStreamsDevice marks this device as an AIOStreams client. Call when User-Agent contains "AIOStreams".
+// The timestamp is refreshed on every call so active devices are not evicted by cleanup().
 func (m *Manager) SetAIOStreamsDevice(deviceToken string) {
 	if deviceToken != "" {
-		m.aioStreamsDevices.Store(deviceToken, true)
+		m.aioStreamsDevices.Store(deviceToken, time.Now())
 	}
 }
 
@@ -390,8 +416,8 @@ func (m *Manager) IsAIOStreamsDevice(deviceToken string) bool {
 	if deviceToken == "" {
 		return false
 	}
-	v, ok := m.aioStreamsDevices.Load(deviceToken)
-	return ok && v == true
+	_, ok := m.aioStreamsDevices.Load(deviceToken)
+	return ok
 }
 
 func failoverOrderMapKey(deviceToken, streamKey string) string {
@@ -503,6 +529,125 @@ func freeOSMemory() {
 	debug.FreeOSMemory()
 }
 
+func summarizeClientPools(pools []*nntp.ClientPool) string {
+	if len(pools) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(pools))
+	for i, p := range pools {
+		if p == nil {
+			parts = append(parts, fmt.Sprintf("pool[%d](nil)", i))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("pool[%d](host=%s total=%d idle=%d active=%d)", i, p.Host(), p.TotalConnections(), p.IdleConnections(), p.ActiveConnections()))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (m *Manager) traceTeardownSnapshot(trigger, sessionID string) {
+	m.logTeardownSnapshot(trigger, sessionID, "immediate")
+	for _, delay := range []time.Duration{5 * time.Second, 15 * time.Second} {
+		d := delay
+		time.AfterFunc(d, func() {
+			m.logTeardownSnapshot(trigger, sessionID, d.String())
+		})
+	}
+}
+
+func (m *Manager) logTeardownSnapshot(trigger, sessionID, checkpoint string) {
+	m.mu.RLock()
+	sessionPresent := false
+	if sessionID != "" {
+		_, sessionPresent = m.sessions[sessionID]
+	}
+	sessionsTotal := len(m.sessions)
+	sessionsWithFilesIDs := m.sessionsWithFilesIDs()
+	sessionsWithFiles := len(sessionsWithFilesIDs)
+	activePlays := 0
+	activeClients := 0
+	for _, sess := range m.sessions {
+		sess.mu.Lock()
+		activePlays += int(sess.ActivePlays)
+		activeClients += len(sess.Clients)
+		sess.mu.Unlock()
+	}
+	usenetPool := m.usenetPool
+	pools := append([]*nntp.ClientPool(nil), m.pools...)
+	m.mu.RUnlock()
+
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	fields := []any{
+		"trigger", trigger,
+		"session", sessionID,
+		"checkpoint", checkpoint,
+		"session_present", sessionPresent,
+		"sessions_total", sessionsTotal,
+		"sessions_with_files", sessionsWithFiles,
+		"sessions_with_files_ids", strings.Join(sessionsWithFilesIDs, ","),
+		"active_plays", activePlays,
+		"active_clients", activeClients,
+		"live_segment_readers", loader.LiveSegmentReaders(),
+		"live_segment_reader_details", strings.Join(loader.LiveSegmentReaderDetails(), "; "),
+		"live_virtual_streams", unpack.LiveVirtualStreams(),
+		"heap_alloc_bytes", mem.HeapAlloc,
+		"heap_inuse_bytes", mem.HeapInuse,
+		"heap_idle_bytes", mem.HeapIdle,
+		"heap_released_bytes", mem.HeapReleased,
+		"heap_objects", mem.HeapObjects,
+		"num_gc", mem.NumGC,
+	}
+	if usenetPool != nil {
+		snapshot := usenetPool.TraceSnapshot()
+		fields = append(fields,
+			"usenet_in_flight_fetches", snapshot.InFlightFetches,
+			"usenet_cache", snapshot.CacheSummary(),
+			"usenet_providers", snapshot.ProviderSummary(),
+		)
+	} else {
+		fields = append(fields, "nntp_pools", summarizeClientPools(pools))
+	}
+	logger.Trace("session teardown snapshot", fields...)
+}
+
+// hasSessionsWithFiles reports whether any session in m.sessions has loader files
+// loaded (i.e. is actively streaming or has its NZB materialised).
+// Caller must hold m.mu (read or write) before calling.
+func (m *Manager) hasSessionsWithFiles() bool {
+	return len(m.sessionsWithFilesIDs()) > 0
+}
+
+func (m *Manager) sessionsWithFilesIDs() []string {
+	ids := make([]string, 0)
+	for id, s := range m.sessions {
+		s.mu.Lock()
+		has := s.File != nil || len(s.Files) > 0
+		s.mu.Unlock()
+		if has {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// maybePurgePoolCache purges the shared pool segment cache when no remaining
+// session has active loader files.  Call after removing a session from the map
+// and closing it, while NOT holding m.mu (it acquires a read lock internally).
+func (m *Manager) maybePurgePoolCache() {
+	if m.usenetPool == nil {
+		return
+	}
+	m.mu.RLock()
+	active := m.hasSessionsWithFiles()
+	m.mu.RUnlock()
+	if !active {
+		logger.Debug("session: no sessions with active files, purging segment cache")
+		m.usenetPool.PurgeCache()
+	}
+}
+
 func (m *Manager) DeleteSession(sessionID string) {
 	m.mu.Lock()
 	sess, ok := m.sessions[sessionID]
@@ -514,6 +659,11 @@ func (m *Manager) DeleteSession(sessionID string) {
 	if sess != nil {
 		logger.Debug("session DeleteSession closing", "id", sessionID)
 		sess.Close()
+		// Purge the shared pool segment cache if no remaining session still has
+		// loader files — deferred (catalog) sessions never set Files, so this
+		// correctly fires when streaming ends even though the map is non-empty.
+		m.maybePurgePoolCache()
+		m.traceTeardownSnapshot("delete_session", sessionID)
 		// Suggest returning freed memory to the OS so RSS drops (Go keeps heap by default).
 		go freeOSMemory()
 	} else {
@@ -527,6 +677,7 @@ func (s *Session) Close() {
 	logger.Debug("session Close", "id", s.ID)
 	if s.cancel != nil {
 		s.cancel()
+		s.cancel = nil
 	}
 	// Drop segment caches so memory is released immediately instead of waiting for GC.
 	n := 0
@@ -541,28 +692,50 @@ func (s *Session) Close() {
 		n++
 	}
 	logger.Debug("session Close cleared segment caches", "id", s.ID, "files_cleared", n)
-	// Release references so session doesn't keep loader files alive after cache clear.
+	// Release heavyweight references so a closed session cannot pin NZB / unpack /
+	// loader graphs or deferred-download state after it has been removed.
 	s.Files = nil
 	s.File = nil
+	s.NZB = nil
+	s.Blueprint = nil
+	s.Release = nil
+	s.ContentIDs = nil
+	s.Clients = nil
+	s.downloadURL = ""
+	s.indexer = nil
+	logger.Trace("session Close released references", "id", s.ID, "files_cleared", n)
 }
 
 func (m *Manager) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		m.cleanup()
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.cleanup()
+		}
 	}
 }
 
 func (m *Manager) cleanup() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	now := time.Now()
 	var toClose []*Session
+	var closedIDs []string
 	for id, session := range m.sessions {
 		session.mu.Lock()
+		// Evict stale Clients entries before computing hasActivePlayback.
+		// Without this, a disconnected client whose IP was never seen by GetActiveSessions
+		// keeps len(session.Clients) > 0, which blocks all eviction paths indefinitely.
+		for ip, lastSeen := range session.Clients {
+			if now.Sub(lastSeen) > clientStaleTTL {
+				delete(session.Clients, ip)
+			}
+		}
 		hasActivePlayback := session.ActivePlays > 0 || len(session.Clients) > 0
 		evictIdle := !hasActivePlayback && now.Sub(session.LastAccess) > m.ttl
 		evictPostPlayback := !hasActivePlayback && !session.PlaybackEndedAt.IsZero() && now.Sub(session.PlaybackEndedAt) > PostPlaybackEvictTTL
@@ -570,14 +743,25 @@ func (m *Manager) cleanup() {
 		if evictIdle || evictPostPlayback || evictStuckPlayback {
 			delete(m.sessions, id)
 			toClose = append(toClose, session)
+			closedIDs = append(closedIDs, id)
 		}
 		session.mu.Unlock()
 	}
+	shouldPurgeCache := len(toClose) > 0 && m.usenetPool != nil && !m.hasSessionsWithFiles()
+	m.mu.Unlock()
+
 	for _, s := range toClose {
 		logger.Debug("session cleanup evicting", "id", s.ID)
 		s.Close()
 	}
+	if shouldPurgeCache {
+		logger.Debug("session cleanup: no sessions with active files, purging segment cache")
+		m.usenetPool.PurgeCache()
+	}
 	if len(toClose) > 0 {
+		for _, id := range closedIDs {
+			m.traceTeardownSnapshot("cleanup_evict", id)
+		}
 		go freeOSMemory()
 	}
 
@@ -597,6 +781,13 @@ func (m *Manager) cleanup() {
 		}
 		// Legacy: value was stored as []string without TTL; remove so next store uses failoverOrderEntry
 		m.failoverOrder.Delete(key)
+		return true
+	})
+
+	m.aioStreamsDevices.Range(func(key, val any) bool {
+		if lastSeen, ok := val.(time.Time); ok && now.Sub(lastSeen) > AIOStreamsDeviceTTL {
+			m.aioStreamsDevices.Delete(key)
+		}
 		return true
 	})
 }
@@ -626,7 +817,11 @@ func (m *Manager) EndPlayback(id, ip string) {
 			s.PlaybackEndedAt = time.Now() // so cleanup can evict session after PostPlaybackEvictTTL
 		}
 		s.Clients[ip] = time.Now()
+		plays := s.ActivePlays
 		s.mu.Unlock()
+		if plays == 0 {
+			m.traceTeardownSnapshot("playback_ended", id)
+		}
 	}
 }
 

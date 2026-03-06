@@ -1,8 +1,23 @@
 package pool
 
 import (
+	"context"
 	"testing"
 )
+
+func TestShouldCacheFetchedSegment(t *testing.T) {
+	if !shouldCacheFetchedSegment(nil) {
+		t.Fatal("nil context should allow cache writes")
+	}
+	if !shouldCacheFetchedSegment(context.Background()) {
+		t.Fatal("active context should allow cache writes")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if shouldCacheFetchedSegment(ctx) {
+		t.Fatal("canceled context should block cache writes")
+	}
+}
 
 func TestNewPool_NoProviders(t *testing.T) {
 	_, err := NewPool(&Config{Providers: nil})
@@ -82,5 +97,32 @@ func TestMemorySegmentCache_BudgetLRU(t *testing.T) {
 	_, ok = c.Get("id3")
 	if !ok {
 		t.Fatal("expected id3 to be present")
+	}
+}
+
+func TestMemorySegmentCache_Stats(t *testing.T) {
+	budget := &SegmentCacheBudget{maxBytes: 8}
+	c := NewMemorySegmentCacheWithBudget(budget)
+	c.Set("id1", SegmentData{Body: []byte("ab"), Size: 2})
+	c.Set("id2", SegmentData{Body: []byte("cdef"), Size: 4})
+
+	stats := cacheStats(c)
+	if stats.Entries != 2 {
+		t.Fatalf("expected 2 cache entries, got %d", stats.Entries)
+	}
+	if stats.Bytes != 6 {
+		t.Fatalf("expected 6 cached bytes, got %d", stats.Bytes)
+	}
+	if stats.BudgetCurrent != 6 {
+		t.Fatalf("expected current budget 6, got %d", stats.BudgetCurrent)
+	}
+	if stats.BudgetMax != 8 {
+		t.Fatalf("expected max budget 8, got %d", stats.BudgetMax)
+	}
+
+	c.Purge()
+	stats = cacheStats(c)
+	if stats.Entries != 0 || stats.Bytes != 0 || stats.BudgetCurrent != 0 {
+		t.Fatalf("expected empty cache after purge, got %+v", stats)
 	}
 }

@@ -47,32 +47,32 @@ var (
 )
 
 type Server struct {
-	mu                   sync.RWMutex
-	manifest             *Manifest
-	version              string
-	baseURL              string
-	config               *config.Config
-	indexer              indexer.Indexer
-	validator            *validation.Checker
-	sessionManager       *session.Manager
-	triageService        *triage.Service
-	availClient          *availnzb.Client
-	availReporter        *availnzb.Reporter
-	availNZBIndexerHosts []string
-	tmdbClient           *tmdb.Client
-	tvdbClient           *tvdb.Client
-	deviceManager        *auth.DeviceManager
-	streamManager        *stream.Manager
+	mu                        sync.RWMutex
+	manifest                  *Manifest
+	version                   string
+	baseURL                   string
+	config                    *config.Config
+	indexer                   indexer.Indexer
+	validator                 *validation.Checker
+	sessionManager            *session.Manager
+	triageService             *triage.Service
+	availClient               *availnzb.Client
+	availReporter             *availnzb.Reporter
+	availNZBIndexerHosts      []string
+	tmdbClient                *tmdb.Client
+	tvdbClient                *tvdb.Client
+	deviceManager             *auth.DeviceManager
+	streamManager             *stream.Manager
 	playListCache             sync.Map
 	rawSearchCache            sync.Map
 	recordedSuccessSessionIDs sync.Map // session ID -> struct{}; record success only once per stream
 	recordedPreloadSessionIDs sync.Map // session ID -> struct{}; record preload only once per session lifetime
 	recordedFailureSessionIDs sync.Map // session ID -> struct{}; record failure only once per session lifetime (prevents concurrent goroutines from inserting duplicate rows)
 	nextReleaseIndex          sync.Map // key: deviceToken|key.CacheKey() → *nextReleaseCursor; tracks manual "next" progression
-	webHandler               http.Handler
-	apiHandler               http.Handler
-	attemptRecorder          *persistence.StateManager
-	onAttemptRecorded        func()
+	webHandler                http.Handler
+	apiHandler                http.Handler
+	attemptRecorder           *persistence.StateManager
+	onAttemptRecorded         func()
 }
 
 const FailoverOrderPath = "/failover_order"
@@ -824,8 +824,6 @@ func deviceToken(device *auth.Device) string {
 	}
 	return ""
 }
-
-
 
 func formatStreamSlotPath(streamID, contentType, id string, index int) string {
 	return streamSlotPrefix + streamID + ":" + contentType + ":" + id + ":" + strconv.Itoa(index)
@@ -1993,15 +1991,15 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		// Use a context that cancels when either the request ends or the session is closed (e.g. user closed from dashboard).
 		// That way closing the session aborts playback and stops downloading immediately.
 		mergedCtx, mergedCancel = context.WithCancel(r.Context())
-		go func(sess *session.Session, cancel context.CancelFunc) {
+		go func(sess *session.Session, done <-chan struct{}, cancel context.CancelFunc) {
 			select {
-			case <-mergedCtx.Done():
+			case <-done:
 				return
 			case <-sess.Done():
 				logger.Debug("playback aborted: session closed", "session", sess.ID)
 				cancel()
 			}
-		}(sess, mergedCancel)
+		}(sess, mergedCtx.Done(), mergedCancel)
 		// Record preload at most once per session: subsequent HTTP requests (seeks, range retries)
 		// for the same session must not insert another "Preload" row that would never be resolved.
 		if _, alreadyPreloaded := s.recordedPreloadSessionIDs.LoadOrStore(sessionID, struct{}{}); !alreadyPreloaded {
@@ -2087,12 +2085,22 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		break
 	}
 	defer mergedCancel()
-	defer func() {
-		if stream != nil {
-			logger.Debug("play handler closing stream", "session", sessionID)
-			stream.Close()
-		}
-	}()
+	servedSessionID := sessionID
+	var closeStreamOnce sync.Once
+	closeStream := func(reason string) {
+		closeStreamOnce.Do(func() {
+			if stream != nil {
+				logger.Debug("play handler closing stream", "session", servedSessionID, "reason", reason)
+				stream.Close()
+				stream = nil
+			}
+		})
+	}
+	defer closeStream("handler exit")
+	go func(done <-chan struct{}) {
+		<-done
+		closeStream("playback canceled")
+	}(mergedCtx.Done())
 
 	// After internal failover we serve a different file; don't apply the original request's Range or t= to it.
 	failedOver := sessionID != requestedSessionID
@@ -2419,13 +2427,13 @@ func (s *Server) recordAttemptParams(sess *session.Session) persistence.RecordAt
 		}
 	}
 	return persistence.RecordAttemptParams{
-		ContentType:   contentType,
-		ContentID:     contentID,
-		ContentTitle:  "",
-		ReleaseTitle:  sess.ReportReleaseName(),
-		ReleaseURL:    sess.ReleaseURL(),
-		ReleaseSize:   sess.ReportSize(),
-		SlotPath:      sess.ID,
+		ContentType:  contentType,
+		ContentID:    contentID,
+		ContentTitle: "",
+		ReleaseTitle: sess.ReportReleaseName(),
+		ReleaseURL:   sess.ReleaseURL(),
+		ReleaseSize:  sess.ReportSize(),
+		SlotPath:     sess.ID,
 	}
 }
 
@@ -2538,15 +2546,15 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	}
 	// Cancel stream when either request ends or session is closed (e.g. from dashboard).
 	mergedCtx, mergedCancel := context.WithCancel(r.Context())
-	go func() {
+	go func(done <-chan struct{}) {
 		select {
-		case <-mergedCtx.Done():
+		case <-done:
 			return
 		case <-sess.Done():
 			logger.Debug("debug play aborted: session closed", "session", sessionID)
 			mergedCancel()
 		}
-	}()
+	}(mergedCtx.Done())
 	defer mergedCancel()
 	stream, name, size, bp, err := unpack.GetMediaStream(mergedCtx, unpackFiles, sess.Blueprint, password)
 	if bp != nil && sess.Blueprint == nil {
@@ -2557,10 +2565,21 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		http.Error(w, "Failed to open media stream: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer func() {
-		logger.Debug("debug play closing stream", "session", sessionID)
-		stream.Close()
-	}()
+	var closeStreamOnce sync.Once
+	closeStream := func(reason string) {
+		closeStreamOnce.Do(func() {
+			if stream != nil {
+				logger.Debug("debug play closing stream", "session", sessionID, "reason", reason)
+				stream.Close()
+				stream = nil
+			}
+		})
+	}
+	defer closeStream("handler exit")
+	go func(done <-chan struct{}) {
+		<-done
+		closeStream("playback canceled")
+	}(mergedCtx.Done())
 
 	if tStr := r.URL.Query().Get("t"); tStr != "" && r.Header.Get("Range") == "" {
 		if tSec, parseOK := seek.ParseTSeconds(tStr); parseOK {

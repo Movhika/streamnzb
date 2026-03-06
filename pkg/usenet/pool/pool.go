@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"streamnzb/pkg/core/logger"
@@ -44,6 +45,10 @@ func isArticleNotFound(err error) bool {
 	return strings.Contains(s, "430") || strings.Contains(s, "no such article")
 }
 
+func shouldCacheFetchedSegment(ctx context.Context) bool {
+	return ctx == nil || ctx.Err() == nil
+}
+
 type ProviderConfig struct {
 	ID         string
 	Priority   int
@@ -57,10 +62,50 @@ type Config struct {
 }
 
 type Pool struct {
-	providers []ProviderConfig
-	cache     SegmentCache
-	sf        singleflight.Group
-	mu        sync.RWMutex
+	providers     []ProviderConfig
+	cache         SegmentCache
+	sf            singleflight.Group
+	mu            sync.RWMutex
+	activeFetches atomic.Int64
+}
+
+type PoolProviderTraceSnapshot struct {
+	ID     string
+	Host   string
+	Total  int
+	Idle   int
+	Active int
+}
+
+type PoolTraceSnapshot struct {
+	InFlightFetches int64
+	Cache           CacheStats
+	Providers       []PoolProviderTraceSnapshot
+}
+
+func (s PoolTraceSnapshot) CacheSummary() string {
+	if s.Cache.BudgetMax > 0 {
+		return fmt.Sprintf("entries=%d bytes=%d budget=%d/%d", s.Cache.Entries, s.Cache.Bytes, s.Cache.BudgetCurrent, s.Cache.BudgetMax)
+	}
+	return fmt.Sprintf("entries=%d bytes=%d", s.Cache.Entries, s.Cache.Bytes)
+}
+
+func (s PoolTraceSnapshot) ProviderSummary() string {
+	if len(s.Providers) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(s.Providers))
+	for _, provider := range s.Providers {
+		parts = append(parts, fmt.Sprintf("%s(host=%s total=%d idle=%d active=%d)", provider.ID, provider.Host, provider.Total, provider.Idle, provider.Active))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func cacheStats(cache SegmentCache) CacheStats {
+	if statser, ok := cache.(segmentCacheStatser); ok {
+		return statser.Stats()
+	}
+	return CacheStats{}
 }
 
 func NewPool(cfg *Config) (*Pool, error) {
@@ -142,6 +187,8 @@ func (p *Pool) FetchSegmentFirst(ctx context.Context, segment *nzb.Segment, grou
 				ch <- segResult{err: err}
 				return
 			}
+			p.activeFetches.Add(1)
+			defer p.activeFetches.Add(-1)
 
 			// Connection leak guard: if fetchCtx is cancelled (e.g. another provider succeeded
 			// or the caller gave up), discard the connection to interrupt the blocking read.
@@ -173,6 +220,8 @@ func (p *Pool) FetchSegmentFirst(ctx context.Context, segment *nzb.Segment, grou
 			}
 			cr := &countReader{Reader: r}
 			frame, err := decode.DecodeToBytes(cr)
+			// Close ensures EndResponse is called even if decode stopped before EOF.
+			r.Close()
 			if err != nil {
 				logger.Debug("fetch segment decode failed", "provider", providerID, "err", err)
 				ch <- segResult{err: err}
@@ -186,8 +235,12 @@ func (p *Pool) FetchSegmentFirst(ctx context.Context, segment *nzb.Segment, grou
 	for range providers {
 		res := <-ch
 		if res.err == nil {
-			cancel()
+			if !shouldCacheFetchedSegment(fetchCtx) {
+				cancel()
+				return SegmentData{}, fetchCtx.Err()
+			}
 			p.cache.Set(messageID, res.data)
+			cancel()
 			logger.Trace("fetch segment ok (parallel)", "message_id", messageID, "size", res.data.Size)
 			return res.data, nil
 		}
@@ -224,58 +277,68 @@ func (p *Pool) fetchSegmentOnce(ctx context.Context, messageID string, segment *
 			return SegmentData{}, err
 		}
 
-		// Interrupt pending body read if session is closed/cancelled.
-		stopWatch := make(chan struct{})
-		go func() {
-			select {
-			case <-fetchCtx.Done():
-				discard()
-			case <-stopWatch:
-			}
-		}()
+		data, articleNotFound, err := func() (SegmentData, bool, error) {
+			p.activeFetches.Add(1)
+			defer p.activeFetches.Add(-1)
 
-		if len(groups) > 0 {
-			if err := conn.Group(groups[0]); err != nil {
+			// Interrupt pending body read if session is closed/cancelled.
+			stopWatch := make(chan struct{})
+			go func() {
+				select {
+				case <-fetchCtx.Done():
+					discard()
+				case <-stopWatch:
+				}
+			}()
+			defer func() {
 				close(stopWatch)
 				release()
-				logger.Debug("fetch segment group failed", "provider", providerID, "err", err)
-				exclude = append(exclude, providerID)
-				continue
-			}
-		}
+			}()
 
-		r, err := conn.Body(messageID)
+			if len(groups) > 0 {
+				if err := conn.Group(groups[0]); err != nil {
+					logger.Debug("fetch segment group failed", "provider", providerID, "err", err)
+					return SegmentData{}, false, err
+				}
+			}
+
+			r, err := conn.Body(messageID)
+			if err != nil {
+				logger.Debug("fetch segment body failed", "provider", providerID, "err", err)
+				return SegmentData{}, isArticleNotFound(err), err
+			}
+
+			cr := &countReader{Reader: r}
+			frame, err := decode.DecodeToBytes(cr)
+			// Close ensures EndResponse is called even if decode stopped before EOF.
+			r.Close()
+			if err != nil {
+				discard()
+				errStr := err.Error()
+				if strings.Contains(errStr, "expected size") && strings.Contains(errStr, "but got") {
+					logger.Debug("fetch segment decode failed", "provider", providerID, "err", err, "raw_body_bytes", cr.n)
+				} else {
+					logger.Debug("fetch segment decode failed", "provider", providerID, "err", err)
+				}
+				return SegmentData{}, false, err
+			}
+
+			return SegmentData{
+				Body: frame.Data,
+				Size: int64(len(frame.Data)),
+			}, false, nil
+		}()
 		if err != nil {
-			close(stopWatch)
-			release()
 			lastErr = err
-			logger.Debug("fetch segment body failed", "provider", providerID, "err", err)
-			if isArticleNotFound(err) {
+			if articleNotFound {
 				return SegmentData{}, fmt.Errorf("fetch segment %s: %w", messageID, err)
 			}
 			exclude = append(exclude, providerID)
 			continue
 		}
 
-		cr := &countReader{Reader: r}
-		frame, err := decode.DecodeToBytes(cr)
-		close(stopWatch)
-		if err != nil {
-			discard()
-			errStr := err.Error()
-			if strings.Contains(errStr, "expected size") && strings.Contains(errStr, "but got") {
-				logger.Debug("fetch segment decode failed", "provider", providerID, "err", err, "raw_body_bytes", cr.n)
-			} else {
-				logger.Debug("fetch segment decode failed", "provider", providerID, "err", err)
-			}
-			exclude = append(exclude, providerID)
-			continue
-		}
-		release()
-
-		data := SegmentData{
-			Body: frame.Data,
-			Size: int64(len(frame.Data)),
+		if !shouldCacheFetchedSegment(fetchCtx) {
+			return SegmentData{}, fetchCtx.Err()
 		}
 		p.cache.Set(messageID, data)
 		logger.Trace("fetch segment ok", "message_id", messageID, "size", data.Size)
@@ -323,15 +386,40 @@ func (p *Pool) StatSegment(ctx context.Context, messageID string, groups []strin
 			}
 		}
 		go func(exclude []string) {
-			conn, release, _, providerID, getErr := p.getConnection(statCtx, exclude, 999, false)
+			conn, release, discard, providerID, getErr := p.getConnection(statCtx, exclude, 999, false)
 			if getErr != nil {
 				ch <- statResult{err: getErr}
 				return
 			}
-			defer release()
+
+			// Watchdog: if the context is cancelled while we are waiting for
+			// StatArticle (or Group), call discard() so the connection is closed
+			// and the pool slot is freed immediately instead of leaking until the
+			// 30-second statCtx deadline expires.
+			stopWatch := make(chan struct{})
+			go func() {
+				select {
+				case <-statCtx.Done():
+					discard()
+				case <-stopWatch:
+				}
+			}()
+
+			var doRelease = true
+			defer func() {
+				close(stopWatch)
+				if doRelease {
+					release()
+				}
+				// discard() is called by the watchdog when context is done;
+				// if we're here normally the watchdog exits via stopWatch.
+			}()
+
 			if len(groups) > 0 {
 				if groupErr := conn.Group(groups[0]); groupErr != nil {
 					logger.Debug("stat segment group failed", "provider", providerID, "err", groupErr)
+					doRelease = false
+					discard()
 					ch <- statResult{err: groupErr}
 					return
 				}
@@ -339,6 +427,8 @@ func (p *Pool) StatSegment(ctx context.Context, messageID string, groups []strin
 			exists, statErr := conn.StatArticle(messageID)
 			if statErr != nil {
 				logger.Debug("stat segment failed", "provider", providerID, "err", statErr)
+				doRelease = false
+				discard()
 				ch <- statResult{err: statErr}
 				return
 			}
@@ -429,6 +519,41 @@ func (p *Pool) DiscardConnection(client *nntp.Client, pool *nntp.ClientPool) {
 	if client != nil && pool != nil {
 		pool.Discard(client)
 	}
+}
+
+// PurgeCache drops all entries from the segment cache and resets budget accounting.
+// Call when no sessions are active so the GC can reclaim the segment memory.
+func (p *Pool) PurgeCache() {
+	p.cache.Purge()
+	logger.Debug("pool PurgeCache: segment cache purged")
+}
+
+func (p *Pool) TraceSnapshot() PoolTraceSnapshot {
+	p.mu.RLock()
+	providers := make([]ProviderConfig, len(p.providers))
+	copy(providers, p.providers)
+	cache := p.cache
+	p.mu.RUnlock()
+
+	snapshot := PoolTraceSnapshot{
+		InFlightFetches: p.activeFetches.Load(),
+		Cache:           cacheStats(cache),
+		Providers:       make([]PoolProviderTraceSnapshot, 0, len(providers)),
+	}
+	for _, provider := range providers {
+		clientPool := provider.ClientPool
+		if clientPool == nil {
+			continue
+		}
+		snapshot.Providers = append(snapshot.Providers, PoolProviderTraceSnapshot{
+			ID:     provider.ID,
+			Host:   clientPool.Host(),
+			Total:  clientPool.TotalConnections(),
+			Idle:   clientPool.IdleConnections(),
+			Active: clientPool.ActiveConnections(),
+		})
+	}
+	return snapshot
 }
 
 func (p *Pool) CountProviders() int {

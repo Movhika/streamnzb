@@ -89,15 +89,17 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 				}
 			}
 		} else if req.Season != "" && req.Episode != "" {
-			if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil {
-				seasonNum, _ := strconv.Atoi(req.Season)
-				epNum, _ := strconv.Atoi(req.Episode)
-				if seasonNum > 0 || epNum > 0 {
-					textQuery = fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
-				} else {
-					textQuery = fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
-				}
-			}
+			// String search for episodes disabled: use ID-only search and rely on FilterResults.
+			// Uncomment below to re-enable dual search (ID + "Show Name S00E00" query).
+			// if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil {
+			// 	seasonNum, _ := strconv.Atoi(req.Season)
+			// 	epNum, _ := strconv.Atoi(req.Episode)
+			// 	if seasonNum > 0 || epNum > 0 {
+			// 		textQuery = fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
+			// 	} else {
+			// 		textQuery = fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
+			// 	}
+			// }
 		}
 		if textQuery != "" {
 			textReq = &indexer.SearchRequest{Query: textQuery, Cat: req.Cat, Limit: req.Limit, Season: req.Season, Episode: req.Episode}

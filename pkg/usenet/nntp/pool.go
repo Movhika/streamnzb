@@ -18,6 +18,7 @@ type ClientPool struct {
 
 	idleClients chan *Client
 	slots       chan struct{}
+	stopCh      chan struct{} // closed once by Shutdown(); never re-used
 
 	bytesRead      int64
 	totalBytesRead int64
@@ -42,6 +43,7 @@ func NewClientPool(host string, port int, ssl bool, user, pass string, maxConn i
 		maxConn:     maxConn,
 		idleClients: make(chan *Client, maxConn),
 		slots:       make(chan struct{}, maxConn),
+		stopCh:      make(chan struct{}),
 		lastCheck:   time.Now(),
 	}
 
@@ -224,7 +226,6 @@ func (p *ClientPool) Put(c *Client) {
 	closed := p.closed
 	p.mu.Unlock()
 	if closed {
-
 		c.Quit()
 		p.slots <- struct{}{}
 		return
@@ -232,9 +233,16 @@ func (p *ClientPool) Put(c *Client) {
 	c.LastUsed = time.Now()
 	logger.Trace("nntp pool Put", "host", p.host)
 
+	// Use stopCh as an extra guard: if Shutdown() fires in the window between
+	// reading closed==false above and reaching this select, the stopCh case
+	// prevents a panic that would occur if idleClients were closed.
 	select {
 	case p.idleClients <- c:
 		// returned to idle
+	case <-p.stopCh:
+		// shutdown raced with Put; close and return slot
+		c.Quit()
+		p.slots <- struct{}{}
 	default:
 		logger.Trace("nntp pool Put idle full, closing connection", "host", p.host)
 		c.Quit()
@@ -253,30 +261,35 @@ func (p *ClientPool) Discard(c *Client) {
 
 func (p *ClientPool) reaperLoop() {
 	ticker := time.NewTicker(15 * time.Second)
-	timeout := 30 * time.Second
+	defer ticker.Stop() // always release the timer
 
-	for range ticker.C {
-		p.mu.Lock()
-		if p.closed {
-			p.mu.Unlock()
+	const timeout = 30 * time.Second
+
+	for {
+		select {
+		case <-p.stopCh:
 			return
+		case <-ticker.C:
 		}
-		p.mu.Unlock()
 
 		count := len(p.idleClients)
 		for i := 0; i < count; i++ {
 			select {
 			case c := <-p.idleClients:
 				if time.Since(c.LastUsed) > timeout {
-
 					c.Quit()
 					p.slots <- struct{}{}
 				} else {
-
-					p.idleClients <- c
+					// Put connection back, but respect a concurrent Shutdown().
+					select {
+					case p.idleClients <- c:
+					case <-p.stopCh:
+						c.Quit()
+						p.slots <- struct{}{}
+						return
+					}
 				}
 			default:
-
 			}
 		}
 	}
@@ -328,8 +341,18 @@ func (p *ClientPool) Shutdown() {
 		usageMgr.FlushProvider(providerName)
 	}
 
-	close(p.idleClients)
-	for c := range p.idleClients {
-		c.Quit()
+	// Signal reaperLoop and any racing Put() to stop.
+	// idleClients is intentionally NOT closed here; closing it while Put() or
+	// reaperLoop could still be writing to it causes a "send on closed channel"
+	// panic.  Instead we drain it with non-blocking receives.
+	close(p.stopCh)
+
+	for {
+		select {
+		case c := <-p.idleClients:
+			c.Quit()
+		default:
+			return
+		}
 	}
 }

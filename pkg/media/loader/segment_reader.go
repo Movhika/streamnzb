@@ -3,19 +3,23 @@ package loader
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"streamnzb/pkg/core/logger"
 )
 
 type SegmentReader struct {
-	file   *File
-	ctx    context.Context
-	cancel context.CancelFunc
-	parent context.Context
+	file    *File
+	ctx     context.Context
+	cancel  context.CancelFunc
+	parent  context.Context
+	traceID uint64
 
 	mu     sync.Mutex
 	segIdx int
@@ -27,6 +31,28 @@ type SegmentReader struct {
 	prefetching map[int]bool
 }
 
+var liveSegmentReaders atomic.Int64
+var nextSegmentReaderID atomic.Uint64
+var liveSegmentReaderRegistry sync.Map
+
+func LiveSegmentReaders() int64 {
+	return liveSegmentReaders.Load()
+}
+
+func LiveSegmentReaderDetails() []string {
+	details := make([]string, 0)
+	liveSegmentReaderRegistry.Range(func(_, value any) bool {
+		r, ok := value.(*SegmentReader)
+		if !ok || r == nil {
+			return true
+		}
+		details = append(details, r.traceDetail())
+		return true
+	})
+	sort.Strings(details)
+	return details
+}
+
 func NewSegmentReader(parent context.Context, f *File, startOffset int64) *SegmentReader {
 	ctx, cancel := context.WithCancel(parent)
 	sr := &SegmentReader{
@@ -34,6 +60,7 @@ func NewSegmentReader(parent context.Context, f *File, startOffset int64) *Segme
 		ctx:         ctx,
 		cancel:      cancel,
 		parent:      parent,
+		traceID:     nextSegmentReaderID.Add(1),
 		offset:      startOffset,
 		prefetching: make(map[int]bool),
 	}
@@ -51,8 +78,31 @@ func NewSegmentReader(parent context.Context, f *File, startOffset int64) *Segme
 	}
 
 	sr.startPrefetch()
+	liveSegmentReaders.Add(1)
+	liveSegmentReaderRegistry.Store(sr.traceID, sr)
 
 	return sr
+}
+
+func (r *SegmentReader) traceDetail() string {
+	r.mu.Lock()
+	id := r.traceID
+	segIdx := r.segIdx
+	segOff := r.segOff
+	offset := r.offset
+	closed := r.closed
+	r.mu.Unlock()
+
+	sessionID := "unknown"
+	fileName := ""
+	if r.file != nil {
+		fileName = r.file.Name()
+		if ownerID := r.file.OwnerSessionID(); ownerID != "" {
+			sessionID = ownerID
+		}
+	}
+
+	return fmt.Sprintf("id=%d session=%s file=%q offset=%d seg=%d seg_off=%d closed=%t", id, sessionID, fileName, offset, segIdx, segOff, closed)
 }
 
 const maxPrefetchAhead = 16 // cap "ahead" cache so memory stays bounded during playback
@@ -122,6 +172,10 @@ func (r *SegmentReader) startPrefetch() {
 	current := r.segIdx
 	r.mu.Unlock()
 
+	// Cap concurrent prefetch goroutines to the actual pool connection count so we
+	// don't spawn 16 goroutines when the pool only has e.g. 2 connections — the
+	// excess goroutines would immediately block on pool.Get(), wasting stack memory
+	// and adding lock contention.
 	maxWorkers := r.file.TotalConnections()
 	if maxWorkers > 20 {
 		maxWorkers = 20
@@ -131,7 +185,11 @@ func (r *SegmentReader) startPrefetch() {
 	}
 
 	r.mu.Lock()
+	inFlight := len(r.prefetching)
 	for i := 0; i < maxPrefetchAhead; i++ {
+		if inFlight >= maxWorkers {
+			break
+		}
 		idx := current + i
 		if idx >= len(r.file.segments) {
 			break
@@ -143,6 +201,7 @@ func (r *SegmentReader) startPrefetch() {
 			continue
 		}
 		r.prefetching[idx] = true
+		inFlight++
 		r.prefetchWg.Add(1)
 		go func(segIdx int) {
 			defer r.prefetchWg.Done()
@@ -248,6 +307,8 @@ func (r *SegmentReader) Close() error {
 	}
 	// Drop cached segments for this file so already-played data is released (single file: at stream end; RAR: when we move to the next volume).
 	r.file.ClearSegmentCache()
+	liveSegmentReaderRegistry.Delete(r.traceID)
+	liveSegmentReaders.Add(-1)
 	return nil
 }
 

@@ -152,16 +152,14 @@ func (s *Session) handleArticle(args []string) error {
 		}
 		if !s.ensureGroup(client) {
 			release()
+			exclude = append(exclude, pid) // don't retry the same broken provider
 			continue
 		}
 		article, err := client.GetArticle(messageID)
 		release()
 		if err != nil {
-			if strings.Contains(err.Error(), "430") || strings.Contains(err.Error(), "No such article") {
-				exclude = append(exclude, pid)
-				continue
-			}
 			logger.Debug("NNTP proxy: GetArticle failed", "messageID", messageID, "err", err)
+			exclude = append(exclude, pid) // always exclude on error; prevents infinite retry
 			continue
 		}
 		lines := []string{fmt.Sprintf("220 0 %s", messageID)}
@@ -196,6 +194,7 @@ func (s *Session) handleBody(args []string) error {
 		}
 		if !s.ensureGroup(client) {
 			release()
+			exclude = append(exclude, pid) // don't retry the same broken provider
 			continue
 		}
 		_, err = client.StreamBody(messageID, s.conn)
@@ -204,12 +203,9 @@ func (s *Session) handleBody(args []string) error {
 				discard()
 				return err
 			}
-			release()
-			if strings.Contains(err.Error(), "430") || strings.Contains(err.Error(), "No such article") {
-				exclude = append(exclude, pid)
-				continue
-			}
 			logger.Debug("NNTP proxy: StreamBody failed", "messageID", messageID, "err", err)
+			discard()
+			exclude = append(exclude, pid) // always exclude on error; prevents infinite retry
 			continue
 		}
 		release()
@@ -241,16 +237,14 @@ func (s *Session) handleHead(args []string) error {
 		}
 		if !s.ensureGroup(client) {
 			release()
+			exclude = append(exclude, pid) // don't retry the same broken provider
 			continue
 		}
 		head, err := client.GetHead(messageID)
 		release()
 		if err != nil {
-			if strings.Contains(err.Error(), "430") || strings.Contains(err.Error(), "No such article") {
-				exclude = append(exclude, pid)
-				continue
-			}
 			logger.Debug("NNTP proxy: GetHead failed", "messageID", messageID, "err", err)
+			exclude = append(exclude, pid) // always exclude on error; prevents infinite retry
 			continue
 		}
 		lines := []string{fmt.Sprintf("221 0 %s", messageID)}
@@ -285,12 +279,14 @@ func (s *Session) handleStat(args []string) error {
 		}
 		if !s.ensureGroup(client) {
 			release()
+			exclude = append(exclude, pid) // don't retry the same broken provider
 			continue
 		}
 		exists, err := client.CheckArticle(messageID)
 		release()
 		if err != nil {
 			logger.Debug("NNTP proxy: CheckArticle failed", "messageID", messageID, "err", err)
+			exclude = append(exclude, pid) // always exclude on error; prevents infinite retry
 			continue
 		}
 		if exists {

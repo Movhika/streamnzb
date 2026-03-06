@@ -148,6 +148,14 @@ func (b *bodyReader) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
+// Close ensures EndResponse is called even when the caller stops reading
+// before reaching io.EOF (e.g. on a decode error or context cancellation).
+// It is idempotent; calling it after a complete read is a safe no-op.
+func (b *bodyReader) Close() error {
+	b.once.Do(b.endResponse)
+	return nil
+}
+
 func formatMessageID(messageID string) string {
 	s := strings.TrimSpace(messageID)
 	if len(s) >= 2 && s[0] == '<' && s[len(s)-1] == '>' {
@@ -156,7 +164,10 @@ func formatMessageID(messageID string) string {
 	return "<" + s + ">"
 }
 
-func (c *Client) Body(messageID string) (io.Reader, error) {
+// Body returns the body of the article identified by messageID.
+// The caller MUST close the returned ReadCloser when done (or on error)
+// to release the underlying textproto pipeline slot.
+func (c *Client) Body(messageID string) (io.ReadCloser, error) {
 	const maxRetries = 2
 	var lastErr error
 
@@ -299,7 +310,7 @@ func (c *Client) GetArticle(messageID string) (string, error) {
 		return "", err
 	}
 
-	var lines []string
+	var sb strings.Builder
 	for {
 		line, err := c.conn.ReadLine()
 		if err != nil {
@@ -308,10 +319,13 @@ func (c *Client) GetArticle(messageID string) (string, error) {
 		if line == "." {
 			break
 		}
-		lines = append(lines, line)
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(line)
 	}
 
-	result := strings.Join(lines, "\n")
+	result := sb.String()
 	if c.pool != nil {
 		c.pool.TrackRead(len(result))
 	}
@@ -333,7 +347,7 @@ func (c *Client) GetBody(messageID string) (string, error) {
 		return "", err
 	}
 
-	var lines []string
+	var sb strings.Builder
 	for {
 		line, err := c.conn.ReadLine()
 		if err != nil {
@@ -342,26 +356,27 @@ func (c *Client) GetBody(messageID string) (string, error) {
 		if line == "." {
 			break
 		}
-		lines = append(lines, line)
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(line)
 	}
 
-	result := strings.Join(lines, "\n")
+	result := sb.String()
 	if c.pool != nil {
 		c.pool.TrackRead(len(result))
 	}
 	return result, nil
 }
 
+// drainBackendBody discards any unread body remaining in the pipeline.
+// It is capped at 10 MB to prevent a corrupt or adversarial response from
+// stalling the connection indefinitely.
 func (c *Client) drainBackendBody() {
-	const maxDrainLines = 10_000_000
-	for i := 0; i < maxDrainLines; i++ {
-		line, err := c.conn.ReadLine()
-		if err != nil {
-			return
-		}
-		if line == "." {
-			return
-		}
+	const maxDrainBytes = 10 << 20 // 10 MB
+	n, _ := io.Copy(io.Discard, io.LimitReader(c.conn.DotReader(), maxDrainBytes))
+	if c.pool != nil && n > 0 {
+		c.pool.TrackRead(int(n))
 	}
 }
 
@@ -434,7 +449,7 @@ func (c *Client) GetHead(messageID string) (string, error) {
 		return "", err
 	}
 
-	var lines []string
+	var sb strings.Builder
 	for {
 		line, err := c.conn.ReadLine()
 		if err != nil {
@@ -443,10 +458,13 @@ func (c *Client) GetHead(messageID string) (string, error) {
 		if line == "." {
 			break
 		}
-		lines = append(lines, line)
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(line)
 	}
 
-	result := strings.Join(lines, "\n")
+	result := sb.String()
 	if c.pool != nil {
 		c.pool.TrackRead(len(result))
 	}

@@ -17,6 +17,20 @@ type SegmentCacheBudget struct {
 	current  atomic.Int64
 }
 
+func (b *SegmentCacheBudget) CurrentBytes() int64 {
+	if b == nil {
+		return 0
+	}
+	return b.current.Load()
+}
+
+func (b *SegmentCacheBudget) MaxBytes() int64 {
+	if b == nil {
+		return 0
+	}
+	return b.maxBytes
+}
+
 // NewSegmentCacheBudget creates a budget of maxMB megabytes (0 = no limit).
 func NewSegmentCacheBudget(maxMB int) *SegmentCacheBudget {
 	if maxMB <= 0 {
@@ -52,9 +66,25 @@ func (b *SegmentCacheBudget) Release(n int64) {
 type SegmentCache interface {
 	Get(messageID string) (SegmentData, bool)
 	Set(messageID string, data SegmentData)
+	// Purge drops all cached entries and resets the budget counter to zero.
+	// Call this when no sessions are active so the GC can reclaim the memory.
+	Purge()
 }
 
-const DefaultSegmentCacheCapacity = 1024
+type CacheStats struct {
+	Entries       int
+	Bytes         int64
+	BudgetCurrent int64
+	BudgetMax     int64
+}
+
+type segmentCacheStatser interface {
+	Stats() CacheStats
+}
+
+// DefaultSegmentCacheCapacity is the fallback count-based cap when no budget is configured.
+// 128 segments × ~750 KB = ~96 MB maximum, a safe default without a memory limit.
+const DefaultSegmentCacheCapacity = 128
 
 func NewMemorySegmentCache() SegmentCache {
 	return NewMemorySegmentCacheWithBudget(nil)
@@ -165,9 +195,41 @@ func (c *memorySegmentCache) evictLocked() {
 	c.lru.Remove(el)
 }
 
+// Purge drops all cached entries and resets the budget to zero.
+func (c *memorySegmentCache) Purge() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Release all budget so future Reserves work without stale accounting.
+	if c.budget != nil {
+		for _, el := range c.m {
+			ent := el.Value.(*cacheEntry)
+			c.budget.Release(int64(len(ent.data.Body)))
+		}
+	}
+	c.m = make(map[string]*list.Element)
+	c.lru.Init()
+}
+
+func (c *memorySegmentCache) Stats() CacheStats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	stats := CacheStats{Entries: len(c.m)}
+	if c.budget != nil {
+		stats.BudgetCurrent = c.budget.CurrentBytes()
+		stats.BudgetMax = c.budget.MaxBytes()
+	}
+	for _, el := range c.m {
+		stats.Bytes += int64(len(el.Value.(*cacheEntry).data.Body))
+	}
+	return stats
+}
+
 func NoopSegmentCache() SegmentCache { return &noopSegmentCache{} }
 
 type noopSegmentCache struct{}
 
 func (n *noopSegmentCache) Get(messageID string) (SegmentData, bool) { return SegmentData{}, false }
 func (n *noopSegmentCache) Set(messageID string, data SegmentData)   {}
+func (n *noopSegmentCache) Purge()                                   {}
+func (n *noopSegmentCache) Stats() CacheStats                        { return CacheStats{} }
