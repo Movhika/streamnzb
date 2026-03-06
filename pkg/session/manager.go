@@ -218,7 +218,7 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 	m.mu.Unlock()
 
 	logger.Trace("session CreateSession heavy work", "id", sessionID)
-	contentFiles := nzbData.GetContentFiles()
+	contentFiles := selectSessionContentFiles(nzbData, contentIDs)
 	if len(contentFiles) == 0 {
 		return nil, fmt.Errorf("no content files found in NZB")
 	}
@@ -230,17 +230,7 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 	m.mu.RUnlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	var loaderFiles []*loader.File
-	for _, info := range contentFiles {
-		var lf *loader.File
-		if usenetPool != nil {
-			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool, cacheBudget)
-		} else {
-			lf = loader.NewFile(ctx, info.File, pools, estimator, nil, cacheBudget)
-		}
-		lf.SetOwnerSessionID(sessionID)
-		loaderFiles = append(loaderFiles, lf)
-	}
+	loaderFiles := buildLoaderFiles(ctx, sessionID, contentFiles, pools, usenetPool, estimator, cacheBudget)
 
 	session := &Session{
 		ID:         sessionID,
@@ -268,6 +258,33 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 	m.sessions[sessionID] = session
 	logger.Trace("session CreateSession done", "id", sessionID)
 	return session, nil
+}
+
+func selectSessionContentFiles(nzbData *nzb.NZB, contentIDs *AvailReportMeta) []*nzb.FileInfo {
+	if nzbData == nil {
+		return nil
+	}
+	if contentIDs != nil && contentIDs.Season > 0 && contentIDs.Episode > 0 {
+		if files := nzbData.GetContentFilesForEpisode(contentIDs.Season, contentIDs.Episode); len(files) > 0 {
+			return files
+		}
+	}
+	return nzbData.GetContentFiles()
+}
+
+func buildLoaderFiles(ctx context.Context, ownerID string, contentFiles []*nzb.FileInfo, pools []*nntp.ClientPool, usenetPool loader.SegmentFetcher, estimator *loader.SegmentSizeEstimator, cacheBudget *pool.SegmentCacheBudget) []*loader.File {
+	loaderFiles := make([]*loader.File, 0, len(contentFiles))
+	for _, info := range contentFiles {
+		var lf *loader.File
+		if usenetPool != nil {
+			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool, cacheBudget)
+		} else {
+			lf = loader.NewFile(ctx, info.File, pools, estimator, nil, cacheBudget)
+		}
+		lf.SetOwnerSessionID(ownerID)
+		loaderFiles = append(loaderFiles, lf)
+	}
+	return loaderFiles
 }
 
 func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *release.Release, idx indexer.Indexer, contentIDs *AvailReportMeta, contentType, contentID string) (*Session, error) {
@@ -362,7 +379,7 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 		logger.Debug("Failed to parse NZB", "indexer", indexerName, "title", itemTitle, "url", nzbURL, "len", len(data), "snippet", snippet, "err", err)
 		return nil, fmt.Errorf("failed to parse lazy downloaded NZB: %w", err)
 	}
-	contentFiles := parsedNZB.GetContentFiles()
+	contentFiles := selectSessionContentFiles(parsedNZB, s.ContentIDs)
 	if len(contentFiles) == 0 {
 		logger.Error("Lazy load: no content files in NZB",
 			"title", itemTitle,
@@ -379,17 +396,7 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	cacheBudget := manager.cacheBudget
 	manager.mu.RUnlock()
 
-	var loaderFiles []*loader.File
-	for _, info := range contentFiles {
-		var lf *loader.File
-		if usenetPool != nil {
-			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool, cacheBudget)
-		} else {
-			lf = loader.NewFile(ctx, info.File, pools, estimator, nil, cacheBudget)
-		}
-		lf.SetOwnerSessionID(s.ID)
-		loaderFiles = append(loaderFiles, lf)
-	}
+	loaderFiles := buildLoaderFiles(ctx, s.ID, contentFiles, pools, usenetPool, estimator, cacheBudget)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

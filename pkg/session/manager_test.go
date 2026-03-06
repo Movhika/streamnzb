@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"encoding/xml"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,13 +14,17 @@ import (
 	"streamnzb/pkg/release"
 )
 
-type fakeIndexer struct{}
+type fakeIndexer struct {
+	data []byte
+	err  error
+}
 
 func (fakeIndexer) Search(indexer.SearchRequest) (*indexer.SearchResponse, error) { return nil, nil }
-func (fakeIndexer) DownloadNZB(context.Context, string) ([]byte, error)           { return nil, nil }
+func (f fakeIndexer) DownloadNZB(context.Context, string) ([]byte, error)         { return f.data, f.err }
 func (fakeIndexer) Ping() error                                                   { return nil }
 func (fakeIndexer) Name() string                                                  { return "fake" }
 func (fakeIndexer) GetUsage() indexer.Usage                                       { return indexer.Usage{} }
+func (fakeIndexer) Type() string                                                  { return "aggregator" }
 
 func TestSessionCloseClearsHeavyReferences(t *testing.T) {
 	logger.Init("ERROR")
@@ -82,4 +88,68 @@ func TestCreateSessionAssignsFileOwners(t *testing.T) {
 		t.Fatalf("expected sessionsWithFilesIDs to return sess-1, got %v", got)
 	}
 	s.Close()
+}
+
+func TestCreateSessionSelectsRequestedEpisode(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	nzbData := &nzb.NZB{Files: []nzb.File{
+		{Subject: "Show.S01E06.1080p.mkv", Segments: []nzb.Segment{{ID: "<a>", Bytes: 60}}},
+		{Subject: "Show.S01E05.1080p.mkv", Segments: []nzb.Segment{{ID: "<b>", Bytes: 50}}},
+	}}
+
+	s, err := m.CreateSession("sess-target", nzbData, nil, &AvailReportMeta{Season: 1, Episode: 5})
+	if err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+	if got := s.File.Name(); !strings.Contains(got, "S01E05") {
+		t.Fatalf("expected target episode file, got %q", got)
+	}
+	if len(s.Files) != 1 {
+		t.Fatalf("expected one selected file, got %d", len(s.Files))
+	}
+	s.Close()
+}
+
+func TestGetOrDownloadNZBSelectsRequestedEpisode(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	data := marshalTestNZB(t, &nzb.NZB{Files: []nzb.File{
+		{Subject: "Show.S01E06.1080p.mkv", Segments: []nzb.Segment{{ID: "<a>", Bytes: 60}}},
+		{Subject: "Show.S01E05.1080p.mkv", Segments: []nzb.Segment{{ID: "<b>", Bytes: 50}}},
+	}})
+	s, err := m.CreateDeferredSession("sess-lazy", "https://example.invalid/get?nzb=1&apikey=test", nil, fakeIndexer{data: data}, &AvailReportMeta{Season: 1, Episode: 5}, "series", "tmdb:1:1:5")
+	if err != nil {
+		t.Fatalf("CreateDeferredSession returned error: %v", err)
+	}
+	if _, err := s.GetOrDownloadNZB(m); err != nil {
+		t.Fatalf("GetOrDownloadNZB returned error: %v", err)
+	}
+	if s.File == nil {
+		t.Fatal("expected session file after lazy load")
+	}
+	if got := s.File.Name(); !strings.Contains(got, "S01E05") {
+		t.Fatalf("expected target episode file after lazy load, got %q", got)
+	}
+	if len(s.Files) != 1 {
+		t.Fatalf("expected one selected file after lazy load, got %d", len(s.Files))
+	}
+	s.Close()
+}
+
+func marshalTestNZB(t *testing.T, doc *nzb.NZB) []byte {
+	t.Helper()
+	data, err := xml.Marshal(doc)
+	if err != nil {
+		t.Fatalf("xml.Marshal: %v", err)
+	}
+	return data
 }

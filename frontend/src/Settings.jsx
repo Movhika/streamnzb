@@ -91,7 +91,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           username: idx.username || '',
           password: idx.password || '',
           use_season_episode_params: idx.use_season_episode_params,
-          include_year_in_search: idx.include_year_in_search === true,
+		          enable_series_season_search: idx.enable_series_season_search ?? idx.enable_series_pack_search,
+		          enable_series_complete_search: idx.enable_series_complete_search ?? idx.enable_series_pack_search,
+		          include_year_in_search: idx.include_year_in_search,
           search_title_normalize: idx.search_title_normalize === true
         })) || []
       }

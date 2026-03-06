@@ -27,6 +27,10 @@ type FailedBlueprint struct {
 }
 
 func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interface{}, password string) (ReadSeekCloser, string, int64, interface{}, error) {
+	return GetMediaStreamForEpisode(ctx, files, cachedBP, password, EpisodeTarget{})
+}
+
+func GetMediaStreamForEpisode(ctx context.Context, files []UnpackableFile, cachedBP interface{}, password string, target EpisodeTarget) (ReadSeekCloser, string, int64, interface{}, error) {
 	if cachedBP != nil {
 		switch bp := cachedBP.(type) {
 		case *ArchiveBlueprint:
@@ -65,7 +69,7 @@ func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interf
 		logger.Trace("Detected RAR archive", "volumes", len(rarFiles))
 		unpackables := make([]UnpackableFile, len(files))
 		copy(unpackables, files)
-		bp, err := ScanArchive(unpackables, password)
+		bp, err := ScanArchive(unpackables, password, target)
 		if err != nil {
 			rarScanFailed = true
 			logger.Warn("ScanArchive failed, falling back to other methods", "err", err)
@@ -82,7 +86,7 @@ func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interf
 	if err == nil && len(archiveFiles) > 0 {
 		firstVolName := ExtractFilename(archiveFiles[0].Name())
 		logger.Info("Detected 7z archive", "name", firstVolName, "parts", len(archiveFiles))
-		newBp, err := CreateSevenZipBlueprint(archiveFiles, firstVolName, password)
+		newBp, err := CreateSevenZipBlueprint(archiveFiles, firstVolName, password, target)
 		if err != nil {
 			return nil, "", 0, nil, err
 		}
@@ -90,15 +94,14 @@ func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interf
 		return s, n, sz, newBp, err
 	}
 
-	for i, f := range files {
+	if directIdx := selectDirectFileIndex(files, target); directIdx >= 0 {
+		f := files[directIdx]
 		name := ExtractFilename(f.Name())
-		if IsVideoFile(name) {
-			stream, err := f.OpenStreamCtx(ctx)
-			if err != nil {
-				return nil, "", 0, nil, err
-			}
-			return stream, name, f.Size(), &DirectBlueprint{FileName: name, FileIndex: i}, nil
+		stream, err := f.OpenStreamCtx(ctx)
+		if err != nil {
+			return nil, "", 0, nil, err
 		}
+		return stream, name, f.Size(), &DirectBlueprint{FileName: name, FileIndex: directIdx}, nil
 	}
 
 	var largestFile UnpackableFile
@@ -123,7 +126,7 @@ func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interf
 			unpackables := make([]UnpackableFile, len(files))
 			copy(unpackables, files)
 			logger.Info("Attempting heuristic RAR scan on unknown files")
-			bp, err := ScanArchive(unpackables, password)
+			bp, err := ScanArchive(unpackables, password, target)
 			if err == nil {
 				s, name, size, err := StreamFromBlueprint(ctx, bp, password)
 				if err == nil {

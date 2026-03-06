@@ -57,11 +57,12 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 	}
 
 	if usePerIndexerQuery {
+		// Per-indexer text queries should be query-only. Keeping season/episode here
+		// causes some indexers to switch back to exact-episode search modes, which
+		// prevents season/show packs from entering the candidate set.
 		textReq = &indexer.SearchRequest{
 			Cat:                req.Cat,
 			Limit:              req.Limit,
-			Season:             req.Season,
-			Episode:            req.Episode,
 			EffectiveByIndexer: req.EffectiveByIndexer,
 			PerIndexerQuery:    req.PerIndexerQuery,
 		}

@@ -151,18 +151,22 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 				)
 				continue
 			}
-			if expectSeason > 0 && parsed.Season != expectSeason {
+			if expectEpisode > 0 {
+				if !parsed.MatchesEpisodeRequest(expectSeason, expectEpisode) {
+					logger.Trace("FilterResults dropped: episode_request",
+						"expect_season", expectSeason,
+						"expect_episode", expectEpisode,
+						"got_seasons", parsed.Seasons,
+						"got_episodes", parsed.Episodes,
+						"complete", parsed.Complete,
+						"release", rel.Title,
+					)
+					continue
+				}
+			} else if expectSeason > 0 && !parsed.HasSeason(expectSeason) {
 				logger.Trace("FilterResults dropped: season",
 					"expect_season", expectSeason,
-					"got_season", parsed.Season,
-					"release", rel.Title,
-				)
-				continue
-			}
-			if expectEpisode > 0 && parsed.Episode != expectEpisode {
-				logger.Trace("FilterResults dropped: episode",
-					"expect_episode", expectEpisode,
-					"got_episode", parsed.Episode,
+					"got_seasons", parsed.Seasons,
 					"release", rel.Title,
 				)
 				continue

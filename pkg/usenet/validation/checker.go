@@ -66,6 +66,10 @@ func (c *Checker) GetPrimaryProviderHost() string {
 }
 
 func (c *Checker) ValidateNZBSingleProvider(ctx context.Context, nzbData *nzb.NZB, providerName string) *ValidationResult {
+	return c.ValidateNZBSingleProviderForEpisode(ctx, nzbData, providerName, 0, 0)
+}
+
+func (c *Checker) ValidateNZBSingleProviderForEpisode(ctx context.Context, nzbData *nzb.NZB, providerName string, season, episode int) *ValidationResult {
 	c.mu.RLock()
 	up := c.pool
 	c.mu.RUnlock()
@@ -79,10 +83,14 @@ func (c *Checker) ValidateNZBSingleProvider(ctx context.Context, nzbData *nzb.NZ
 	}
 	defer release()
 	host := up.Host(providerName)
-	return c.validateProviderWithClient(ctx, nzbData, providerName, client, host)
+	return c.validateProviderWithClient(ctx, nzbData, providerName, client, host, season, episode)
 }
 
 func (c *Checker) ValidateNZBSingleProviderExtended(ctx context.Context, nzbData *nzb.NZB, providerName string) *ValidationResult {
+	return c.ValidateNZBSingleProviderExtendedForEpisode(ctx, nzbData, providerName, 0, 0)
+}
+
+func (c *Checker) ValidateNZBSingleProviderExtendedForEpisode(ctx context.Context, nzbData *nzb.NZB, providerName string, season, episode int) *ValidationResult {
 	c.mu.RLock()
 	up := c.pool
 	c.mu.RUnlock()
@@ -95,7 +103,7 @@ func (c *Checker) ValidateNZBSingleProviderExtended(ctx context.Context, nzbData
 		return &ValidationResult{Provider: providerName, Error: fmt.Errorf("get connection: %w", err)}
 	}
 	host := up.Host(providerName)
-	return c.validateProviderExtendedWithClient(ctx, nzbData, providerName, client, release, discard, host)
+	return c.validateProviderExtendedWithClient(ctx, nzbData, providerName, client, release, discard, host, season, episode)
 }
 
 func excludeProvider(order []string, except string) []string {
@@ -109,6 +117,10 @@ func excludeProvider(order []string, except string) []string {
 }
 
 func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]*ValidationResult {
+	return c.ValidateNZBForEpisode(ctx, nzbData, 0, 0)
+}
+
+func (c *Checker) ValidateNZBForEpisode(ctx context.Context, nzbData *nzb.NZB, season, episode int) map[string]*ValidationResult {
 	results := make(map[string]*ValidationResult)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -136,7 +148,7 @@ func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]
 				return
 			}
 			host := up.Host(name)
-			result := c.validateProviderExtendedWithClient(ctx, nzbData, name, client, release, discard, host)
+			result := c.validateProviderExtendedWithClient(ctx, nzbData, name, client, release, discard, host, season, episode)
 			mu.Lock()
 			results[name] = result
 			mu.Unlock()
@@ -176,14 +188,17 @@ func maxOr(a, b int) int {
 	return b
 }
 
-func (c *Checker) validateProviderWithClient(ctx context.Context, nzbData *nzb.NZB, providerName string, client *nntp.Client, host string) *ValidationResult {
+func (c *Checker) validateProviderWithClient(ctx context.Context, nzbData *nzb.NZB, providerName string, client *nntp.Client, host string, season, episode int) *ValidationResult {
 	result := &ValidationResult{
 		Provider: providerName,
 		Host:     host,
 	}
 
-	articles := c.getSampleArticles(nzbData)
-	result.TotalArticles = len(nzbData.Files[0].Segments)
+	info := selectValidationFile(nzbData, season, episode)
+	articles := c.getSampleArticlesForEpisode(nzbData, season, episode)
+	if info != nil && info.File != nil {
+		result.TotalArticles = len(info.File.Segments)
+	}
 	result.CheckedArticles = len(articles)
 
 	type statResult struct {
@@ -232,14 +247,14 @@ func (c *Checker) validateProviderWithClient(ctx context.Context, nzbData *nzb.N
 	return result
 }
 
-func (c *Checker) validateProviderExtendedWithClient(ctx context.Context, nzbData *nzb.NZB, providerName string, client *nntp.Client, release, discard func(), host string) *ValidationResult {
-	result := c.validateProviderWithClient(ctx, nzbData, providerName, client, host)
+func (c *Checker) validateProviderExtendedWithClient(ctx context.Context, nzbData *nzb.NZB, providerName string, client *nntp.Client, release, discard func(), host string, season, episode int) *ValidationResult {
+	result := c.validateProviderWithClient(ctx, nzbData, providerName, client, host, season, episode)
 	if result.Error != nil || !result.Available {
 		release()
 		return result
 	}
 
-	info := nzbData.GetPlaybackFile()
+	info := selectValidationFile(nzbData, season, episode)
 	if info == nil || info.File == nil || len(info.File.Segments) == 0 {
 		release()
 		return result
@@ -252,7 +267,7 @@ func (c *Checker) validateProviderExtendedWithClient(ctx context.Context, nzbDat
 		_ = client.Group(info.File.Groups[0])
 	}
 
-	ct := nzbData.CompressionType()
+	ct := compressionTypeForValidation(nzbData, season, episode)
 	var firstSegData []byte
 	var lastSegData []byte
 
@@ -328,13 +343,31 @@ func probeSegmentIndices(total int) []int {
 	return []int{0, total / 2, total - 1}
 }
 
+func selectValidationFile(nzbData *nzb.NZB, season, episode int) *nzb.FileInfo {
+	if nzbData == nil {
+		return nil
+	}
+	return nzbData.GetPlaybackFileForEpisode(season, episode)
+}
+
+func compressionTypeForValidation(nzbData *nzb.NZB, season, episode int) string {
+	if nzbData == nil {
+		return "direct"
+	}
+	return nzbData.CompressionTypeForEpisode(season, episode)
+}
+
 func (c *Checker) getSampleArticles(nzbData *nzb.NZB) []string {
+	return c.getSampleArticlesForEpisode(nzbData, 0, 0)
+}
+
+func (c *Checker) getSampleArticlesForEpisode(nzbData *nzb.NZB, season, episode int) []string {
 	if len(nzbData.Files) == 0 {
 		return nil
 	}
 
 	var file *nzb.File
-	if info := nzbData.GetPlaybackFile(); info != nil {
+	if info := selectValidationFile(nzbData, season, episode); info != nil {
 		file = info.File
 	} else {
 		file = &nzbData.Files[0]

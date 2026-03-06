@@ -3,6 +3,7 @@ package nzb
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"streamnzb/pkg/core/logger"
@@ -32,5 +33,74 @@ func TestCompressionType_posterAttribute(t *testing.T) {
 	contentFiles := nzb.GetContentFiles()
 	if len(contentFiles) == 0 {
 		t.Error("GetContentFiles() returned empty, expected RAR parts")
+	}
+}
+
+func TestGetContentFilesForEpisodePrefersMatchingEpisode(t *testing.T) {
+	logger.Init("ERROR")
+
+	n := &NZB{Files: []File{
+		{Subject: "Show.S01E06.1080p.mkv", Segments: []Segment{{ID: "<a>", Bytes: 600}}},
+		{Subject: "Show.S01E05.1080p.mkv", Segments: []Segment{{ID: "<b>", Bytes: 500}}},
+	}}
+
+	files := n.GetContentFilesForEpisode(1, 5)
+	if len(files) != 1 {
+		t.Fatalf("expected one matching file, got %d", len(files))
+	}
+	if !strings.Contains(files[0].Filename, "S01E05") {
+		t.Fatalf("expected episode 5 file, got %q", files[0].Filename)
+	}
+}
+
+func TestGetContentFilesForEpisodePrefersSeasonPackAndOrdersFirstVolume(t *testing.T) {
+	logger.Init("ERROR")
+
+	n := &NZB{Files: []File{
+		{Subject: "Show.S02E01.1080p.mkv", Segments: []Segment{{ID: "<a>", Bytes: 900}}},
+		{Subject: "Show.S01.COMPLETE.part02.rar", Segments: []Segment{{ID: "<b>", Bytes: 350}}},
+		{Subject: "Show.S01.COMPLETE.part01.rar", Segments: []Segment{{ID: "<c>", Bytes: 300}}},
+	}}
+
+	files := n.GetContentFilesForEpisode(1, 5)
+	if len(files) != 2 {
+		t.Fatalf("expected season pack archive set, got %d files", len(files))
+	}
+	if !strings.Contains(files[0].Filename, "part01") {
+		t.Fatalf("expected first archive volume first, got %q", files[0].Filename)
+	}
+	if !strings.Contains(strings.ToLower(files[0].Filename), "show.s01.complete") {
+		t.Fatalf("expected season pack selection, got %q", files[0].Filename)
+	}
+}
+
+func TestGetPlaybackFileForEpisodePrefersRequestedEpisodeOverLargerOtherEpisode(t *testing.T) {
+	logger.Init("ERROR")
+
+	n := &NZB{Files: []File{
+		{Subject: "Show.S01E06.1080p.mkv", Segments: []Segment{{ID: "<a>", Bytes: 900}}},
+		{Subject: "Show.S01E05.1080p.mkv", Segments: []Segment{{ID: "<b>", Bytes: 500}}},
+	}}
+
+	info := n.GetPlaybackFileForEpisode(1, 5)
+	if info == nil {
+		t.Fatal("expected playback file")
+	}
+	if !strings.Contains(info.Filename, "S01E05") {
+		t.Fatalf("expected episode 5 playback file, got %q", info.Filename)
+	}
+}
+
+func TestCompressionTypeForEpisodeUsesSelectedPackGroup(t *testing.T) {
+	logger.Init("ERROR")
+
+	n := &NZB{Files: []File{
+		{Subject: "Show.S01E05.1080p.mkv", Segments: []Segment{{ID: "<a>", Bytes: 300}}},
+		{Subject: "Show.S02.COMPLETE.part01.rar", Segments: []Segment{{ID: "<b>", Bytes: 900}}},
+		{Subject: "Show.S02.COMPLETE.part02.rar", Segments: []Segment{{ID: "<c>", Bytes: 950}}},
+	}}
+
+	if ct := n.CompressionTypeForEpisode(1, 5); ct != "direct" {
+		t.Fatalf("expected direct compression for requested episode, got %q", ct)
 	}
 }

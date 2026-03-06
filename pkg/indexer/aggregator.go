@@ -129,31 +129,41 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 		}
 		if req.PerIndexerQuery != nil && len(queries) > 0 {
 
-			go func(indexer Indexer) {
+			go func(indexer Indexer, queries []string) {
 				defer wg.Done()
-				var merged []Item
-				for _, q := range queries {
+				resultsByQuery := make([][]Item, len(queries))
+				var queryWG sync.WaitGroup
+				for i, q := range queries {
 					if q == "" {
 						continue
 					}
-					reqCopy := req
-					reqCopy.EffectiveByIndexer = nil
-					reqCopy.PerIndexerQuery = nil
-					if req.EffectiveByIndexer != nil {
-						reqCopy.OptionalOverrides = req.EffectiveByIndexer[indexer.Name()]
-					}
-					reqCopy.Query = q
-					resp, err := indexer.Search(reqCopy)
-					if err != nil {
-						logger.Warn("Indexer search failed", "indexer", indexer.Name(), "query", q, "err", err)
-						continue
-					}
-					if resp != nil && len(resp.Channel.Items) > 0 {
-						merged = append(merged, resp.Channel.Items...)
-					}
+					queryWG.Add(1)
+					go func(i int, q string) {
+						defer queryWG.Done()
+						reqCopy := req
+						reqCopy.EffectiveByIndexer = nil
+						reqCopy.PerIndexerQuery = nil
+						if req.EffectiveByIndexer != nil {
+							reqCopy.OptionalOverrides = req.EffectiveByIndexer[indexer.Name()]
+						}
+						reqCopy.Query = q
+						resp, err := indexer.Search(reqCopy)
+						if err != nil {
+							logger.Warn("Indexer search failed", "indexer", indexer.Name(), "query", q, "err", err)
+							return
+						}
+						if resp != nil && len(resp.Channel.Items) > 0 {
+							resultsByQuery[i] = resp.Channel.Items
+						}
+					}(i, q)
+				}
+				queryWG.Wait()
+				var merged []Item
+				for _, items := range resultsByQuery {
+					merged = append(merged, items...)
 				}
 				resultsChan <- merged
-			}(idx)
+			}(idx, append([]string(nil), queries...))
 			continue
 		}
 		reqCopy := req

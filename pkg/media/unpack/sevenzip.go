@@ -22,7 +22,7 @@ type SevenZipBlueprint struct {
 	Encrypted    bool
 }
 
-func CreateSevenZipBlueprint(files []UnpackableFile, firstVolName string, password string) (*SevenZipBlueprint, error) {
+func CreateSevenZipBlueprint(files []UnpackableFile, firstVolName string, password string, target EpisodeTarget) (*SevenZipBlueprint, error) {
 	archiveFiles := make([]UnpackableFile, len(files))
 	copy(archiveFiles, files)
 	sort.Slice(archiveFiles, func(i, j int) bool {
@@ -58,14 +58,24 @@ func CreateSevenZipBlueprint(files []UnpackableFile, firstVolName string, passwo
 	}
 
 	bestIdx, bestSize := -1, int64(0)
+	candidates := make([]namedEpisodeCandidate, 0, len(fileInfos))
 	for i, fi := range fileInfos {
 		if !IsVideoFile(fi.Name) || fi.Compressed || IsSampleFile(fi.Name) {
 			continue
 		}
+		candidates = append(candidates, namedEpisodeCandidate{
+			Name:  filepath.Base(fi.Name),
+			Size:  int64(fi.Size),
+			Index: i,
+			Order: len(candidates),
+		})
 		if int64(fi.Size) > bestSize {
 			bestIdx = i
 			bestSize = int64(fi.Size)
 		}
+	}
+	if best, ok := selectEpisodeCandidate(candidates, target); ok {
+		bestIdx = best.Index
 	}
 
 	if bestIdx == -1 {

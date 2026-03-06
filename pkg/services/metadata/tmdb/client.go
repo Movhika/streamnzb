@@ -44,6 +44,7 @@ type Result struct {
 	MediaType        string `json:"media_type"`
 	Overview         string `json:"overview"`
 	ReleaseDate      string `json:"release_date"`
+	FirstAirDate     string `json:"first_air_date"`
 }
 
 type SearchMultiResponse struct {
@@ -211,6 +212,7 @@ type MovieDetails struct {
 type TVDetails struct {
 	ID              int            `json:"id"`
 	Name            string         `json:"name"`
+	FirstAirDate    string         `json:"first_air_date"`
 	NumberOfSeasons int            `json:"number_of_seasons"`
 	Seasons         []TVSeasonInfo `json:"seasons"`
 }
@@ -265,25 +267,36 @@ func (c *Client) GetMovieTitleAndYear(imdbID string, tmdbID string) (title strin
 }
 
 func (c *Client) GetTVShowName(tmdbID string, imdbID string) (string, error) {
+	name, _, err := c.GetTVShowTitleAndYear(tmdbID, imdbID)
+	return name, err
+}
+
+func (c *Client) GetTVShowTitleAndYear(tmdbID string, imdbID string) (title string, year string, err error) {
 	if tmdbID != "" {
 		if id, err := strconv.Atoi(tmdbID); err == nil {
 			d, err := c.GetTVDetails(id)
 			if err != nil {
-				return "", err
+				return "", "", err
 			}
-			return d.Name, nil
+			if len(d.FirstAirDate) >= 4 {
+				year = d.FirstAirDate[:4]
+			}
+			return d.Name, year, nil
 		}
 	}
 	if imdbID != "" {
 		find, err := c.Find(imdbID, "imdb_id")
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if len(find.TVResults) > 0 {
-			return find.TVResults[0].Name, nil
+			if len(find.TVResults[0].FirstAirDate) >= 4 {
+				year = find.TVResults[0].FirstAirDate[:4]
+			}
+			return find.TVResults[0].Name, year, nil
 		}
 	}
-	return "", fmt.Errorf("could not resolve TV show name")
+	return "", "", fmt.Errorf("could not resolve TV show name")
 }
 
 func (c *Client) GetMovieDetails(tmdbID int) (*MovieDetails, error) {

@@ -7,6 +7,8 @@ import (
 	"encoding/xml"
 	"io"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/MunifTanjim/go-ptt"
@@ -14,6 +16,7 @@ import (
 
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/media/fileutil"
+	searchparser "streamnzb/pkg/search/parser"
 )
 
 type NZB struct {
@@ -124,7 +127,10 @@ func (n *NZB) GetFileInfo() []*FileInfo {
 }
 
 func (n *NZB) GetLargestContentFile() *FileInfo {
-	infos := n.GetFileInfo()
+	return largestContentFile(n.GetFileInfo())
+}
+
+func largestContentFile(infos []*FileInfo) *FileInfo {
 	var largest *FileInfo
 	var maxSize int64
 	for _, info := range infos {
@@ -145,39 +151,109 @@ func (n *NZB) GetLargestContentFile() *FileInfo {
 }
 
 func (n *NZB) GetPlaybackFile() *FileInfo {
-	ct := n.CompressionType()
-	if ct == "rar" {
-		for _, info := range n.GetContentFiles() {
-			lower := strings.ToLower(info.Filename)
-			if (strings.HasSuffix(lower, ".rar") && !strings.Contains(lower, ".part")) ||
-				strings.Contains(lower, ".part01.") || strings.Contains(lower, ".part1.") ||
-				strings.Contains(lower, ".part001.") {
-				return info
-			}
+	return n.GetPlaybackFileForEpisode(0, 0)
+}
+
+func (n *NZB) GetPlaybackFileForEpisode(season, episode int) *FileInfo {
+	contentFiles := n.GetContentFilesForEpisode(season, episode)
+	if len(contentFiles) == 0 {
+		return n.GetLargestContentFile()
+	}
+
+	if ct := compressionTypeFromContentFiles(contentFiles); ct != "direct" {
+		return contentFiles[0]
+	}
+
+	if season > 0 && episode > 0 {
+		if largest := largestContentFile(contentFiles); largest != nil {
+			return largest
 		}
 	}
+
 	return n.GetLargestContentFile()
 }
 
 func (n *NZB) GetContentFiles() []*FileInfo {
-	infos := n.GetFileInfo()
+	return n.GetContentFilesForEpisode(0, 0)
+}
 
+func (n *NZB) GetContentFilesForEpisode(season, episode int) []*FileInfo {
+	infos := n.GetFileInfo()
+	if contentFiles := selectEpisodeContentFiles(infos, season, episode); len(contentFiles) > 0 {
+		return contentFiles
+	}
+	return selectLargestContentFiles(infos)
+}
+
+func selectEpisodeContentFiles(infos []*FileInfo, season, episode int) []*FileInfo {
+	if season <= 0 || episode <= 0 {
+		return nil
+	}
+
+	type groupChoice struct {
+		pattern string
+		rank    int
+		size    int64
+		order   int
+	}
+
+	groups := make(map[string][]*FileInfo)
+	order := make(map[string]int)
+	groupOrder := 0
+	for _, info := range infos {
+		if !isContentCandidate(info) {
+			continue
+		}
+		pattern := getFilePattern(info.Filename)
+		if pattern == "" {
+			continue
+		}
+		if _, ok := groups[pattern]; !ok {
+			order[pattern] = groupOrder
+			groupOrder++
+		}
+		groups[pattern] = append(groups[pattern], info)
+	}
+
+	var best groupChoice
+	found := false
+	for pattern, files := range groups {
+		choice := groupChoice{pattern: pattern, order: order[pattern]}
+		for _, info := range files {
+			choice.size += info.Size
+			if rank := episodeMatchRank(info.Filename, season, episode); rank > choice.rank {
+				choice.rank = rank
+			}
+		}
+		if choice.rank == 0 {
+			continue
+		}
+		if !found || choice.rank > best.rank ||
+			(choice.rank == best.rank && (choice.size > best.size ||
+				(choice.size == best.size && choice.order < best.order))) {
+			best = choice
+			found = true
+		}
+	}
+
+	if !found {
+		return nil
+	}
+	return collectPatternContentFiles(infos, best.pattern)
+}
+
+func selectLargestContentFiles(infos []*FileInfo) []*FileInfo {
 	var mainPattern string
 	var maxSize int64
 
 	for _, info := range infos {
-		if info.IsSample || info.IsExtra {
+		if !isContentCandidate(info) {
 			continue
 		}
 
 		if info.Size > maxSize {
-
-			if info.IsVideo || info.Extension == ".rar" || info.Extension == ".7z" ||
-				isArchivePart(info.Extension) || isRarVolume(info.Extension) ||
-				isSplitArchivePart(info.Extension) || isRarSplitPart(info.Extension, info.Filename) {
-				maxSize = info.Size
-				mainPattern = getFilePattern(info.Filename)
-			}
+			maxSize = info.Size
+			mainPattern = getFilePattern(info.Filename)
 		}
 	}
 
@@ -193,20 +269,142 @@ func (n *NZB) GetContentFiles() []*FileInfo {
 		}
 	}
 
-	var contentFiles []*FileInfo
-	if mainPattern != "" {
-		for _, info := range infos {
-			if getFilePattern(info.Filename) == mainPattern {
-				contentFiles = append(contentFiles, info)
-			}
-		}
-	}
-
+	contentFiles := collectPatternContentFiles(infos, mainPattern)
 	if len(contentFiles) == 0 {
 		logGetContentFilesEmpty(infos, mainPattern)
 	}
 
 	return contentFiles
+}
+
+func collectPatternContentFiles(infos []*FileInfo, pattern string) []*FileInfo {
+	if pattern == "" {
+		return nil
+	}
+	var contentFiles []*FileInfo
+	for _, info := range infos {
+		if getFilePattern(info.Filename) == pattern {
+			contentFiles = append(contentFiles, info)
+		}
+	}
+	sortContentFiles(contentFiles)
+	return contentFiles
+}
+
+func isContentCandidate(info *FileInfo) bool {
+	if info == nil || info.IsSample || info.IsExtra {
+		return false
+	}
+	return info.IsVideo || info.Extension == ".rar" || info.Extension == ".7z" ||
+		isArchivePart(info.Extension) || isRarVolume(info.Extension) ||
+		isSplitArchivePart(info.Extension) || isRarSplitPart(info.Extension, info.Filename)
+}
+
+func episodeMatchRank(filename string, season, episode int) int {
+	if season <= 0 || episode <= 0 {
+		return 0
+	}
+	parsed := searchparser.ParseReleaseTitle(filename)
+	if parsed == nil {
+		return 0
+	}
+	return parsed.EpisodeMatchRank(season, episode)
+}
+
+func sortContentFiles(files []*FileInfo) {
+	sort.SliceStable(files, func(i, j int) bool {
+		left := files[i]
+		right := files[j]
+		if left == nil || right == nil {
+			return left != nil
+		}
+		leftCandidate := 0
+		rightCandidate := 0
+		if left.IsSample || left.IsExtra {
+			leftCandidate = 1
+		}
+		if right.IsSample || right.IsExtra {
+			rightCandidate = 1
+		}
+		if leftCandidate != rightCandidate {
+			return leftCandidate < rightCandidate
+		}
+		leftPriority := contentFileLeadPriority(left)
+		rightPriority := contentFileLeadPriority(right)
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		leftSequence := contentFileSequence(left)
+		rightSequence := contentFileSequence(right)
+		if leftSequence != rightSequence {
+			return leftSequence < rightSequence
+		}
+		if left.Size != right.Size {
+			return left.Size > right.Size
+		}
+		return strings.ToLower(left.Filename) < strings.ToLower(right.Filename)
+	})
+}
+
+func contentFileLeadPriority(info *FileInfo) int {
+	if info == nil {
+		return 4
+	}
+	lower := strings.ToLower(info.Filename)
+	switch {
+	case fileutil.IsVideoFile(info.Filename):
+		return 0
+	case (strings.HasSuffix(lower, ".rar") && !strings.Contains(lower, ".part")) ||
+		strings.Contains(lower, ".part01.") || strings.Contains(lower, ".part1.") ||
+		strings.Contains(lower, ".part001."):
+		return 0
+	case strings.HasSuffix(lower, ".7z") || strings.Contains(lower, ".7z.001") || strings.Contains(lower, ".7z.0001"):
+		return 0
+	case strings.HasSuffix(lower, ".001"):
+		return 0
+	case isRarVolume(info.Extension) || isArchivePart(info.Extension) || isSplitArchivePart(info.Extension) || isRarSplitPart(info.Extension, info.Filename):
+		return 1
+	default:
+		return 2
+	}
+}
+
+func contentFileSequence(info *FileInfo) int {
+	if info == nil {
+		return int(^uint(0) >> 1)
+	}
+	lower := strings.ToLower(info.Filename)
+	switch {
+	case fileutil.IsVideoFile(info.Filename):
+		return 0
+	case (strings.HasSuffix(lower, ".rar") && !strings.Contains(lower, ".part")) ||
+		strings.HasSuffix(lower, ".7z"):
+		return 0
+	}
+
+	base := strings.TrimSuffix(lower, filepath.Ext(lower))
+	if idx := strings.LastIndex(base, ".part"); idx != -1 {
+		if seq, err := strconv.Atoi(base[idx+5:]); err == nil {
+			return seq - 1
+		}
+	}
+	if ext := filepath.Ext(lower); len(ext) == 4 && strings.HasPrefix(ext, ".r") {
+		if seq, err := strconv.Atoi(ext[2:]); err == nil {
+			return seq + 1
+		}
+	}
+	if ext := filepath.Ext(lower); len(ext) > 1 {
+		if seq, err := strconv.Atoi(ext[1:]); err == nil {
+			return seq - 1
+		}
+	}
+	if strings.Contains(lower, ".7z.") {
+		if seq, err := strconv.Atoi(filepath.Ext(lower)[1:]); err == nil {
+			return seq - 1
+		}
+	}
+
+	return int(^uint(0) >> 1)
 }
 
 func logGetContentFilesEmpty(infos []*FileInfo, mainPattern string) {
@@ -257,7 +455,15 @@ func (n *NZB) IsRARRelease() bool {
 }
 
 func (n *NZB) CompressionType() string {
-	contentFiles := n.GetContentFiles()
+	return n.CompressionTypeForEpisode(0, 0)
+}
+
+func (n *NZB) CompressionTypeForEpisode(season, episode int) string {
+	contentFiles := n.GetContentFilesForEpisode(season, episode)
+	return compressionTypeFromContentFiles(contentFiles)
+}
+
+func compressionTypeFromContentFiles(contentFiles []*FileInfo) string {
 	if len(contentFiles) == 0 {
 		return "direct"
 	}
@@ -281,7 +487,7 @@ func (n *NZB) CompressionType() string {
 		return "rar"
 	}
 
-	largest := n.GetLargestContentFile()
+	largest := largestContentFile(contentFiles)
 	if largest == nil {
 		return "direct"
 	}

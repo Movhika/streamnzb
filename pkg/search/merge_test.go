@@ -2,9 +2,14 @@ package search
 
 import (
 	"testing"
+
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/release"
 )
 
 func TestNormalizedTitleMatches(t *testing.T) {
+	logger.Init("ERROR")
+
 	tests := []struct {
 		expect   string
 		gotTitle string
@@ -26,5 +31,57 @@ func TestNormalizedTitleMatches(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("normalizedTitleMatches(%q, %q) = %v, want %v", tt.expect, tt.gotTitle, got, tt.want)
 		}
+	}
+}
+
+func TestFilterResultsSeriesEpisodeRequestAcceptsPacks(t *testing.T) {
+	logger.Init("ERROR")
+
+	releases := []*release.Release{
+		{Title: "The.Walking.Dead.S01E05.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.S01E05E06.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.S01.COMPLETE.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.Complete.Series.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.S02.COMPLETE.1080p.WEB-DL"},
+		{Title: "Other.Show.S01E05.1080p.WEB-DL"},
+	}
+
+	filtered := FilterResults(releases, "series", "The Walking Dead S01E05", "1", "5")
+	got := make([]string, 0, len(filtered))
+	for _, rel := range filtered {
+		if rel != nil {
+			got = append(got, rel.Title)
+		}
+	}
+
+	want := []string{
+		"The.Walking.Dead.S01E05.1080p.WEB-DL",
+		"The.Walking.Dead.S01E05E06.1080p.WEB-DL",
+		"The.Walking.Dead.S01.COMPLETE.1080p.WEB-DL",
+		"The.Walking.Dead.Complete.Series.1080p.WEB-DL",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("FilterResults() returned %d releases, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("FilterResults()[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestFilterResultsSeriesEpisodeRequestRejectsWrongEpisodePacks(t *testing.T) {
+	logger.Init("ERROR")
+
+	releases := []*release.Release{
+		{Title: "The.Walking.Dead.S01E06.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.S01E06E07.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.S02.COMPLETE.1080p.WEB-DL"},
+	}
+
+	filtered := FilterResults(releases, "series", "The Walking Dead S01E05", "1", "5")
+	if len(filtered) != 0 {
+		t.Fatalf("expected no matches, got %d: %+v", len(filtered), filtered)
 	}
 }

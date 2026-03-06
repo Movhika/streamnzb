@@ -57,14 +57,17 @@ func DefaultSortConfig() SortConfig {
 func ptrBool(b bool) *bool { return &b }
 
 type IndexerSearchConfig struct {
-	SearchResultLimit      int     `json:"search_result_limit,omitempty"`
-	IncludeYearInSearch    *bool   `json:"include_year_in_search,omitempty"`
-	SearchTitleLanguage    *string `json:"search_title_language,omitempty"`
-	SearchTitleNormalize   *bool   `json:"search_title_normalize,omitempty"`
-	MovieCategories        *string `json:"movie_categories,omitempty"`
-	TVCategories           *string `json:"tv_categories,omitempty"`
-	ExtraSearchTerms       *string `json:"extra_search_terms,omitempty"`
-	UseSeasonEpisodeParams *bool   `json:"use_season_episode_params,omitempty"`
+	SearchResultLimit          int     `json:"search_result_limit,omitempty"`
+	IncludeYearInSearch        *bool   `json:"include_year_in_search,omitempty"`
+	EnableSeriesSeasonSearch   *bool   `json:"enable_series_season_search,omitempty"`
+	EnableSeriesCompleteSearch *bool   `json:"enable_series_complete_search,omitempty"`
+	EnableSeriesPackSearch     *bool   `json:"enable_series_pack_search,omitempty"`
+	SearchTitleLanguage        *string `json:"search_title_language,omitempty"`
+	SearchTitleNormalize       *bool   `json:"search_title_normalize,omitempty"`
+	MovieCategories            *string `json:"movie_categories,omitempty"`
+	TVCategories               *string `json:"tv_categories,omitempty"`
+	ExtraSearchTerms           *string `json:"extra_search_terms,omitempty"`
+	UseSeasonEpisodeParams     *bool   `json:"use_season_episode_params,omitempty"`
 }
 
 type IndexerConfig struct {
@@ -80,14 +83,17 @@ type IndexerConfig struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 
-	MovieCategories        string `json:"movie_categories,omitempty"`
-	TVCategories           string `json:"tv_categories,omitempty"`
-	ExtraSearchTerms       string `json:"extra_search_terms,omitempty"`
-	UseSeasonEpisodeParams *bool  `json:"use_season_episode_params,omitempty"`
-	SearchResultLimit      int    `json:"search_result_limit,omitempty"`
-	IncludeYearInSearch    *bool  `json:"include_year_in_search,omitempty"`
-	SearchTitleLanguage    string `json:"search_title_language,omitempty"`
-	SearchTitleNormalize   *bool  `json:"search_title_normalize,omitempty"`
+	MovieCategories            string `json:"movie_categories,omitempty"`
+	TVCategories               string `json:"tv_categories,omitempty"`
+	ExtraSearchTerms           string `json:"extra_search_terms,omitempty"`
+	UseSeasonEpisodeParams     *bool  `json:"use_season_episode_params,omitempty"`
+	SearchResultLimit          int    `json:"search_result_limit,omitempty"`
+	IncludeYearInSearch        *bool  `json:"include_year_in_search,omitempty"`
+	EnableSeriesSeasonSearch   *bool  `json:"enable_series_season_search,omitempty"`
+	EnableSeriesCompleteSearch *bool  `json:"enable_series_complete_search,omitempty"`
+	EnableSeriesPackSearch     *bool  `json:"enable_series_pack_search,omitempty"`
+	SearchTitleLanguage        string `json:"search_title_language,omitempty"`
+	SearchTitleNormalize       *bool  `json:"search_title_normalize,omitempty"`
 }
 
 type Config struct {
@@ -178,6 +184,35 @@ func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global
 		val = *override.IncludeYearInSearch
 	}
 	out.IncludeYearInSearch = &val
+	seriesSeasonSearch := true
+	if ic != nil && ic.EnableSeriesPackSearch != nil {
+		seriesSeasonSearch = *ic.EnableSeriesPackSearch
+	}
+	if ic != nil && ic.EnableSeriesSeasonSearch != nil {
+		seriesSeasonSearch = *ic.EnableSeriesSeasonSearch
+	}
+	if override != nil && override.EnableSeriesPackSearch != nil {
+		seriesSeasonSearch = *override.EnableSeriesPackSearch
+	}
+	if override != nil && override.EnableSeriesSeasonSearch != nil {
+		seriesSeasonSearch = *override.EnableSeriesSeasonSearch
+	}
+	out.EnableSeriesSeasonSearch = &seriesSeasonSearch
+
+	seriesCompleteSearch := true
+	if ic != nil && ic.EnableSeriesPackSearch != nil {
+		seriesCompleteSearch = *ic.EnableSeriesPackSearch
+	}
+	if ic != nil && ic.EnableSeriesCompleteSearch != nil {
+		seriesCompleteSearch = *ic.EnableSeriesCompleteSearch
+	}
+	if override != nil && override.EnableSeriesPackSearch != nil {
+		seriesCompleteSearch = *override.EnableSeriesPackSearch
+	}
+	if override != nil && override.EnableSeriesCompleteSearch != nil {
+		seriesCompleteSearch = *override.EnableSeriesCompleteSearch
+	}
+	out.EnableSeriesCompleteSearch = &seriesCompleteSearch
 	s := ""
 	if ic != nil && ic.SearchTitleLanguage != "" {
 		s = ic.SearchTitleLanguage

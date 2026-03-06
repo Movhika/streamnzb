@@ -1455,6 +1455,47 @@ type SearchParams struct {
 	AvailIndexers []string
 }
 
+func buildSeriesEpisodeQueries(showName, season, episode string) []string {
+	return buildSeriesEpisodeQueriesWithOptions(showName, "", season, episode, false, true, true)
+}
+
+func buildSeriesEpisodeQueriesWithOptions(showName, year, season, episode string, includeYear, includeSeasonSearch, includeCompleteSearch bool) []string {
+	showName = strings.TrimSpace(showName)
+	if includeYear && strings.TrimSpace(year) != "" {
+		showName = strings.TrimSpace(showName + " " + year)
+	}
+	if showName == "" || season == "" || episode == "" {
+		return nil
+	}
+
+	seasonNum, _ := strconv.Atoi(season)
+	epNum, _ := strconv.Atoi(episode)
+	seen := make(map[string]bool)
+	queries := make([]string, 0, 3)
+	add := func(query string) {
+		query = strings.TrimSpace(query)
+		if query == "" || seen[query] {
+			return
+		}
+		seen[query] = true
+		queries = append(queries, query)
+	}
+
+	if seasonNum > 0 || epNum > 0 {
+		add(fmt.Sprintf("%s S%02dE%02d", showName, seasonNum, epNum))
+	} else {
+		add(fmt.Sprintf("%s S%sE%s", showName, season, episode))
+	}
+	if includeSeasonSearch && seasonNum > 0 {
+		add(fmt.Sprintf("%s S%02d", showName, seasonNum))
+	}
+	if includeCompleteSearch {
+		add(fmt.Sprintf("%s Complete", showName))
+	}
+
+	return queries
+}
+
 func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (*SearchParams, error) {
 	const searchLimit = 1000
 	params := &SearchParams{ContentType: contentType, ID: id}
@@ -1588,19 +1629,31 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 					req.PerIndexerQuery[name] = queries
 				}
 			} else if req.Season != "" && req.Episode != "" {
-				showName, err := s.tmdbClient.GetTVShowName(tmdbForText, imdbForText)
-				if err == nil {
-					seasonNum, _ := strconv.Atoi(req.Season)
-					epNum, _ := strconv.Atoi(req.Episode)
-					var q string
-					if seasonNum > 0 || epNum > 0 {
-						q = fmt.Sprintf("%s S%02dE%02d", showName, seasonNum, epNum)
-					} else {
-						q = fmt.Sprintf("%s S%sE%s", showName, req.Season, req.Episode)
+
+				type queryKey struct {
+					includeYear           bool
+					includeSeasonSearch   bool
+					includeCompleteSearch bool
+				}
+				resolved := make(map[queryKey][]string)
+				for name, eff := range req.EffectiveByIndexer {
+					includeYear := eff.IncludeYearInSearch != nil && *eff.IncludeYearInSearch
+					includeSeasonSearch := eff.EnableSeriesSeasonSearch != nil && *eff.EnableSeriesSeasonSearch
+					includeCompleteSearch := eff.EnableSeriesCompleteSearch != nil && *eff.EnableSeriesCompleteSearch
+					k := queryKey{includeYear: includeYear, includeSeasonSearch: includeSeasonSearch, includeCompleteSearch: includeCompleteSearch}
+					if queries, ok := resolved[k]; ok {
+						req.PerIndexerQuery[name] = queries
+						continue
 					}
-					for name := range req.EffectiveByIndexer {
-						req.PerIndexerQuery[name] = []string{q}
+					showName, year, err := s.tmdbClient.GetTVShowTitleAndYear(tmdbForText, imdbForText)
+					if err != nil {
+						logger.Debug("Per-indexer series query failed", "indexer", name, "err", err)
+						continue
 					}
+					queries := buildSeriesEpisodeQueriesWithOptions(showName, year, req.Season, req.Episode, includeYear, includeSeasonSearch, includeCompleteSearch)
+					logger.Debug("Per-indexer series query", "indexer", name, "include_year", includeYear, "enable_series_season_search", includeSeasonSearch, "enable_series_complete_search", includeCompleteSearch, "queries", queries)
+					resolved[k] = queries
+					req.PerIndexerQuery[name] = queries
 				}
 			}
 		}
@@ -2271,7 +2324,11 @@ func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.Rea
 	for i := range files {
 		unpackFiles[i] = files[i]
 	}
-	stream, name, size, bp, err := unpack.GetMediaStream(ctx, unpackFiles, sess.Blueprint, password)
+	target := unpack.EpisodeTarget{}
+	if sess.ContentIDs != nil {
+		target = unpack.EpisodeTarget{Season: sess.ContentIDs.Season, Episode: sess.ContentIDs.Episode}
+	}
+	stream, name, size, bp, err := unpack.GetMediaStreamForEpisode(ctx, unpackFiles, sess.Blueprint, password, target)
 	if bp != nil && sess.Blueprint == nil {
 		sess.SetBlueprint(bp)
 	}
@@ -2556,7 +2613,11 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		}
 	}(mergedCtx.Done())
 	defer mergedCancel()
-	stream, name, size, bp, err := unpack.GetMediaStream(mergedCtx, unpackFiles, sess.Blueprint, password)
+	target := unpack.EpisodeTarget{}
+	if sess.ContentIDs != nil {
+		target = unpack.EpisodeTarget{Season: sess.ContentIDs.Season, Episode: sess.ContentIDs.Episode}
+	}
+	stream, name, size, bp, err := unpack.GetMediaStreamForEpisode(mergedCtx, unpackFiles, sess.Blueprint, password, target)
 	if bp != nil && sess.Blueprint == nil {
 		sess.SetBlueprint(bp)
 	}
