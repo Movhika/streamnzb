@@ -79,7 +79,7 @@ func TestDecodeAndCloseBodyClosesOnError(t *testing.T) {
 	}
 }
 
-	type dedupBlockingSegmentFetcher struct {
+type dedupBlockingSegmentFetcher struct {
 	data         []byte
 	err          error
 	callObserved chan int
@@ -122,6 +122,52 @@ func (f *dedupBlockingSegmentFetcher) Release() {
 	f.once.Do(func() {
 		close(f.release)
 	})
+}
+
+type staleInflightSegmentFetcher struct {
+	data                  []byte
+	callObserved          chan int
+	cancelObserved        chan int
+	releaseCanceledCall   chan struct{}
+	releaseSuccessfulCall chan struct{}
+	mu                    sync.Mutex
+	calls                 int
+}
+
+func newStaleInflightSegmentFetcher(data []byte) *staleInflightSegmentFetcher {
+	return &staleInflightSegmentFetcher{
+		data:                  data,
+		callObserved:          make(chan int, 4),
+		cancelObserved:        make(chan int, 4),
+		releaseCanceledCall:   make(chan struct{}),
+		releaseSuccessfulCall: make(chan struct{}),
+	}
+}
+
+func (f *staleInflightSegmentFetcher) FetchSegment(ctx context.Context, segment *nzb.Segment, groups []string) (pool.SegmentData, error) {
+	f.mu.Lock()
+	f.calls++
+	call := f.calls
+	f.mu.Unlock()
+
+	f.callObserved <- call
+
+	select {
+	case <-ctx.Done():
+		f.cancelObserved <- call
+		<-f.releaseCanceledCall
+		return pool.SegmentData{}, ctx.Err()
+	case <-f.releaseSuccessfulCall:
+		return pool.SegmentData{Body: append([]byte(nil), f.data...)}, nil
+	}
+}
+
+func (f *staleInflightSegmentFetcher) ReleaseCanceledCall() {
+	close(f.releaseCanceledCall)
+}
+
+func (f *staleInflightSegmentFetcher) ReleaseSuccessfulCall() {
+	close(f.releaseSuccessfulCall)
 }
 
 func testNZBFileWithSegments(sizes ...int64) *nzb.File {
@@ -223,4 +269,144 @@ func TestConcurrentDownloadFailureCountsOnce(t *testing.T) {
 	if f.zeroFillCount != 1 {
 		t.Fatalf("expected one shared zero-fill count, got %d", f.zeroFillCount)
 	}
+}
+
+func TestDownloadSegmentLeaderCancellationDoesNotCancelFollower(t *testing.T) {
+	oldLogger := logger.Log
+	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	defer func() {
+		logger.Log = oldLogger
+	}()
+
+	fetcher := newDedupBlockingSegmentFetcher([]byte("abc"), nil)
+	f := NewFile(context.Background(), testNZBFileWithSegments(3), nil, nil, fetcher, nil)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	defer cancelLeader()
+
+	leaderErrs := make(chan error, 1)
+	go func() {
+		_, err := f.DownloadSegment(leaderCtx, 0)
+		leaderErrs <- err
+	}()
+
+	if got := <-fetcher.callObserved; got != 1 {
+		t.Fatalf("expected first fetch call to be 1, got %d", got)
+	}
+
+	followerData := make(chan []byte, 1)
+	followerErrs := make(chan error, 1)
+	go func() {
+		data, err := f.DownloadSegment(context.Background(), 0)
+		followerData <- data
+		followerErrs <- err
+	}()
+
+	select {
+	case got := <-fetcher.callObserved:
+		t.Fatalf("expected follower to join existing fetch, saw call %d", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancelLeader()
+
+	select {
+	case err := <-leaderErrs:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected leader error %v, got %v", context.Canceled, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for leader cancellation")
+	}
+
+	fetcher.Release()
+
+	select {
+	case err := <-followerErrs:
+		if err != nil {
+			t.Fatalf("follower DownloadSegment returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for follower result")
+	}
+	if got := string(<-followerData); got != "abc" {
+		t.Fatalf("expected follower data %q, got %q", "abc", got)
+	}
+}
+
+func TestDownloadSegmentDoesNotJoinWaiterlessCanceledInflightRequest(t *testing.T) {
+	oldLogger := logger.Log
+	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	defer func() {
+		logger.Log = oldLogger
+	}()
+
+	fetcher := newStaleInflightSegmentFetcher([]byte("fresh"))
+	f := NewFile(context.Background(), testNZBFileWithSegments(5), nil, nil, fetcher, nil)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	defer cancelLeader()
+
+	leaderErrs := make(chan error, 1)
+	go func() {
+		_, err := f.DownloadSegment(leaderCtx, 0)
+		leaderErrs <- err
+	}()
+
+	if got := <-fetcher.callObserved; got != 1 {
+		t.Fatalf("expected first fetch call to be 1, got %d", got)
+	}
+
+	cancelLeader()
+
+	select {
+	case err := <-leaderErrs:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected leader error %v, got %v", context.Canceled, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for leader cancellation")
+	}
+
+	select {
+	case got := <-fetcher.cancelObserved:
+		if got != 1 {
+			t.Fatalf("expected canceled fetch call to be 1, got %d", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled fetch observation")
+	}
+
+	followerData := make(chan []byte, 1)
+	followerErrs := make(chan error, 1)
+	go func() {
+		data, err := f.DownloadSegment(context.Background(), 0)
+		followerData <- data
+		followerErrs <- err
+	}()
+
+	select {
+	case got := <-fetcher.callObserved:
+		if got != 2 {
+			t.Fatalf("expected fresh underlying fetch call to be 2, got %d", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second underlying fetch; stale request was likely reused")
+	}
+
+	fetcher.ReleaseSuccessfulCall()
+
+	select {
+	case err := <-followerErrs:
+		if err != nil {
+			t.Fatalf("follower DownloadSegment returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for follower result")
+	}
+	if got := string(<-followerData); got != "fresh" {
+		t.Fatalf("expected follower data %q, got %q", "fresh", got)
+	}
+
+	fetcher.ReleaseCanceledCall()
 }

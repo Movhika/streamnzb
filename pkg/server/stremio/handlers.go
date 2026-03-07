@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"streamnzb/pkg/auth"
@@ -1459,6 +1460,18 @@ func buildSeriesQueries(showName string) []string {
 	return buildSeriesQueriesWithOptions(showName, "", false)
 }
 
+func shouldIncludeMetadataYearInIndexerQuery(indexerType string, includeYear bool) bool {
+	if !includeYear {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(indexerType)) {
+	case "easynews":
+		return true
+	default:
+		return false
+	}
+}
+
 func buildSeriesQueriesWithOptions(showName, year string, includeYear bool) []string {
 	showName = strings.TrimSpace(showName)
 	if includeYear && strings.TrimSpace(year) != "" {
@@ -1550,6 +1563,7 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 	}
 	if len(s.config.Indexers) > 0 {
 		req.EffectiveByIndexer = make(map[string]*config.IndexerSearchConfig)
+		indexerTypeByName := make(map[string]string, len(s.config.Indexers))
 		for i := range s.config.Indexers {
 			ic := &s.config.Indexers[i]
 			var override *config.IndexerSearchConfig
@@ -1564,6 +1578,7 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 				}
 			}
 			req.EffectiveByIndexer[ic.Name] = config.MergeIndexerSearch(ic, override, s.config)
+			indexerTypeByName[ic.Name] = ic.Type
 		}
 		req.PerIndexerQuery = make(map[string][]string)
 		if s.tmdbClient != nil {
@@ -1577,6 +1592,7 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 				resolved := make(map[queryKey][]string)
 				for name, eff := range req.EffectiveByIndexer {
 					includeYear := eff.IncludeYearInSearch != nil && *eff.IncludeYearInSearch
+					includeYear = shouldIncludeMetadataYearInIndexerQuery(indexerTypeByName[name], includeYear)
 					lang := ""
 					if eff.SearchTitleLanguage != nil {
 						lang = *eff.SearchTitleLanguage
@@ -1610,6 +1626,7 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 				resolved := make(map[queryKey][]string)
 				for name, eff := range req.EffectiveByIndexer {
 					includeYear := eff.IncludeYearInSearch != nil && *eff.IncludeYearInSearch
+					includeYear = shouldIncludeMetadataYearInIndexerQuery(indexerTypeByName[name], includeYear)
 					k := queryKey{includeYear: includeYear}
 					if queries, ok := resolved[k]; ok {
 						req.PerIndexerQuery[name] = queries
@@ -2073,24 +2090,24 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			forceDisconnect(w, s.baseURL)
 			return
 		}
-			inspectBytes := unpack.ProbeSize
-			needDuration := wantTimeOffset && sessionID == requestedSessionID
-			if needDuration && seek.MaxBytesToRead > inspectBytes {
-				inspectBytes = seek.MaxBytesToRead
+		inspectBytes := unpack.ProbeSize
+		needDuration := wantTimeOffset && sessionID == requestedSessionID
+		if needDuration && seek.MaxBytesToRead > inspectBytes {
+			inspectBytes = seek.MaxBytesToRead
+		}
+		startInfo, inspectErr := seek.InspectStreamStart(stream, size, name, inspectBytes)
+		var probeErr error
+		switch {
+		case inspectErr != nil:
+			probeErr = fmt.Errorf("probe inspect: %w", inspectErr)
+		case !startInfo.HeaderValid:
+			probeErr = fmt.Errorf("probe: invalid container header for %s", name)
+		default:
+			if needDuration {
+				startupInfo = startInfo
+				haveStartupInfo = true
 			}
-			startInfo, inspectErr := seek.InspectStreamStart(stream, size, name, inspectBytes)
-			var probeErr error
-			switch {
-			case inspectErr != nil:
-				probeErr = fmt.Errorf("probe inspect: %w", inspectErr)
-			case !startInfo.HeaderValid:
-				probeErr = fmt.Errorf("probe: invalid container header for %s", name)
-			default:
-				if needDuration {
-					startupInfo = startInfo
-					haveStartupInfo = true
-				}
-			}
+		}
 		if probeErr != nil {
 			mergedCancel()
 			// Always mark slot as permanently failed when we abandon it; AvailNZB reporting is selective.
@@ -2127,131 +2144,184 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		}
 		break
 	}
-	defer mergedCancel()
-	servedSessionID := sessionID
-	var closeStreamOnce sync.Once
-	closeStream := func(reason string) {
-		closeStreamOnce.Do(func() {
-			if stream != nil {
-				logger.Debug("play handler closing stream", "session", servedSessionID, "reason", reason)
-				stream.Close()
-				stream = nil
-			}
-		})
-	}
-	defer closeStream("handler exit")
-	go func(done <-chan struct{}) {
-		<-done
-		closeStream("playback canceled")
-	}(mergedCtx.Done())
+		defer mergedCancel()
+		servedSessionID := sessionID
+		requestedRange := r.Header.Get("Range")
+		requestedTimeOffset := r.URL.Query().Get("t")
+		userAgent := r.Header.Get("User-Agent")
+		var closeReason atomic.Value
+		var closeStreamOnce sync.Once
+		closeStream := func(reason string) {
+			closeStreamOnce.Do(func() {
+				closeReason.Store(reason)
+				if stream != nil {
+					logger.Debug("play handler closing stream", "session", servedSessionID, "reason", reason)
+					stream.Close()
+					stream = nil
+				}
+			})
+		}
+		go func(done <-chan struct{}) {
+			<-done
+			closeStream("playback canceled")
+		}(mergedCtx.Done())
 
-	// After internal failover we serve a different file; don't apply the original request's Range or t= to it.
-	failedOver := sessionID != requestedSessionID
-	if failedOver {
-		r.Header.Del("Range")
-	}
+		// After internal failover we serve a different file; don't apply the original request's Range or t= to it.
+		failedOver := sessionID != requestedSessionID
+		if failedOver {
+			r.Header.Del("Range")
+		}
 		if !failedOver && wantTimeOffset && r.Header.Get("Range") == "" && haveStartupInfo {
 			if byteOffset, seekOK := seek.TimeToByteOffsetFromDuration(size, startupInfo.DurationSec, tSec); seekOK {
 				r.Header.Set("Range", "bytes="+strconv.FormatInt(byteOffset, 10)+"-")
 			}
-	}
-
-	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if clientIP == "" {
-		clientIP = r.RemoteAddr
-	}
-	s.sessionManager.StartPlayback(sessionID, clientIP)
-	var endPlaybackOnce sync.Once
-	endPlayback := func() { s.sessionManager.EndPlayback(sessionID, clientIP) }
-	defer endPlaybackOnce.Do(endPlayback)
-	// When client cancels (e.g. stop in Stremio), request context is cancelled; end playback so we stop downloading and session can be evicted.
-	go func() {
-		<-r.Context().Done()
-		endPlaybackOnce.Do(endPlayback)
-	}()
-
-	// serveFailureRecorded is set to true when onReadError records a failure for the
-	// currently-served session. The success defer checks this flag so it never
-	// overwrites a Failure with an OK (the "flip-flop" bug).
-	serveFailureRecorded := false
-	onReadError := func(slotPath string, readErr error) {
-		// Trigger slot failover for any permanent mid-stream error:
-		//   - 430 No Such Article (segment missing on all providers)
-		//   - yEnc decode failure (data corruption)
-		//   - ErrTooManyZeroFills (too many segments failed across all providers)
-		// All three mean the slot is unrecoverable. SetSlotFailedDuringPlayback marks it so the
-		// existing redirect logic at the top of handlePlay redirects the player to the next slot
-		// on reconnect, without requiring the user to manually switch in Stremio.
-		if !isSegmentUnavailableErr(readErr) && !isDataCorruptErr(readErr) && !errors.Is(readErr, unpack.ErrTooManyZeroFills) {
-			return
 		}
-		s.sessionManager.SetSlotFailedDuringPlayback(slotPath)
-		if errSess, _ := s.sessionManager.GetSession(slotPath); errSess != nil {
+
+		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if clientIP == "" {
+			clientIP = r.RemoteAddr
+		}
+		s.sessionManager.StartPlayback(sessionID, clientIP)
+		var endPlaybackOnce sync.Once
+		endPlayback := func() { s.sessionManager.EndPlayback(sessionID, clientIP) }
+		defer endPlaybackOnce.Do(endPlayback)
+		// When client cancels (e.g. stop in Stremio), request context is cancelled; end playback so we stop downloading and session can be evicted.
+		go func() {
+			<-r.Context().Done()
+			endPlaybackOnce.Do(endPlayback)
+		}()
+
+		// serveFailureRecorded is set to true when onReadError records a failure for the
+		// currently-served session. The success defer checks this flag so it never
+		// overwrites a Failure with an OK (the "flip-flop" bug).
+		serveFailureRecorded := false
+		onReadError := func(slotPath string, readErr error) {
+			// Trigger slot failover for any permanent mid-stream error:
+			//   - 430 No Such Article (segment missing on all providers)
+			//   - yEnc decode failure (data corruption)
+			//   - ErrTooManyZeroFills (too many segments failed across all providers)
+			// All three mean the slot is unrecoverable. SetSlotFailedDuringPlayback marks it so the
+			// existing redirect logic at the top of handlePlay redirects the player to the next slot
+			// on reconnect, without requiring the user to manually switch in Stremio.
+			if !isSegmentUnavailableErr(readErr) && !isDataCorruptErr(readErr) && !errors.Is(readErr, unpack.ErrTooManyZeroFills) {
+				return
+			}
+			s.sessionManager.SetSlotFailedDuringPlayback(slotPath)
+			if errSess, _ := s.sessionManager.GetSession(slotPath); errSess != nil {
+				if s.availReporter != nil {
+					s.availReporter.ReportBad(errSess, readErr.Error())
+				}
+				if _, alreadyFailed := s.recordedFailureSessionIDs.LoadOrStore(slotPath, struct{}{}); !alreadyFailed {
+					s.recordAttempt(errSess, false, readErr.Error())
+					go func(id string, done <-chan struct{}) {
+						<-done
+						s.recordedFailureSessionIDs.Delete(id)
+					}(slotPath, errSess.Done())
+				}
+				if slotPath == sessionID {
+					serveFailureRecorded = true
+				}
+			}
+		}
+		monitoredStream := &StreamMonitor{
+			ReadSeekCloser: stream,
+			sessionID:      sessionID,
+			clientIP:       clientIP,
+			manager:        s.sessionManager,
+			onReadError:    onReadError,
+			lastUpdate:     time.Now(),
+		}
+
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext == ".mkv" {
+			w.Header().Set("Content-Type", "video/x-matroska")
+		} else if ext == ".avi" {
+			w.Header().Set("Content-Type", "video/x-msvideo")
+		} else if ext == ".mp4" || ext == ".m4v" {
+			w.Header().Set("Content-Type", "video/mp4")
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filepath.Base(name)))
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
+		bufW := newBufferedResponseWriter(w, 256*1024)
+		serveStartedAt := time.Now()
+		effectiveRange := r.Header.Get("Range")
+
+		logger.Debug("play handler serving stream", "session", sessionID, "name", name, "size", size)
+		logger.Info("Serving media",
+			"session", sessionID,
+			"requested_session", requestedSessionID,
+			"name", name,
+			"size", size,
+			"method", r.Method,
+			"requested_range", requestedRange,
+			"effective_range", effectiveRange,
+			"time_offset", requestedTimeOffset,
+			"user_agent", userAgent,
+			"client_ip", clientIP,
+			"failed_over", failedOver,
+		)
+		defer func() {
+			closeStream("handler exit")
+			bufW.Flush()
+
+			responseStats := bufW.Snapshot()
+			streamStats := monitoredStream.Snapshot()
+			closeReasonText := ""
+			if v := closeReason.Load(); v != nil {
+				closeReasonText = v.(string)
+			}
+
+			logger.Info("Finished serving media",
+				"session", sessionID,
+				"requested_session", requestedSessionID,
+				"method", r.Method,
+				"requested_range", requestedRange,
+				"effective_range", effectiveRange,
+				"time_offset", requestedTimeOffset,
+				"user_agent", userAgent,
+				"response_status", responseStats.StatusCode,
+				"response_wrote_header", responseStats.WroteHeader,
+				"response_bytes", responseStats.BytesWritten,
+				"response_writes", responseStats.WriteCalls,
+				"response_flushes", responseStats.FlushCalls,
+				"response_flush_error", responseStats.FlushError,
+				"stream_bytes", streamStats.BytesRead,
+				"stream_reads", streamStats.ReadCalls,
+				"stream_eof", streamStats.SawEOF,
+				"stream_error", streamStats.LastReadError,
+				"request_context_err", errorString(r.Context().Err()),
+				"serve_context_err", errorString(mergedCtx.Err()),
+				"failed_over", failedOver,
+				"serve_failure_recorded", serveFailureRecorded,
+				"close_reason", closeReasonText,
+				"duration", time.Since(serveStartedAt),
+			)
+		}()
+
+		// Report good only after serving, so bytes-read threshold can be met (StreamMonitor tracks bytes).
+		// Record success at most once per session: multiple HTTP requests (e.g. range/seek) for the same stream
+		// would otherwise each run this defer and create duplicate "OK" entries in NZB history.
+		// If onReadError already recorded a failure for this session, skip — we must not flip it back to OK.
+		defer func() {
+			if serveFailureRecorded {
+				return
+			}
 			if s.availReporter != nil {
-				s.availReporter.ReportBad(errSess, readErr.Error())
+				s.availReporter.ReportGood(sess)
 			}
-			if _, alreadyFailed := s.recordedFailureSessionIDs.LoadOrStore(slotPath, struct{}{}); !alreadyFailed {
-				s.recordAttempt(errSess, false, readErr.Error())
-				go func(id string, done <-chan struct{}) {
-					<-done
-					s.recordedFailureSessionIDs.Delete(id)
-				}(slotPath, errSess.Done())
+			if _, already := s.recordedSuccessSessionIDs.LoadOrStore(sessionID, struct{}{}); !already {
+				s.recordAttempt(sess, true, "")
+				// When session is gone, allow recording success again for a future play of the same release.
+				go func() {
+					<-sess.Done()
+					s.recordedSuccessSessionIDs.Delete(sessionID)
+				}()
 			}
-			if slotPath == sessionID {
-				serveFailureRecorded = true
-			}
-		}
-	}
-	monitoredStream := &StreamMonitor{
-		ReadSeekCloser: stream,
-		sessionID:      sessionID,
-		clientIP:       clientIP,
-		manager:        s.sessionManager,
-		onReadError:    onReadError,
-		lastUpdate:     time.Now(),
-	}
+		}()
 
-	logger.Debug("play handler serving stream", "session", sessionID, "name", name, "size", size)
-	logger.Info("Serving media", "name", name, "size", size, "session", sessionID)
-
-	ext := strings.ToLower(filepath.Ext(name))
-	if ext == ".mkv" {
-		w.Header().Set("Content-Type", "video/x-matroska")
-	} else if ext == ".avi" {
-		w.Header().Set("Content-Type", "video/x-msvideo")
-	} else if ext == ".mp4" || ext == ".m4v" {
-		w.Header().Set("Content-Type", "video/mp4")
-	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filepath.Base(name)))
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
-	bufW := newBufferedResponseWriter(w, 256*1024)
-	defer bufW.Flush()
-
-	// Report good only after serving, so bytes-read threshold can be met (StreamMonitor tracks bytes).
-	// Record success at most once per session: multiple HTTP requests (e.g. range/seek) for the same stream
-	// would otherwise each run this defer and create duplicate "OK" entries in NZB history.
-	// If onReadError already recorded a failure for this session, skip — we must not flip it back to OK.
-	defer func() {
-		if serveFailureRecorded {
-			return
-		}
-		if s.availReporter != nil {
-			s.availReporter.ReportGood(sess)
-		}
-		if _, already := s.recordedSuccessSessionIDs.LoadOrStore(sessionID, struct{}{}); !already {
-			s.recordAttempt(sess, true, "")
-			// When session is gone, allow recording success again for a future play of the same release.
-			go func() {
-				<-sess.Done()
-				s.recordedSuccessSessionIDs.Delete(sessionID)
-			}()
-		}
-	}()
-
-	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
-	logger.Trace("Finished serving media", "session", sessionID)
+		http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
 }
 
 func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.ReadSeekCloser, string, int64, error) {
@@ -2758,7 +2828,13 @@ func (w *writeTimeoutResponseWriter) Write(p []byte) (n int, err error) {
 
 type bufferedResponseWriter struct {
 	http.ResponseWriter
-	bw *bufio.Writer
+	bw           *bufio.Writer
+	statusCode   int
+	wroteHeader  bool
+	bytesWritten int64
+	writeCalls   int64
+	flushCalls   int64
+	flushError   string
 }
 
 func newBufferedResponseWriter(w http.ResponseWriter, size int) *bufferedResponseWriter {
@@ -2769,13 +2845,51 @@ func newBufferedResponseWriter(w http.ResponseWriter, size int) *bufferedRespons
 }
 
 func (b *bufferedResponseWriter) Write(p []byte) (n int, err error) {
-	return b.bw.Write(p)
+	if !b.wroteHeader {
+		b.statusCode = http.StatusOK
+		b.wroteHeader = true
+	}
+	b.writeCalls++
+	n, err = b.bw.Write(p)
+	b.bytesWritten += int64(n)
+	return n, err
+}
+
+func (b *bufferedResponseWriter) WriteHeader(statusCode int) {
+	if !b.wroteHeader {
+		b.statusCode = statusCode
+		b.wroteHeader = true
+	}
+	b.ResponseWriter.WriteHeader(statusCode)
 }
 
 func (b *bufferedResponseWriter) Flush() {
-	_ = b.bw.Flush()
+	b.flushCalls++
+	if err := b.bw.Flush(); err != nil {
+		b.flushError = err.Error()
+	}
 	if f, ok := b.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
+	}
+}
+
+type bufferedResponseSnapshot struct {
+	StatusCode   int
+	WroteHeader  bool
+	BytesWritten int64
+	WriteCalls   int64
+	FlushCalls   int64
+	FlushError   string
+}
+
+func (b *bufferedResponseWriter) Snapshot() bufferedResponseSnapshot {
+	return bufferedResponseSnapshot{
+		StatusCode:   b.statusCode,
+		WroteHeader:  b.wroteHeader,
+		BytesWritten: b.bytesWritten,
+		WriteCalls:   b.writeCalls,
+		FlushCalls:   b.flushCalls,
+		FlushError:   b.flushError,
 	}
 }
 
@@ -2788,19 +2902,32 @@ type StreamMonitor struct {
 	lastUpdate    time.Time
 	mu            sync.Mutex
 	readErrorOnce sync.Once
+	bytesRead     atomic.Int64
+	readCalls     atomic.Int64
+	sawEOF        atomic.Bool
+	lastReadErr   atomic.Value
 }
 
 func (s *StreamMonitor) Read(p []byte) (n int, err error) {
+	s.readCalls.Add(1)
 	n, err = s.ReadSeekCloser.Read(p)
 	if n > 0 {
-		s.manager.AddBytesRead(s.sessionID, int64(n))
+		s.bytesRead.Add(int64(n))
+		if s.manager != nil {
+			s.manager.AddBytesRead(s.sessionID, int64(n))
+		}
+	}
+	if errors.Is(err, io.EOF) {
+		s.sawEOF.Store(true)
+	} else if err != nil {
+		s.lastReadErr.Store(err.Error())
 	}
 	if err != nil && s.onReadError != nil {
 		s.readErrorOnce.Do(func() {
 			s.onReadError(s.sessionID, err)
 		})
 	}
-	if time.Since(s.lastUpdate) > 10*time.Second {
+	if s.manager != nil && time.Since(s.lastUpdate) > 10*time.Second {
 		s.mu.Lock()
 		if time.Since(s.lastUpdate) > 10*time.Second {
 			s.manager.KeepAlive(s.sessionID, s.clientIP)
@@ -2811,9 +2938,36 @@ func (s *StreamMonitor) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
+type streamMonitorSnapshot struct {
+	BytesRead     int64
+	ReadCalls     int64
+	SawEOF        bool
+	LastReadError string
+}
+
+func (s *StreamMonitor) Snapshot() streamMonitorSnapshot {
+	lastReadErr := ""
+	if v := s.lastReadErr.Load(); v != nil {
+		lastReadErr = v.(string)
+	}
+	return streamMonitorSnapshot{
+		BytesRead:     s.bytesRead.Load(),
+		ReadCalls:     s.readCalls.Load(),
+		SawEOF:        s.sawEOF.Load(),
+		LastReadError: lastReadErr,
+	}
+}
+
 func (s *StreamMonitor) Close() error {
 	if s.ReadSeekCloser != nil {
 		return s.ReadSeekCloser.Close()
 	}
 	return nil
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

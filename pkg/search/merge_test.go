@@ -19,6 +19,9 @@ func TestNormalizedTitleMatches(t *testing.T) {
 		{"Law & Order", "Law and Order SVU", true},
 		{"Star Trek: Starfleet Academy", "Star.Trek.Starfleet.Academy.S01E01", true},
 		{"Star Trek: Starfleet Academy", "Starfleet Academy S01E01", false},
+		{"Batman", "The Batman", false},
+		{"Batman", "Batman Beyond", false},
+		{"Batman", "Batman Forever", false},
 		{"The Walking Dead", "The Walking Dead S06E07", true},
 		{"Some Show", "Other Show", false},
 		{"Law and Order", "Law & Order", true},
@@ -108,5 +111,60 @@ func TestFilterResultsSeriesEpisodeRequestKeepsSTitlesIntact(t *testing.T) {
 	}
 	if filtered[0].Title != releases[0].Title {
 		t.Fatalf("expected %q, got %q", releases[0].Title, filtered[0].Title)
+	}
+}
+
+func TestFilterResultsSeriesEpisodeRequestRejectsSingleWordTitleVariants(t *testing.T) {
+	logger.Init("ERROR")
+
+	releases := []*release.Release{
+		{Title: "Batman.S01E02.1080p.WEB-DL"},
+		{Title: "The.Batman.S01E02.1080p.WEB-DL"},
+		{Title: "Batman.Beyond.S01E02.1080p.WEB-DL"},
+	}
+
+	filtered := FilterResults(releases, "series", "Batman S01E02", "1", "2")
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 match, got %d: %+v", len(filtered), filtered)
+	}
+	if filtered[0].Title != releases[0].Title {
+		t.Fatalf("expected %q, got %q", releases[0].Title, filtered[0].Title)
+	}
+}
+
+func TestFilterResultsMovieYearRange(t *testing.T) {
+	logger.Init("ERROR")
+
+	releases := []*release.Release{
+		{Title: "Batman.1080p.BluRay"},
+		{Title: "Batman.1993.1080p.BluRay"},
+		{Title: "Batman.1994.1080p.BluRay"},
+		{Title: "Batman.1995.1080p.BluRay"},
+		{Title: "Batman.2026.1080p.BluRay"},
+		{Title: "Other.Movie.1994.1080p.BluRay"},
+	}
+
+	filtered := FilterResults(releases, "movie", "Batman 1994", "", "")
+	got := make([]string, 0, len(filtered))
+	for _, rel := range filtered {
+		if rel != nil {
+			got = append(got, rel.Title)
+		}
+	}
+
+	want := []string{
+		"Batman.1080p.BluRay",
+		"Batman.1993.1080p.BluRay",
+		"Batman.1994.1080p.BluRay",
+		"Batman.1995.1080p.BluRay",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("FilterResults() returned %d releases, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("FilterResults()[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
 	}
 }

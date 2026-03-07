@@ -100,6 +100,9 @@ type inflightSegmentDownload struct {
 	countFailures bool
 	data          []byte
 	err           error
+	ctx           context.Context
+	cancel        context.CancelFunc
+	waiters       int
 }
 
 type zeroFillEligibleError struct {
@@ -122,16 +125,16 @@ func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimat
 		offset += s.Bytes
 	}
 	return &File{
-		nzbFile:     f,
-		pools:       pools,
-		fetcher:     fetcher,
-		estimator:   estimator,
-		segments:    segments,
-		totalSize:   offset,
-		ctx:         ctx,
-		segCache:    make(map[int][]byte),
+		nzbFile:           f,
+		pools:             pools,
+		fetcher:           fetcher,
+		estimator:         estimator,
+		segments:          segments,
+		totalSize:         offset,
+		ctx:               ctx,
+		segCache:          make(map[int][]byte),
 		inflightDownloads: make(map[int]*inflightSegmentDownload),
-		cacheBudget:      cacheBudget,
+		cacheBudget:       cacheBudget,
 	}
 }
 
@@ -433,30 +436,17 @@ func (f *File) doDownloadSegment(ctx context.Context, index int, countFailures b
 	}
 
 	req, leader := f.startInflightDownload(index, countFailures)
-	if !leader {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-req.done:
-			return req.data, req.err
-		}
+	if leader {
+		go f.runInflightDownload(index, req)
 	}
+	defer f.releaseInflightDownloadWaiter(index, req)
 
-	var data []byte
-	var err error
-	if f.fetcher != nil {
-		data, err = f.doDownloadSegmentViaFetcher(ctx, index)
-	} else {
-		data, err = f.doDownloadSegmentViaPools(ctx, index)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-req.done:
+		return req.data, req.err
 	}
-
-	f.downloadMu.Lock()
-	req.data, req.err = f.finalizeSegmentDownload(index, data, err, req.countFailures)
-	delete(f.inflightDownloads, index)
-	close(req.done)
-	data, err = req.data, req.err
-	f.downloadMu.Unlock()
-	return data, err
 }
 
 func (f *File) startInflightDownload(index int, countFailures bool) (*inflightSegmentDownload, bool) {
@@ -464,18 +454,73 @@ func (f *File) startInflightDownload(index int, countFailures bool) (*inflightSe
 	defer f.downloadMu.Unlock()
 
 	if req, ok := f.inflightDownloads[index]; ok {
-		if countFailures {
-			req.countFailures = true
+		// A waiterless request has already been canceled by releaseInflightDownloadWaiter,
+		// but its goroutine may not have removed it from inflightDownloads yet. Don't let
+		// a new caller join that stale canceled request and inherit its context.Canceled.
+		if req.waiters == 0 {
+			delete(f.inflightDownloads, index)
+		} else {
+			req.waiters++
+			if countFailures {
+				req.countFailures = true
+			}
+			return req, false
 		}
-		return req, false
 	}
+
+	baseCtx := f.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	sharedCtx, cancel := context.WithCancel(baseCtx)
 
 	req := &inflightSegmentDownload{
 		done:          make(chan struct{}),
 		countFailures: countFailures,
+		ctx:           sharedCtx,
+		cancel:        cancel,
+		waiters:       1,
 	}
 	f.inflightDownloads[index] = req
 	return req, true
+}
+
+func (f *File) releaseInflightDownloadWaiter(index int, req *inflightSegmentDownload) {
+	f.downloadMu.Lock()
+	defer f.downloadMu.Unlock()
+
+	current, ok := f.inflightDownloads[index]
+	if !ok || current != req {
+		return
+	}
+	if req.waiters > 0 {
+		req.waiters--
+	}
+	if req.waiters == 0 {
+		req.cancel()
+	}
+}
+
+func (f *File) runInflightDownload(index int, req *inflightSegmentDownload) {
+	var data []byte
+	var err error
+	if f.fetcher != nil {
+		data, err = f.doDownloadSegmentViaFetcher(req.ctx, index)
+	} else {
+		data, err = f.doDownloadSegmentViaPools(req.ctx, index)
+	}
+
+	f.downloadMu.Lock()
+	defer f.downloadMu.Unlock()
+
+	current, ok := f.inflightDownloads[index]
+	if !ok || current != req {
+		return
+	}
+	req.data, req.err = f.finalizeSegmentDownload(index, data, err, req.countFailures)
+	delete(f.inflightDownloads, index)
+	req.cancel()
+	close(req.done)
 }
 
 func (f *File) finalizeSegmentDownload(index int, data []byte, err error, countFailures bool) ([]byte, error) {

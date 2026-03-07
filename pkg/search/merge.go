@@ -14,6 +14,13 @@ import (
 
 var seriesFilterSuffixRE = regexp.MustCompile(`(?i)\s+s[0-9]{1,2}(?:e[0-9]{1,3})?$`)
 
+func movieYearMatches(expectYear, gotYear int) bool {
+	if expectYear <= 0 || gotYear <= 0 {
+		return true
+	}
+	return gotYear >= expectYear-1 && gotYear <= expectYear+1
+}
+
 func parseFilterQuery(filterQuery string) (normTitle string, year int) {
 	norm := release.NormalizeTitle(filterQuery)
 	norm = strings.TrimSpace(norm)
@@ -64,6 +71,14 @@ func fuzzyTitleMatches(expect, gotTitle string) bool {
 	gotWords := strings.Fields(gotNorm)
 	if len(gotWords) < len(expectWords) {
 		return false
+	}
+	if len(expectWords) == 1 {
+		parsed := parser.ParseReleaseTitle(gotTitle)
+		if parsed != nil {
+			parsedWords := strings.Fields(release.NormalizeTitleLettersOnly(parsed.Title))
+			return len(parsedWords) == 1 && parsedWords[0] == expectWords[0]
+		}
+		return len(gotWords) == 1 && gotWords[0] == expectWords[0]
 	}
 	// Reject when the release title has far more words than expected
 	// (prevents "The Science of Interstellar" matching "Interstellar").
@@ -189,7 +204,7 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 			}
 		}
 
-		if parsed.Year > 0 && expectYear > 0 && parsed.Year != expectYear {
+		if !movieYearMatches(expectYear, parsed.Year) {
 			logger.Trace("FilterResults dropped: year",
 				"expect_year", expectYear,
 				"got_year", parsed.Year,
