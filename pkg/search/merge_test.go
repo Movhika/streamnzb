@@ -22,6 +22,7 @@ func TestNormalizedTitleMatches(t *testing.T) {
 		{"Batman", "The Batman", false},
 		{"Batman", "Batman Beyond", false},
 		{"Batman", "Batman Forever", false},
+		{"The Hunger Games: Mockingjay - Part 1", "The Hunger Games Mockingjay Part 2", false},
 		{"The Walking Dead", "The Walking Dead S06E07", true},
 		{"Some Show", "Other Show", false},
 		{"Law and Order", "Law & Order", true},
@@ -124,6 +125,23 @@ func TestFilterResultsSeriesEpisodeRequestRejectsSingleWordTitleVariants(t *test
 	}
 
 	filtered := FilterResults(releases, "series", "Batman S01E02", "1", "2")
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 match, got %d: %+v", len(filtered), filtered)
+	}
+	if filtered[0].Title != releases[0].Title {
+		t.Fatalf("expected %q, got %q", releases[0].Title, filtered[0].Title)
+	}
+}
+
+func TestFilterResultsMovieRejectsNumberedTitleVariants(t *testing.T) {
+	logger.Init("ERROR")
+
+	releases := []*release.Release{
+		{Title: "The.Hunger.Games.Mockingjay.Part.1.2014.2160p.UHD.BluRay.x265-TERMiNAL"},
+		{Title: "The.Hunger.Games.Mockingjay.Part.2.2015.2160p.UHD.BluRay.x265-TERMiNAL"},
+	}
+
+	filtered := FilterResults(releases, "movie", "The Hunger Games: Mockingjay - Part 1 2014", "", "")
 	if len(filtered) != 1 {
 		t.Fatalf("expected 1 match, got %d: %+v", len(filtered), filtered)
 	}

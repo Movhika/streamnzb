@@ -59,25 +59,41 @@ func parseSeriesFilterQuery(filterQuery string) string {
 
 var titleArticles = map[string]bool{"the": true, "a": true, "an": true}
 
+func titleWordsForMatch(s string) []string {
+	if parsed := parser.ParseReleaseTitle(s); parsed != nil {
+		if parsedTitle := strings.TrimSpace(parsed.Title); parsedTitle != "" {
+			s = parsedTitle
+		}
+	}
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "&", " and ")
+	for _, sep := range []string{".", "-", "_", ":", "  "} {
+		s = strings.ReplaceAll(s, sep, " ")
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else if r == ' ' || r == '\t' {
+			b.WriteRune(' ')
+		}
+	}
+	return strings.Fields(b.String())
+}
+
 func fuzzyTitleMatches(expect, gotTitle string) bool {
-	expectWords := strings.Fields(release.NormalizeTitleLettersOnly(expect))
-	gotNorm := release.NormalizeTitleLettersOnly(gotTitle)
+	expectWords := titleWordsForMatch(expect)
+	gotWords := titleWordsForMatch(gotTitle)
 	if len(expectWords) == 0 {
 		return true
 	}
-	if gotNorm == "" {
+	if len(gotWords) == 0 {
 		return false
 	}
-	gotWords := strings.Fields(gotNorm)
 	if len(gotWords) < len(expectWords) {
 		return false
 	}
 	if len(expectWords) == 1 {
-		parsed := parser.ParseReleaseTitle(gotTitle)
-		if parsed != nil {
-			parsedWords := strings.Fields(release.NormalizeTitleLettersOnly(parsed.Title))
-			return len(parsedWords) == 1 && parsedWords[0] == expectWords[0]
-		}
 		return len(gotWords) == 1 && gotWords[0] == expectWords[0]
 	}
 	// Reject when the release title has far more words than expected
