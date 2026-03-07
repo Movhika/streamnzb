@@ -4,10 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
+	"sync"
 	"testing"
+	"time"
 
+	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/media/decode"
+	"streamnzb/pkg/media/nzb"
+	"streamnzb/pkg/usenet/pool"
 )
 
 func TestShouldPersistDownloadedSegment(t *testing.T) {
@@ -69,5 +76,151 @@ func TestDecodeAndCloseBodyClosesOnError(t *testing.T) {
 	}
 	if body.closeCalls != 1 {
 		t.Fatalf("expected body to be closed once, got %d", body.closeCalls)
+	}
+}
+
+	type dedupBlockingSegmentFetcher struct {
+	data         []byte
+	err          error
+	callObserved chan int
+	release      chan struct{}
+	once         sync.Once
+	mu           sync.Mutex
+	calls        int
+}
+
+func newDedupBlockingSegmentFetcher(data []byte, err error) *dedupBlockingSegmentFetcher {
+	return &dedupBlockingSegmentFetcher{
+		data:         data,
+		err:          err,
+		callObserved: make(chan int, 4),
+		release:      make(chan struct{}),
+	}
+}
+
+func (f *dedupBlockingSegmentFetcher) FetchSegment(ctx context.Context, segment *nzb.Segment, groups []string) (pool.SegmentData, error) {
+	f.mu.Lock()
+	f.calls++
+	call := f.calls
+	f.mu.Unlock()
+
+	f.callObserved <- call
+
+	select {
+	case <-ctx.Done():
+		return pool.SegmentData{}, ctx.Err()
+	case <-f.release:
+	}
+
+	if f.err != nil {
+		return pool.SegmentData{}, f.err
+	}
+	return pool.SegmentData{Body: append([]byte(nil), f.data...)}, nil
+}
+
+func (f *dedupBlockingSegmentFetcher) Release() {
+	f.once.Do(func() {
+		close(f.release)
+	})
+}
+
+func testNZBFileWithSegments(sizes ...int64) *nzb.File {
+	segments := make([]nzb.Segment, len(sizes))
+	for i, size := range sizes {
+		segments[i] = nzb.Segment{ID: fmt.Sprintf("<seg-%d>", i), Number: i + 1, Bytes: size}
+	}
+	return &nzb.File{Subject: "test.mkv", Groups: []string{"alt.test"}, Segments: segments}
+}
+
+func TestDownloadSegmentDeduplicatesConcurrentCalls(t *testing.T) {
+	oldLogger := logger.Log
+	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	defer func() {
+		logger.Log = oldLogger
+	}()
+
+	fetcher := newDedupBlockingSegmentFetcher([]byte("abc"), nil)
+	f := NewFile(context.Background(), testNZBFileWithSegments(3), nil, nil, fetcher, nil)
+
+	results := make(chan []byte, 2)
+	errs := make(chan error, 2)
+	go func() {
+		data, err := f.DownloadSegment(context.Background(), 0)
+		results <- data
+		errs <- err
+	}()
+
+	if got := <-fetcher.callObserved; got != 1 {
+		t.Fatalf("expected first fetch call to be 1, got %d", got)
+	}
+
+	go func() {
+		data, err := f.DownloadSegment(context.Background(), 0)
+		results <- data
+		errs <- err
+	}()
+
+	select {
+	case got := <-fetcher.callObserved:
+		t.Fatalf("expected one underlying fetch, saw call %d", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	fetcher.Release()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("DownloadSegment returned error: %v", err)
+		}
+		if got := string(<-results); got != "abc" {
+			t.Fatalf("expected shared data %q, got %q", "abc", got)
+		}
+	}
+}
+
+func TestConcurrentDownloadFailureCountsOnce(t *testing.T) {
+	oldLogger := logger.Log
+	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	defer func() {
+		logger.Log = oldLogger
+	}()
+
+	fetcher := newDedupBlockingSegmentFetcher(nil, errors.New("boom"))
+	f := NewFile(context.Background(), testNZBFileWithSegments(3, 4), nil, nil, fetcher, nil)
+
+	results := make(chan []byte, 2)
+	errs := make(chan error, 2)
+	go func() {
+		data, err := f.DownloadSegment(context.Background(), 1)
+		results <- data
+		errs <- err
+	}()
+
+	if got := <-fetcher.callObserved; got != 1 {
+		t.Fatalf("expected first fetch call to be 1, got %d", got)
+	}
+
+	go func() {
+		data, err := f.DownloadSegment(context.Background(), 1)
+		results <- data
+		errs <- err
+	}()
+
+	select {
+	case got := <-fetcher.callObserved:
+		t.Fatalf("expected one underlying failing fetch, saw call %d", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	fetcher.Release()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("DownloadSegment returned error: %v", err)
+		}
+		if got := <-results; len(got) != 4 {
+			t.Fatalf("expected zero-filled segment of length 4, got %d", len(got))
+		}
+	}
+	if f.zeroFillCount != 1 {
+		t.Fatalf("expected one shared zero-fill count, got %d", f.zeroFillCount)
 	}
 }

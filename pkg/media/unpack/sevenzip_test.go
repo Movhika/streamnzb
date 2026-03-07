@@ -1,0 +1,92 @@
+package unpack
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"log/slog"
+	"testing"
+
+	"streamnzb/pkg/core/logger"
+)
+
+type nopReadSeekCloser struct {
+	*bytes.Reader
+}
+
+func (n *nopReadSeekCloser) Close() error { return nil }
+
+type memoryUnpackableFile struct {
+	name string
+	data []byte
+}
+
+func (f *memoryUnpackableFile) Name() string { return f.name }
+
+func (f *memoryUnpackableFile) Size() int64 { return int64(len(f.data)) }
+
+func (f *memoryUnpackableFile) EnsureSegmentMap() error { return nil }
+
+func (f *memoryUnpackableFile) OpenStream() (io.ReadSeekCloser, error) {
+	return f.OpenStreamCtx(context.Background())
+}
+
+func (f *memoryUnpackableFile) OpenStreamCtx(ctx context.Context) (io.ReadSeekCloser, error) {
+	return &nopReadSeekCloser{Reader: bytes.NewReader(f.data)}, nil
+}
+
+func (f *memoryUnpackableFile) OpenReaderAt(ctx context.Context, offset int64) (io.ReadCloser, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > int64(len(f.data)) {
+		offset = int64(len(f.data))
+	}
+	return io.NopCloser(bytes.NewReader(f.data[offset:])), nil
+}
+
+func (f *memoryUnpackableFile) ReadAt(p []byte, off int64) (int, error) {
+	return bytes.NewReader(f.data).ReadAt(p, off)
+}
+
+func TestGetMediaStreamForEpisodeUsesCachedSevenZipBlueprintFiles(t *testing.T) {
+	oldLogger := logger.Log
+	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	defer func() {
+		logger.Log = oldLogger
+	}()
+
+	bp := &SevenZipBlueprint{
+		MainFileName: "episode.mkv",
+		TotalSize:    4,
+		FileOffset:   2,
+		Files: []UnpackableFile{
+			&memoryUnpackableFile{name: "episode.7z.001", data: []byte("abcd")},
+			&memoryUnpackableFile{name: "episode.7z.002", data: []byte("efgh")},
+		},
+	}
+
+	stream, name, size, cached, err := GetMediaStreamForEpisode(context.Background(), nil, bp, "", EpisodeTarget{})
+	if err != nil {
+		t.Fatalf("GetMediaStreamForEpisode returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if name != "episode.mkv" {
+		t.Fatalf("expected stream name %q, got %q", "episode.mkv", name)
+	}
+	if size != 4 {
+		t.Fatalf("expected stream size 4, got %d", size)
+	}
+	if cached != bp {
+		t.Fatal("expected cached blueprint to be returned")
+	}
+
+	data, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("failed to read cached 7z stream: %v", err)
+	}
+	if string(data) != "cdef" {
+		t.Fatalf("expected mapped stream %q, got %q", "cdef", string(data))
+	}
+}

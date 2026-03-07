@@ -20,21 +20,12 @@ func ProbeMediaStream(stream io.ReadSeeker, name string, size int64) error {
 	if size <= 0 {
 		return fmt.Errorf("probe: invalid size %d", size)
 	}
-	readSize := int(size)
-	if readSize > ProbeSize {
-		readSize = ProbeSize
+	info, err := seek.InspectStreamStart(stream, size, name, ProbeSize)
+	if err != nil {
+		return fmt.Errorf("probe inspect: %w", err)
 	}
-	buf := make([]byte, readSize)
-	n, err := io.ReadFull(stream, buf)
-	if err != nil && err != io.ErrUnexpectedEOF {
-		return fmt.Errorf("probe read: %w", err)
-	}
-	buf = buf[:n]
-	if !seek.ValidateContainerHeader(buf, name) {
+	if !info.HeaderValid {
 		return fmt.Errorf("probe: invalid container header for %s", name)
-	}
-	if _, err := stream.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("probe seek back: %w", err)
 	}
 	return nil
 }

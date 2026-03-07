@@ -27,8 +27,9 @@ type SegmentReader struct {
 	offset int64
 	closed bool
 
-	prefetchWg  sync.WaitGroup
-	prefetching map[int]bool
+	prefetchWg         sync.WaitGroup
+	prefetching       map[int]uint64
+	prefetchGeneration uint64
 }
 
 var liveSegmentReaders atomic.Int64
@@ -62,7 +63,7 @@ func NewSegmentReader(parent context.Context, f *File, startOffset int64) *Segme
 		parent:      parent,
 		traceID:     nextSegmentReaderID.Add(1),
 		offset:      startOffset,
-		prefetching: make(map[int]bool),
+		prefetching: make(map[int]uint64),
 	}
 
 	idx := f.FindSegmentIndex(startOffset)
@@ -77,6 +78,7 @@ func NewSegmentReader(parent context.Context, f *File, startOffset int64) *Segme
 		sr.segOff = startOffset - f.segments[idx].StartOffset
 	}
 
+	sr.applyCacheWindow(sr.segIdx)
 	sr.startPrefetch()
 	liveSegmentReaders.Add(1)
 	liveSegmentReaderRegistry.Store(sr.traceID, sr)
@@ -107,6 +109,14 @@ func (r *SegmentReader) traceDetail() string {
 
 const maxPrefetchAhead = 16 // cap "ahead" cache so memory stays bounded during playback
 
+func (r *SegmentReader) applyCacheWindow(segIdx int) {
+	if segIdx < 0 {
+		return
+	}
+	r.file.EvictCachedSegmentsBefore(segIdx)
+	r.file.EvictCachedSegmentsAfter(segIdx + maxPrefetchAhead)
+}
+
 func (r *SegmentReader) Read(p []byte) (int, error) {
 	r.mu.Lock()
 	if r.closed {
@@ -121,11 +131,6 @@ func (r *SegmentReader) Read(p []byte) (int, error) {
 	segOff := r.segOff
 	r.mu.Unlock()
 
-	// Evict already-played segments on every Read so cache doesn't grow with playback position.
-	r.file.EvictCachedSegmentsBefore(segIdx)
-	// Cap how far ahead we keep; prefetch will refill only up to this window.
-	r.file.EvictCachedSegmentsAfter(segIdx + maxPrefetchAhead)
-
 	data, err := r.waitForSegment(segIdx)
 	if err != nil {
 		return 0, err
@@ -135,23 +140,32 @@ func (r *SegmentReader) Read(p []byte) (int, error) {
 		r.mu.Lock()
 		r.segIdx++
 		r.segOff = 0
+		nextSegIdx := r.segIdx
 		r.mu.Unlock()
-		if r.segIdx >= len(r.file.segments) {
+		r.applyCacheWindow(nextSegIdx)
+		if nextSegIdx >= len(r.file.segments) {
 			return 0, io.EOF
 		}
+		r.startPrefetch()
 		return r.Read(p)
 	}
 
 	n := copy(p, data[segOff:])
 
 	r.mu.Lock()
+	currentSegIdx := r.segIdx
 	r.segOff += int64(n)
 	r.offset += int64(n)
 	if r.segOff >= int64(len(data)) {
 		r.segIdx++
 		r.segOff = 0
 	}
+	nextSegIdx := r.segIdx
 	r.mu.Unlock()
+
+	if nextSegIdx != currentSegIdx {
+		r.applyCacheWindow(nextSegIdx)
+	}
 
 	r.startPrefetch()
 
@@ -169,8 +183,13 @@ func (r *SegmentReader) waitForSegment(index int) ([]byte, error) {
 
 func (r *SegmentReader) startPrefetch() {
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
 	current := r.segIdx
-	r.mu.Unlock()
+	ctx := r.ctx
+	generation := r.prefetchGeneration
 
 	// Cap concurrent prefetch goroutines to the actual pool connection count so we
 	// don't spawn 16 goroutines when the pool only has e.g. 2 connections — the
@@ -184,7 +203,6 @@ func (r *SegmentReader) startPrefetch() {
 		maxWorkers = 1
 	}
 
-	r.mu.Lock()
 	inFlight := len(r.prefetching)
 	for i := 0; i < maxPrefetchAhead; i++ {
 		if inFlight >= maxWorkers {
@@ -197,17 +215,19 @@ func (r *SegmentReader) startPrefetch() {
 		if _, ok := r.file.GetCachedSegment(idx); ok {
 			continue
 		}
-		if r.prefetching[idx] {
+		if currentGen, ok := r.prefetching[idx]; ok && currentGen == generation {
 			continue
 		}
-		r.prefetching[idx] = true
+		r.prefetching[idx] = generation
 		inFlight++
 		r.prefetchWg.Add(1)
-		go func(segIdx int) {
+		go func(segIdx int, ctx context.Context, generation uint64) {
 			defer r.prefetchWg.Done()
 			defer func() {
 				r.mu.Lock()
-				delete(r.prefetching, segIdx)
+				if currentGen, ok := r.prefetching[segIdx]; ok && currentGen == generation {
+					delete(r.prefetching, segIdx)
+				}
 				r.mu.Unlock()
 			}()
 			// Use PrefetchSegment instead of DownloadSegment so that transient provider
@@ -215,20 +235,19 @@ func (r *SegmentReader) startPrefetch() {
 			// prematurely mark the file as failed via IsFailed() before the player reads it.
 			// The blocking read path (DownloadSegment) will count failures if it also
 			// exhausts all providers for the same segment.
-			_, err := r.file.PrefetchSegment(r.ctx, segIdx)
+			_, err := r.file.PrefetchSegment(ctx, segIdx)
 			if err != nil && !isContextErr(err) {
 				logger.Trace("Prefetch failed", "seg", segIdx, "err", err)
 			}
-		}(idx)
+		}(idx, ctx, generation)
 	}
 	r.mu.Unlock()
 }
 
 func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if r.closed {
+		r.mu.Unlock()
 		return 0, io.ErrClosedPipe
 	}
 
@@ -241,27 +260,25 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekEnd:
 		target = r.file.Size() + offset
 	default:
+		r.mu.Unlock()
 		return 0, errors.New("invalid whence")
 	}
 
 	if target < 0 || target > r.file.Size() {
+		r.mu.Unlock()
 		return 0, errors.New("seek out of bounds")
 	}
 
 	if target == r.offset {
+		r.mu.Unlock()
 		return target, nil
 	}
 
 	r.cancel()
 
 	r.ctx, r.cancel = context.WithCancel(r.parent)
-
-	r.prefetching = make(map[int]bool)
-	r.mu.Unlock()
-
-	r.prefetchWg.Wait()
-
-	r.mu.Lock()
+	r.prefetchGeneration++
+	r.prefetching = make(map[int]uint64)
 	r.offset = target
 	if target >= r.file.Size() {
 		r.segIdx = len(r.file.segments)
@@ -276,10 +293,10 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 			r.segOff = target - r.file.segments[idx].StartOffset
 		}
 	}
-
+	currentSegIdx := r.segIdx
 	r.mu.Unlock()
+	r.applyCacheWindow(currentSegIdx)
 	r.startPrefetch()
-	r.mu.Lock()
 
 	return target, nil
 }

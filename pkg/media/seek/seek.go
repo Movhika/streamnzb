@@ -2,6 +2,7 @@ package seek
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -11,39 +12,60 @@ const (
 	MaxBytesToRead = 2 * 1024 * 1024
 )
 
-func TimeToByteOffset(stream io.ReadSeeker, size int64, filename string, tSeconds float64) (offset int64, ok bool) {
-	if size <= 0 || tSeconds < 0 {
-		return 0, false
+type StreamStartInfo struct {
+	HeaderValid   bool
+	DurationSec   float64
+	DurationKnown bool
+}
+
+func InspectStreamStart(stream io.ReadSeeker, size int64, filename string, maxBytes int) (StreamStartInfo, error) {
+	var info StreamStartInfo
+	if size <= 0 {
+		return info, fmt.Errorf("invalid size %d", size)
 	}
-	format := formatFromFilename(filename)
-	if format == "" {
-		return 0, false
+	if maxBytes <= 0 {
+		maxBytes = MaxBytesToRead
 	}
 
-	readSize := int(size)
-	if readSize > MaxBytesToRead {
-		readSize = MaxBytesToRead
+	readSize := maxBytes
+	if size < int64(readSize) {
+		readSize = int(size)
 	}
 	buf := make([]byte, readSize)
 	n, err := io.ReadFull(stream, buf)
 	if err != nil && err != io.ErrUnexpectedEOF {
-		return 0, false
+		return info, err
 	}
 	buf = buf[:n]
 
 	if _, err := stream.Seek(0, io.SeekStart); err != nil {
-		return 0, false
+		return info, err
 	}
-	var durationSec float64
-	switch format {
+
+	info.HeaderValid = ValidateContainerHeader(buf, filename)
+	switch formatFromFilename(filename) {
 	case "mp4":
-		durationSec, ok = durationFromMP4(buf)
+		info.DurationSec, info.DurationKnown = durationFromMP4(buf)
 	case "mkv":
-		durationSec, ok = durationFromMKV(buf)
-	default:
+		info.DurationSec, info.DurationKnown = durationFromMKV(buf)
+	}
+
+	return info, nil
+}
+
+func TimeToByteOffset(stream io.ReadSeeker, size int64, filename string, tSeconds float64) (offset int64, ok bool) {
+	if size <= 0 || tSeconds < 0 {
 		return 0, false
 	}
-	if !ok || durationSec <= 0 {
+	info, err := InspectStreamStart(stream, size, filename, MaxBytesToRead)
+	if err != nil || !info.DurationKnown {
+		return 0, false
+	}
+	return TimeToByteOffsetFromDuration(size, info.DurationSec, tSeconds)
+	}
+
+func TimeToByteOffsetFromDuration(size int64, durationSec, tSeconds float64) (offset int64, ok bool) {
+	if size <= 0 || durationSec <= 0 || tSeconds < 0 {
 		return 0, false
 	}
 	if tSeconds >= durationSec {

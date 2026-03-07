@@ -86,11 +86,29 @@ type File struct {
 	segCache   map[int][]byte
 	segCacheMu sync.RWMutex
 
+	downloadMu        sync.Mutex
+	inflightDownloads map[int]*inflightSegmentDownload
+
 	cacheBudget *pool.SegmentCacheBudget // optional global byte limit
 
 	zeroFillMu    sync.Mutex
 	zeroFillCount int
 }
+
+type inflightSegmentDownload struct {
+	done          chan struct{}
+	countFailures bool
+	data          []byte
+	err           error
+}
+
+type zeroFillEligibleError struct {
+	cause error
+}
+
+func (e *zeroFillEligibleError) Error() string { return e.cause.Error() }
+
+func (e *zeroFillEligibleError) Unwrap() error { return e.cause }
 
 func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstimator, fetcher SegmentFetcher, cacheBudget *pool.SegmentCacheBudget) *File {
 	segments := make([]*Segment, len(f.Segments))
@@ -112,7 +130,8 @@ func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimat
 		totalSize:   offset,
 		ctx:         ctx,
 		segCache:    make(map[int][]byte),
-		cacheBudget: cacheBudget,
+		inflightDownloads: make(map[int]*inflightSegmentDownload),
+		cacheBudget:      cacheBudget,
 	}
 }
 
@@ -409,13 +428,91 @@ func (f *File) PrefetchSegment(ctx context.Context, index int) ([]byte, error) {
 }
 
 func (f *File) doDownloadSegment(ctx context.Context, index int, countFailures bool) ([]byte, error) {
-	if f.fetcher != nil {
-		return f.doDownloadSegmentViaFetcher(ctx, index, countFailures)
+	if data, ok := f.GetCachedSegment(index); ok {
+		return data, nil
 	}
-	return f.doDownloadSegmentViaPools(ctx, index, countFailures)
+
+	req, leader := f.startInflightDownload(index, countFailures)
+	if !leader {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-req.done:
+			return req.data, req.err
+		}
+	}
+
+	var data []byte
+	var err error
+	if f.fetcher != nil {
+		data, err = f.doDownloadSegmentViaFetcher(ctx, index)
+	} else {
+		data, err = f.doDownloadSegmentViaPools(ctx, index)
+	}
+
+	f.downloadMu.Lock()
+	req.data, req.err = f.finalizeSegmentDownload(index, data, err, req.countFailures)
+	delete(f.inflightDownloads, index)
+	close(req.done)
+	data, err = req.data, req.err
+	f.downloadMu.Unlock()
+	return data, err
 }
 
-func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int, countFailures bool) ([]byte, error) {
+func (f *File) startInflightDownload(index int, countFailures bool) (*inflightSegmentDownload, bool) {
+	f.downloadMu.Lock()
+	defer f.downloadMu.Unlock()
+
+	if req, ok := f.inflightDownloads[index]; ok {
+		if countFailures {
+			req.countFailures = true
+		}
+		return req, false
+	}
+
+	req := &inflightSegmentDownload{
+		done:          make(chan struct{}),
+		countFailures: countFailures,
+	}
+	f.inflightDownloads[index] = req
+	return req, true
+}
+
+func (f *File) finalizeSegmentDownload(index int, data []byte, err error, countFailures bool) ([]byte, error) {
+	if err == nil {
+		return data, nil
+	}
+
+	var eligible *zeroFillEligibleError
+	if !errors.As(err, &eligible) {
+		return nil, err
+	}
+
+	if !countFailures {
+		return nil, fmt.Errorf("prefetch segment download failed (not counted): %w", eligible.cause)
+	}
+
+	f.zeroFillMu.Lock()
+	count := f.zeroFillCount
+	if count >= MaxZeroFills {
+		f.zeroFillMu.Unlock()
+		return nil, fmt.Errorf("too many failed segments (%d/%d): %w", count+1, MaxZeroFills, errors.Join(unpack.ErrTooManyZeroFills, eligible.cause))
+	}
+	f.zeroFillCount++
+	f.zeroFillMu.Unlock()
+
+	seg := f.segments[index]
+	size := int(seg.EndOffset - seg.StartOffset)
+	if size < 0 {
+		size = 0
+	}
+	zeroData := make([]byte, size)
+	logger.Trace("Segment download failed, zero-filling", "index", index, "count", count+1, "max", MaxZeroFills, "err", eligible.cause)
+	f.PutCachedSegment(index, zeroData)
+	return zeroData, nil
+}
+
+func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int) ([]byte, error) {
 	downloadCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -444,27 +541,7 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int, count
 			}
 			return nil, err
 		}
-		// Prefetch calls (countFailures=false) must not zero-fill or increment the counter.
-		// The blocking read path will retry and count the failure if all providers also fail.
-		if !countFailures {
-			return nil, fmt.Errorf("prefetch fetch failed (not counted): %w", err)
-		}
-		f.zeroFillMu.Lock()
-		count := f.zeroFillCount
-		if count >= MaxZeroFills {
-			f.zeroFillMu.Unlock()
-			return nil, fmt.Errorf("too many failed segments (%d/%d): %w", count+1, MaxZeroFills, errors.Join(unpack.ErrTooManyZeroFills, err))
-		}
-		f.zeroFillCount++
-		f.zeroFillMu.Unlock()
-		logger.Trace("Segment fetch failed, zero-filling", "index", index, "count", count+1, "max", MaxZeroFills, "err", err)
-		size := int(seg.EndOffset - seg.StartOffset)
-		if size < 0 {
-			size = 0
-		}
-		zeroData := make([]byte, size)
-		f.PutCachedSegment(index, zeroData)
-		return zeroData, nil
+		return nil, &zeroFillEligibleError{cause: err}
 	}
 	if !shouldPersistDownloadedSegment(downloadCtx) {
 		return nil, downloadCtx.Err()
@@ -474,7 +551,7 @@ func (f *File) doDownloadSegmentViaFetcher(ctx context.Context, index int, count
 	return data.Body, nil
 }
 
-func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int, countFailures bool) ([]byte, error) {
+func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int) ([]byte, error) {
 	downloadCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -585,29 +662,7 @@ func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int, countFa
 		return nil, lastErr
 	}
 
-	// Prefetch calls (countFailures=false) must not zero-fill or increment the counter.
-	// The blocking read path will retry and count the failure if all providers also fail.
-	if !countFailures {
-		return nil, fmt.Errorf("prefetch failed on all providers (not counted): %w", lastErr)
-	}
-
-	f.zeroFillMu.Lock()
-	count := f.zeroFillCount
-	if count >= MaxZeroFills {
-		f.zeroFillMu.Unlock()
-		return nil, fmt.Errorf("too many failed segments (%d/%d): %w", count+1, MaxZeroFills, errors.Join(unpack.ErrTooManyZeroFills, lastErr))
-	}
-	f.zeroFillCount++
-	f.zeroFillMu.Unlock()
-
-	logger.Trace("Segment failed on all providers, zero-filling", "index", index, "count", count+1, "max", MaxZeroFills, "err", lastErr)
-	size := int(seg.EndOffset - seg.StartOffset)
-	if size < 0 {
-		size = 0
-	}
-	zeroData := make([]byte, size)
-	f.PutCachedSegment(index, zeroData)
-	return zeroData, nil
+	return nil, &zeroFillEligibleError{cause: lastErr}
 }
 
 func (f *File) ReadAt(p []byte, off int64) (n int, err error) {

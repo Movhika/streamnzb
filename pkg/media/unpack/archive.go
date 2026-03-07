@@ -39,14 +39,10 @@ func GetMediaStreamForEpisode(ctx context.Context, files []UnpackableFile, cache
 			return s, name, size, bp, err
 		case *SevenZipBlueprint:
 			logger.Debug("Using cached 7z blueprint", "file", bp.MainFileName)
-			archiveFiles, err := Identify7zParts(files)
-			if err != nil {
-				return nil, "", 0, nil, err
-			}
-			if len(archiveFiles) == 0 {
+			if len(bp.Files) == 0 {
 				return nil, "", 0, nil, errors.New("7z set empty for cached blueprint")
 			}
-			s, n, sz, err := Open7zStreamFromBlueprint(ctx, archiveFiles, bp, password)
+			s, n, sz, err := Open7zStreamFromBlueprint(ctx, bp, password)
 			return s, n, sz, bp, err
 		case *DirectBlueprint:
 			if bp.FileIndex < len(files) {
@@ -90,7 +86,7 @@ func GetMediaStreamForEpisode(ctx context.Context, files []UnpackableFile, cache
 		if err != nil {
 			return nil, "", 0, nil, err
 		}
-		s, n, sz, err := Open7zStreamFromBlueprint(ctx, archiveFiles, newBp, password)
+			s, n, sz, err := Open7zStreamFromBlueprint(ctx, newBp, password)
 		return s, n, sz, newBp, err
 	}
 

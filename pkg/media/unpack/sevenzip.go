@@ -97,8 +97,8 @@ func CreateSevenZipBlueprint(files []UnpackableFile, firstVolName string, passwo
 
 var ErrEncrypted7zStreaming = errors.New("encrypted 7z cannot be streamed in reasonable time; try another release")
 
-func Open7zStreamFromBlueprint(ctx context.Context, files []UnpackableFile, bp *SevenZipBlueprint, password string) (ReadSeekCloser, string, int64, error) {
-	if bp == nil || len(files) == 0 {
+func Open7zStreamFromBlueprint(ctx context.Context, bp *SevenZipBlueprint, password string) (ReadSeekCloser, string, int64, error) {
+	if bp == nil || len(bp.Files) == 0 {
 		return nil, "", 0, errors.New("invalid 7z blueprint or empty files")
 	}
 
@@ -106,7 +106,7 @@ func Open7zStreamFromBlueprint(ctx context.Context, files []UnpackableFile, bp *
 		return nil, "", 0, ErrEncrypted7zStreaming
 	}
 
-	parts := filesToParts(filter7zFiles(files))
+	parts := filesToParts(bp.Files)
 	streamParts, err := mapOffsetToParts(parts, bp.FileOffset, bp.TotalSize)
 	if err != nil {
 		return nil, "", 0, err

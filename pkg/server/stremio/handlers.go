@@ -1987,6 +1987,10 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		logger.Debug("Detected Stremio next-episode preload, limiting failovers", "session", sessionID, "max_failovers", MaxPreloadFailovers)
 	}
 	failoverCount := 0
+	tSec, hasTimeOffset := seek.ParseTSeconds(r.URL.Query().Get("t"))
+	wantTimeOffset := r.Header.Get("Range") == "" && hasTimeOffset
+	var startupInfo seek.StreamStartInfo
+	var haveStartupInfo bool
 
 	var mergedCtx context.Context
 	var mergedCancel context.CancelFunc
@@ -2069,8 +2073,24 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			forceDisconnect(w, s.baseURL)
 			return
 		}
-		// Probe: check relevant segments (RAR/7z/direct) and validate MKV/MP4 container headers before sending any response.
-		probeErr := unpack.ProbeMediaStream(stream, name, size)
+			inspectBytes := unpack.ProbeSize
+			needDuration := wantTimeOffset && sessionID == requestedSessionID
+			if needDuration && seek.MaxBytesToRead > inspectBytes {
+				inspectBytes = seek.MaxBytesToRead
+			}
+			startInfo, inspectErr := seek.InspectStreamStart(stream, size, name, inspectBytes)
+			var probeErr error
+			switch {
+			case inspectErr != nil:
+				probeErr = fmt.Errorf("probe inspect: %w", inspectErr)
+			case !startInfo.HeaderValid:
+				probeErr = fmt.Errorf("probe: invalid container header for %s", name)
+			default:
+				if needDuration {
+					startupInfo = startInfo
+					haveStartupInfo = true
+				}
+			}
 		if probeErr != nil {
 			mergedCancel()
 			// Always mark slot as permanently failed when we abandon it; AvailNZB reporting is selective.
@@ -2130,12 +2150,10 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	if failedOver {
 		r.Header.Del("Range")
 	}
-	if tStr := r.URL.Query().Get("t"); !failedOver && tStr != "" && r.Header.Get("Range") == "" {
-		if tSec, parseOK := seek.ParseTSeconds(tStr); parseOK {
-			if byteOffset, seekOK := seek.TimeToByteOffset(stream, size, name, tSec); seekOK {
+		if !failedOver && wantTimeOffset && r.Header.Get("Range") == "" && haveStartupInfo {
+			if byteOffset, seekOK := seek.TimeToByteOffsetFromDuration(size, startupInfo.DurationSec, tSec); seekOK {
 				r.Header.Set("Range", "bytes="+strconv.FormatInt(byteOffset, 10)+"-")
 			}
-		}
 	}
 
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
@@ -2614,8 +2632,10 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 
 	if tStr := r.URL.Query().Get("t"); tStr != "" && r.Header.Get("Range") == "" {
 		if tSec, parseOK := seek.ParseTSeconds(tStr); parseOK {
-			if byteOffset, seekOK := seek.TimeToByteOffset(stream, size, name, tSec); seekOK {
-				r.Header.Set("Range", "bytes="+strconv.FormatInt(byteOffset, 10)+"-")
+			if startInfo, err := seek.InspectStreamStart(stream, size, name, seek.MaxBytesToRead); err == nil {
+				if byteOffset, seekOK := seek.TimeToByteOffsetFromDuration(size, startInfo.DurationSec, tSec); seekOK {
+					r.Header.Set("Range", "bytes="+strconv.FormatInt(byteOffset, 10)+"-")
+				}
 			}
 		}
 	}
