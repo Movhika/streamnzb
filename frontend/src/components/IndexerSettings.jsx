@@ -186,42 +186,6 @@ function SearchSettings({ control, index, watch, indexerCaps }) {
             )}
           />
 
-		          <FormField
-		            control={control}
-		            name={`indexers.${index}.enable_series_season_search`}
-		            render={({ field }) => (
-		              <FormItem className="flex flex-row items-center space-x-2 space-y-0">
-		                <FormControl>
-		                  <Checkbox
-		                    checked={field.value !== false}
-		                    onCheckedChange={(v) => field.onChange(v === true ? undefined : false)}
-		                  />
-		                </FormControl>
-		                <FormLabel className="text-[10px]">Search season packs for episodes</FormLabel>
-		                <FormDescription className="text-[10px]">Add an extra season-level query like S01 for episode searches. Enabled by default.</FormDescription>
-		                <FormMessage />
-		              </FormItem>
-		            )}
-		          />
-
-		          <FormField
-		            control={control}
-		            name={`indexers.${index}.enable_series_complete_search`}
-		            render={({ field }) => (
-		              <FormItem className="flex flex-row items-center space-x-2 space-y-0">
-		                <FormControl>
-		                  <Checkbox
-		                    checked={field.value !== false}
-		                    onCheckedChange={(v) => field.onChange(v === true ? undefined : false)}
-		                  />
-		                </FormControl>
-		                <FormLabel className="text-[10px]">Search complete packs for episodes</FormLabel>
-		                <FormDescription className="text-[10px]">Add an extra complete-pack query for episode searches. Enabled by default.</FormDescription>
-		                <FormMessage />
-		              </FormItem>
-		            )}
-		          />
-
           <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border">
             <FormField
               control={control}
@@ -244,12 +208,12 @@ function SearchSettings({ control, index, watch, indexerCaps }) {
                 <FormItem className="flex flex-row items-center space-x-2 space-y-0 pt-6">
                   <FormControl>
                     <Checkbox
-	                      checked={field.value !== false}
-	                      onCheckedChange={(v) => field.onChange(v === true ? undefined : false)}
+	                    checked={field.value !== false}
+	                    onCheckedChange={(v) => field.onChange(v === true ? undefined : false)}
                     />
                   </FormControl>
-	                  <FormLabel className="text-[10px]">Include year in search</FormLabel>
-	                  <FormDescription className="text-[10px]">Append movie or series year to TMDB-derived search titles. Turn off if this indexer dislikes year suffixes.</FormDescription>
+	                <FormLabel className="text-[10px]">Include year in search</FormLabel>
+	                <FormDescription className="text-[10px]">Append movie or series year to TMDB-derived search titles. Turn off if this indexer dislikes year suffixes.</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -495,7 +459,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
             <Button
                 type="button"
                 variant="outline"
-	                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '', movie_categories: '', tv_categories: '', extra_search_terms: '', use_season_episode_params: undefined, enable_series_season_search: undefined, enable_series_complete_search: undefined, search_result_limit: 0, include_year_in_search: undefined, search_title_language: '', search_title_normalize: undefined })}
+	                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '', movie_categories: '', tv_categories: '', extra_search_terms: '', use_season_episode_params: undefined, search_result_limit: 0, include_year_in_search: undefined, search_title_language: '', search_title_normalize: undefined })}
                 className={cn(
                   "flex flex-col items-center justify-center p-4 h-auto min-h-[180px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
                 )}

@@ -1455,45 +1455,19 @@ type SearchParams struct {
 	AvailIndexers []string
 }
 
-func buildSeriesEpisodeQueries(showName, season, episode string) []string {
-	return buildSeriesEpisodeQueriesWithOptions(showName, "", season, episode, false, true, true)
+func buildSeriesQueries(showName string) []string {
+	return buildSeriesQueriesWithOptions(showName, "", false)
 }
 
-func buildSeriesEpisodeQueriesWithOptions(showName, year, season, episode string, includeYear, includeSeasonSearch, includeCompleteSearch bool) []string {
+func buildSeriesQueriesWithOptions(showName, year string, includeYear bool) []string {
 	showName = strings.TrimSpace(showName)
 	if includeYear && strings.TrimSpace(year) != "" {
 		showName = strings.TrimSpace(showName + " " + year)
 	}
-	if showName == "" || season == "" || episode == "" {
+	if showName == "" {
 		return nil
 	}
-
-	seasonNum, _ := strconv.Atoi(season)
-	epNum, _ := strconv.Atoi(episode)
-	seen := make(map[string]bool)
-	queries := make([]string, 0, 3)
-	add := func(query string) {
-		query = strings.TrimSpace(query)
-		if query == "" || seen[query] {
-			return
-		}
-		seen[query] = true
-		queries = append(queries, query)
-	}
-
-	if seasonNum > 0 || epNum > 0 {
-		add(fmt.Sprintf("%s S%02dE%02d", showName, seasonNum, epNum))
-	} else {
-		add(fmt.Sprintf("%s S%sE%s", showName, season, episode))
-	}
-	if includeSeasonSearch && seasonNum > 0 {
-		add(fmt.Sprintf("%s S%02d", showName, seasonNum))
-	}
-	if includeCompleteSearch {
-		add(fmt.Sprintf("%s Complete", showName))
-	}
-
-	return queries
+	return []string{showName}
 }
 
 func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (*SearchParams, error) {
@@ -1631,16 +1605,12 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 			} else if req.Season != "" && req.Episode != "" {
 
 				type queryKey struct {
-					includeYear           bool
-					includeSeasonSearch   bool
-					includeCompleteSearch bool
+					includeYear bool
 				}
 				resolved := make(map[queryKey][]string)
 				for name, eff := range req.EffectiveByIndexer {
 					includeYear := eff.IncludeYearInSearch != nil && *eff.IncludeYearInSearch
-					includeSeasonSearch := eff.EnableSeriesSeasonSearch != nil && *eff.EnableSeriesSeasonSearch
-					includeCompleteSearch := eff.EnableSeriesCompleteSearch != nil && *eff.EnableSeriesCompleteSearch
-					k := queryKey{includeYear: includeYear, includeSeasonSearch: includeSeasonSearch, includeCompleteSearch: includeCompleteSearch}
+					k := queryKey{includeYear: includeYear}
 					if queries, ok := resolved[k]; ok {
 						req.PerIndexerQuery[name] = queries
 						continue
@@ -1650,8 +1620,8 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 						logger.Debug("Per-indexer series query failed", "indexer", name, "err", err)
 						continue
 					}
-					queries := buildSeriesEpisodeQueriesWithOptions(showName, year, req.Season, req.Episode, includeYear, includeSeasonSearch, includeCompleteSearch)
-					logger.Debug("Per-indexer series query", "indexer", name, "include_year", includeYear, "enable_series_season_search", includeSeasonSearch, "enable_series_complete_search", includeCompleteSearch, "queries", queries)
+					queries := buildSeriesQueriesWithOptions(showName, year, includeYear)
+					logger.Debug("Per-indexer series query", "indexer", name, "include_year", includeYear, "queries", queries)
 					resolved[k] = queries
 					req.PerIndexerQuery[name] = queries
 				}

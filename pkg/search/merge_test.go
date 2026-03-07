@@ -41,7 +41,11 @@ func TestFilterResultsSeriesEpisodeRequestAcceptsPacks(t *testing.T) {
 		{Title: "The.Walking.Dead.S01E05.1080p.WEB-DL"},
 		{Title: "The.Walking.Dead.S01E05E06.1080p.WEB-DL"},
 		{Title: "The.Walking.Dead.S01.COMPLETE.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.Season.01.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.Season.1.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.S01.1080p.WEB-DL"},
 		{Title: "The.Walking.Dead.Complete.Series.1080p.WEB-DL"},
+		{Title: "The.Walking.Dead.COMPLETE.1080p.WEB-DL"},
 		{Title: "The.Walking.Dead.S02.COMPLETE.1080p.WEB-DL"},
 		{Title: "Other.Show.S01E05.1080p.WEB-DL"},
 	}
@@ -58,7 +62,11 @@ func TestFilterResultsSeriesEpisodeRequestAcceptsPacks(t *testing.T) {
 		"The.Walking.Dead.S01E05.1080p.WEB-DL",
 		"The.Walking.Dead.S01E05E06.1080p.WEB-DL",
 		"The.Walking.Dead.S01.COMPLETE.1080p.WEB-DL",
+		"The.Walking.Dead.Season.01.1080p.WEB-DL",
+		"The.Walking.Dead.Season.1.1080p.WEB-DL",
+		"The.Walking.Dead.S01.1080p.WEB-DL",
 		"The.Walking.Dead.Complete.Series.1080p.WEB-DL",
+		"The.Walking.Dead.COMPLETE.1080p.WEB-DL",
 	}
 
 	if len(got) != len(want) {

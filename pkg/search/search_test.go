@@ -34,7 +34,7 @@ func TestRunIndexerSearchesPerIndexerTextRequestDoesNotCarrySeasonEpisode(t *tes
 		Season:  "1",
 		Episode: "5",
 		PerIndexerQuery: map[string][]string{
-			"TestIndexer": {"The Walking Dead S01E05", "The Walking Dead Complete"},
+			"TestIndexer": {"The Walking Dead"},
 		},
 	}
 
@@ -69,7 +69,7 @@ func TestRunIndexerSearchesPerIndexerTextRequestDoesNotCarrySeasonEpisode(t *tes
 	if textReq.Season != "" || textReq.Episode != "" {
 		t.Fatalf("expected text request to omit season/episode, got season=%q episode=%q", textReq.Season, textReq.Episode)
 	}
-	if got := textReq.PerIndexerQuery["TestIndexer"]; len(got) != 2 {
+	if got := textReq.PerIndexerQuery["TestIndexer"]; len(got) != 1 || got[0] != "The Walking Dead" {
 		t.Fatalf("expected text request queries to be preserved, got %#v", got)
 	}
 }
