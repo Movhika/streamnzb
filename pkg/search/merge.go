@@ -1,6 +1,7 @@
 package search
 
 import (
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/search/parser"
 )
+
+var seriesFilterSuffixRE = regexp.MustCompile(`(?i)\s+s[0-9]{1,2}(?:e[0-9]{1,3})?$`)
 
 func parseFilterQuery(filterQuery string) (normTitle string, year int) {
 	norm := release.NormalizeTitle(filterQuery)
@@ -32,6 +35,19 @@ func parseFilterQuery(filterQuery string) (normTitle string, year int) {
 		break
 	}
 	return norm, 0
+}
+
+func parseSeriesFilterQuery(filterQuery string) string {
+	norm := release.NormalizeTitle(filterQuery)
+	norm = strings.TrimSpace(norm)
+	if norm == "" {
+		return ""
+	}
+	trimmed := strings.TrimSpace(seriesFilterSuffixRE.ReplaceAllString(norm, ""))
+	if trimmed != "" {
+		return trimmed
+	}
+	return norm
 }
 
 var titleArticles = map[string]bool{"the": true, "a": true, "an": true}
@@ -123,7 +139,7 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 	if contentType == "movie" {
 		expectTitle, expectYear = parseFilterQuery(filterQuery)
 	} else {
-		expectTitle = release.NormalizeTitle(strings.Split(filterQuery, " S")[0])
+		expectTitle = parseSeriesFilterQuery(filterQuery)
 	}
 
 	var out []*release.Release

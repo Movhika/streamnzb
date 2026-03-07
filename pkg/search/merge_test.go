@@ -85,3 +85,20 @@ func TestFilterResultsSeriesEpisodeRequestRejectsWrongEpisodePacks(t *testing.T)
 		t.Fatalf("expected no matches, got %d: %+v", len(filtered), filtered)
 	}
 }
+
+func TestFilterResultsSeriesEpisodeRequestKeepsSTitlesIntact(t *testing.T) {
+	logger.Init("ERROR")
+
+	releases := []*release.Release{
+		{Title: "Star.Trek.Strange.New.Worlds.S01E01.WEBRip.x265-ION265"},
+		{Title: "Star.Trek.Starfleet.Academy.S01E01.WEBRip.x265-ION265"},
+	}
+
+	filtered := FilterResults(releases, "series", "Star Trek: Strange New Worlds S01E01", "1", "1")
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 match, got %d: %+v", len(filtered), filtered)
+	}
+	if filtered[0].Title != releases[0].Title {
+		t.Fatalf("expected %q, got %q", releases[0].Title, filtered[0].Title)
+	}
+}
