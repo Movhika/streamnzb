@@ -116,6 +116,74 @@ func TestSegmentReaderSeekDoesNotWaitForCanceledPrefetch(t *testing.T) {
 	}
 }
 
+func TestSegmentReaderSeekDoesNotCancelInFlightForegroundRead(t *testing.T) {
+	oldLogger := logger.Log
+	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	defer func() {
+		logger.Log = oldLogger
+	}()
+
+	fetcher := &blockingForegroundSegmentFetcher{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	f := NewFile(context.Background(), testNZBFile("seek-read-test.mkv", 4, 4, 4), nil, nil, fetcher, nil)
+	r := NewSegmentReader(context.Background(), f, 0)
+	var releaseOnce sync.Once
+	releaseFetcher := func() {
+		releaseOnce.Do(func() {
+			close(fetcher.release)
+		})
+	}
+	defer func() {
+		releaseFetcher()
+		_ = r.Close()
+	}()
+
+	select {
+	case <-fetcher.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial segment fetch to start")
+	}
+
+	type readResult struct {
+		data string
+		err  error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		buf := make([]byte, 4)
+		n, err := r.Read(buf)
+		readDone <- readResult{data: string(buf[:n]), err: err}
+	}()
+
+	waitForInflightWaiters(t, f, 0, 2)
+
+	if _, err := r.Seek(1, io.SeekStart); err != nil {
+		t.Fatalf("Seek returned error: %v", err)
+	}
+
+	select {
+	case res := <-readDone:
+		t.Fatalf("foreground read returned before fetch release: data=%q err=%v", res.data, res.err)
+	default:
+	}
+
+	releaseFetcher()
+
+	select {
+	case res := <-readDone:
+		if res.err != nil {
+			t.Fatalf("expected foreground read to succeed after seek, got %v", res.err)
+		}
+		if res.data != "aaaa" {
+			t.Fatalf("expected foreground read data %q, got %q", "aaaa", res.data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for foreground read to complete")
+	}
+}
+
 func TestSegmentReaderEvictsPlayedSegmentOnTransition(t *testing.T) {
 	oldLogger := logger.Log
 	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -161,6 +229,43 @@ func (f *blockingSegmentFetcher) FetchSegment(ctx context.Context, segment *nzb.
 		<-f.release
 	}
 	return pool.SegmentData{Body: bytesForSegment(segment.Number, segment.Bytes), Size: segment.Bytes}, nil
+}
+
+type blockingForegroundSegmentFetcher struct {
+	started   chan struct{}
+	release   chan struct{}
+	startOnce sync.Once
+}
+
+func (f *blockingForegroundSegmentFetcher) FetchSegment(ctx context.Context, segment *nzb.Segment, groups []string) (pool.SegmentData, error) {
+	if segment.Number == 1 {
+		f.startOnce.Do(func() { close(f.started) })
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return pool.SegmentData{}, ctx.Err()
+		}
+	}
+	return pool.SegmentData{Body: bytesForSegment(segment.Number, segment.Bytes), Size: segment.Bytes}, nil
+}
+
+func waitForInflightWaiters(t *testing.T, f *File, index, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		f.downloadMu.Lock()
+		req := f.inflightDownloads[index]
+		got := 0
+		if req != nil {
+			got = req.waiters
+		}
+		f.downloadMu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for inflight segment %d to reach %d waiters", index, want)
 }
 
 type staticSegmentFetcher struct{}

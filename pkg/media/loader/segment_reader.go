@@ -15,11 +15,13 @@ import (
 )
 
 type SegmentReader struct {
-	file    *File
-	ctx     context.Context
-	cancel  context.CancelFunc
-	parent  context.Context
-	traceID uint64
+	file           *File
+	ctx            context.Context
+	cancel         context.CancelFunc
+	prefetchCtx    context.Context
+	prefetchCancel context.CancelFunc
+	parent         context.Context
+	traceID        uint64
 
 	mu     sync.Mutex
 	segIdx int
@@ -28,7 +30,7 @@ type SegmentReader struct {
 	closed bool
 
 	prefetchWg         sync.WaitGroup
-	prefetching       map[int]uint64
+	prefetching        map[int]uint64
 	prefetchGeneration uint64
 }
 
@@ -56,14 +58,17 @@ func LiveSegmentReaderDetails() []string {
 
 func NewSegmentReader(parent context.Context, f *File, startOffset int64) *SegmentReader {
 	ctx, cancel := context.WithCancel(parent)
+	prefetchCtx, prefetchCancel := context.WithCancel(parent)
 	sr := &SegmentReader{
-		file:        f,
-		ctx:         ctx,
-		cancel:      cancel,
-		parent:      parent,
-		traceID:     nextSegmentReaderID.Add(1),
-		offset:      startOffset,
-		prefetching: make(map[int]uint64),
+		file:           f,
+		ctx:            ctx,
+		cancel:         cancel,
+		prefetchCtx:    prefetchCtx,
+		prefetchCancel: prefetchCancel,
+		parent:         parent,
+		traceID:        nextSegmentReaderID.Add(1),
+		offset:         startOffset,
+		prefetching:    make(map[int]uint64),
 	}
 
 	idx := f.FindSegmentIndex(startOffset)
@@ -188,7 +193,7 @@ func (r *SegmentReader) startPrefetch() {
 		return
 	}
 	current := r.segIdx
-	ctx := r.ctx
+	ctx := r.prefetchCtx
 	generation := r.prefetchGeneration
 
 	// Cap concurrent prefetch goroutines to the actual pool connection count so we
@@ -274,9 +279,9 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 		return target, nil
 	}
 
-	r.cancel()
+	r.prefetchCancel()
 
-	r.ctx, r.cancel = context.WithCancel(r.parent)
+	r.prefetchCtx, r.prefetchCancel = context.WithCancel(r.parent)
 	r.prefetchGeneration++
 	r.prefetching = make(map[int]uint64)
 	r.offset = target
@@ -312,6 +317,7 @@ func (r *SegmentReader) Close() error {
 
 	logger.Debug("loader SegmentReader Close", "file", r.file.Name())
 	r.cancel()
+	r.prefetchCancel()
 
 	done := make(chan struct{})
 	go func() {
