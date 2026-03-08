@@ -87,7 +87,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 			indexerType = "newznab"
 		}
 
-		isAggregator := indexerType == "aggregator" || indexerType == "nzbhydra" || indexerType == "prowlarr"
+		isAggregator := config.IsAggregatorIndexerType(indexerType)
 		if indexerType == "aggregator" {
 			indexerType = "newznab"
 		}

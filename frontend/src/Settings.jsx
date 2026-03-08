@@ -88,6 +88,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           api_path: idx.api_path || '/api',
           api_hits_day: Number(idx.api_hits_day || 0),
           downloads_day: Number(idx.downloads_day || 0),
+	          timeout_seconds: Number(idx.timeout_seconds || 0),
           username: idx.username || '',
           password: idx.password || '',
           use_season_episode_params: idx.use_season_episode_params,

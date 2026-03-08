@@ -7,13 +7,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"streamnzb/pkg/core/env"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/core/paths"
 )
 
-const defaultAdminPasswordHash = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
+const (
+	defaultAdminPasswordHash               = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
+	DefaultInternalIndexerTimeoutSeconds   = 5
+	DefaultAggregatorIndexerTimeoutSeconds = 10
+)
 
 type Provider struct {
 	Name        string `json:"name"`
@@ -56,6 +62,15 @@ func DefaultSortConfig() SortConfig {
 
 func ptrBool(b bool) *bool { return &b }
 
+func IsAggregatorIndexerType(indexerType string) bool {
+	switch strings.ToLower(strings.TrimSpace(indexerType)) {
+	case "aggregator", "nzbhydra", "prowlarr":
+		return true
+	default:
+		return false
+	}
+}
+
 type IndexerSearchConfig struct {
 	SearchResultLimit          int     `json:"search_result_limit,omitempty"`
 	IncludeYearInSearch        *bool   `json:"include_year_in_search,omitempty"`
@@ -71,14 +86,15 @@ type IndexerSearchConfig struct {
 }
 
 type IndexerConfig struct {
-	Name         string `json:"name"`
-	URL          string `json:"url"`
-	APIKey       string `json:"api_key"`
-	APIPath      string `json:"api_path"`
-	Type         string `json:"type"`
-	APIHitsDay   int    `json:"api_hits_day"`
-	DownloadsDay int    `json:"downloads_day"`
-	Enabled      *bool  `json:"enabled,omitempty"`
+	Name           string `json:"name"`
+	URL            string `json:"url"`
+	APIKey         string `json:"api_key"`
+	APIPath        string `json:"api_path"`
+	Type           string `json:"type"`
+	APIHitsDay     int    `json:"api_hits_day"`
+	DownloadsDay   int    `json:"downloads_day"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	Enabled        *bool  `json:"enabled,omitempty"`
 
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -94,6 +110,20 @@ type IndexerConfig struct {
 	EnableSeriesPackSearch     *bool  `json:"enable_series_pack_search,omitempty"`
 	SearchTitleLanguage        string `json:"search_title_language,omitempty"`
 	SearchTitleNormalize       *bool  `json:"search_title_normalize,omitempty"`
+}
+
+func (ic IndexerConfig) EffectiveTimeoutSeconds() int {
+	if ic.TimeoutSeconds > 0 {
+		return ic.TimeoutSeconds
+	}
+	if IsAggregatorIndexerType(ic.Type) {
+		return DefaultAggregatorIndexerTimeoutSeconds
+	}
+	return DefaultInternalIndexerTimeoutSeconds
+}
+
+func (ic IndexerConfig) EffectiveTimeout() time.Duration {
+	return time.Duration(ic.EffectiveTimeoutSeconds()) * time.Second
 }
 
 type Config struct {

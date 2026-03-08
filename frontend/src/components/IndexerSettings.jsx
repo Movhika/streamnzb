@@ -44,6 +44,15 @@ function hasUnresolvedProwlarrIndexerID(value) {
   return typeof value === 'string' && value.includes(PROWLARR_INDEXER_ID_PLACEHOLDER)
 }
 
+function isAggregatorIndexerType(value) {
+  const type = typeof value === 'string' ? value.toLowerCase() : ''
+  return type === 'aggregator' || type === 'nzbhydra' || type === 'prowlarr'
+}
+
+function getDefaultIndexerTimeoutSeconds(type) {
+  return isAggregatorIndexerType(type) ? 10 : 5
+}
+
 function CapsInfo({ caps }) {
   if (!caps) return null
   return (
@@ -269,7 +278,8 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
             {indexerFields.map((field, index) => {
                 const currentType = watch(`indexers.${index}.type`) || 'newznab';
                 const isEasynews = currentType === 'easynews';
-                const isAggregator = currentType === 'aggregator';
+	                const isAggregator = isAggregatorIndexerType(currentType);
+	                const defaultTimeoutSeconds = getDefaultIndexerTimeoutSeconds(currentType);
                 const currentAPIPath = watch(`indexers.${index}.api_path`) || '';
                 const hasProwlarrPlaceholder = hasUnresolvedProwlarrIndexerID(currentAPIPath);
 
@@ -321,7 +331,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                             setValue(`indexers.${index}.type`, preset.type);
                                         }
                                     }}
-                                    value={INDEXER_PRESETS.find(p => p.name === watch(`indexers.${index}.name`))?.name || (watch(`indexers.${index}.type`) === 'easynews' ? 'Easynews (Experimental)' : watch(`indexers.${index}.type`) === 'aggregator' ? 'Custom aggregator' : 'Custom Newznab')}
+	                                    value={INDEXER_PRESETS.find(p => p.name === watch(`indexers.${index}.name`))?.name || (isEasynews ? 'Easynews (Experimental)' : isAggregator ? 'Custom aggregator' : 'Custom Newznab')}
                                 >
                                     {INDEXER_PRESETS.map(preset => (
                                         <option key={preset.name} value={preset.name}>{preset.name}</option>
@@ -439,6 +449,33 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                 </>
                             )}
 
+	                            {!isEasynews && (
+	                                <FormField
+	                                    control={control}
+	                                    name={`indexers.${index}.timeout_seconds`}
+	                                    render={({ field }) => (
+	                                        <FormItem className="mt-2">
+	                                            <FormLabel>Timeout (seconds)</FormLabel>
+	                                            <FormControl>
+	                                                <Input
+	                                                    type="number"
+	                                                    min={0}
+	                                                    placeholder={String(defaultTimeoutSeconds)}
+	                                                    className="h-8 text-xs"
+	                                                    {...field}
+	                                                    value={field.value === 0 || field.value == null ? '' : field.value}
+	                                                    onChange={e => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+	                                                />
+	                                            </FormControl>
+	                                            <FormDescription className="text-[10px]">
+	                                                0 = use default. This indexer currently defaults to {defaultTimeoutSeconds}s. Internal/newznab indexers use 5s; aggregators like NZBHydra or Prowlarr use 10s.
+	                                            </FormDescription>
+	                                            <FormMessage />
+	                                        </FormItem>
+	                                    )}
+	                                />
+	                            )}
+
                             {!isEasynews && (
                                 <div className="grid grid-cols-2 gap-2 mt-2">
                                     <FormField
@@ -480,7 +517,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
             <Button
                 type="button"
                 variant="outline"
-	                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, enabled: true, username: '', password: '', movie_categories: '', tv_categories: '', extra_search_terms: '', use_season_episode_params: undefined, search_result_limit: 0, include_year_in_search: undefined, search_title_language: '', search_title_normalize: undefined })}
+		                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, timeout_seconds: 0, enabled: true, username: '', password: '', movie_categories: '', tv_categories: '', extra_search_terms: '', use_season_episode_params: undefined, search_result_limit: 0, include_year_in_search: undefined, search_title_language: '', search_title_normalize: undefined })}
                 className={cn(
                   "flex flex-col items-center justify-center p-4 h-auto min-h-[180px] border-2 border-dashed border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all group"
                 )}

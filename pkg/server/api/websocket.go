@@ -635,7 +635,6 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 		}(i, p)
 	}
 
-	const indexerPingTimeout = 5 * time.Second
 	for i, idx := range cfg.Indexers {
 		wg.Add(1)
 		go func(index int, indexerCfg config.IndexerConfig) {
@@ -655,6 +654,7 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 				mu.Unlock()
 				return
 			}
+			indexerPingTimeout := indexerCfg.EffectiveTimeout()
 			client := newznab.NewClient(indexerCfg, nil)
 			errCh := make(chan error, 1)
 			go func() { errCh <- client.Ping() }()

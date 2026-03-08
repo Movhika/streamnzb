@@ -8,6 +8,7 @@ import (
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/indexer"
 	"testing"
+	"time"
 )
 
 func TestNewznabSearch(t *testing.T) {
@@ -147,5 +148,38 @@ func TestNewznabPing(t *testing.T) {
 	err := client.Ping()
 	if err != nil {
 		t.Errorf("Ping failed: %v", err)
+	}
+}
+
+func TestNewClientUsesEffectiveTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.IndexerConfig
+		want time.Duration
+	}{
+		{
+			name: "default internal timeout",
+			cfg:  config.IndexerConfig{Name: "Internal"},
+			want: 5 * time.Second,
+		},
+		{
+			name: "default aggregator timeout",
+			cfg:  config.IndexerConfig{Name: "Aggregator", Type: "aggregator"},
+			want: 10 * time.Second,
+		},
+		{
+			name: "explicit override",
+			cfg:  config.IndexerConfig{Name: "Override", Type: "aggregator", TimeoutSeconds: 12},
+			want: 12 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient(tt.cfg, nil)
+			if got := client.client.Timeout; got != tt.want {
+				t.Fatalf("client timeout = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
