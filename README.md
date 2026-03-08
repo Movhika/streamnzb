@@ -53,7 +53,7 @@ Or run the binary from the [releases](https://github.com/Gaisberg/streamnzb/rele
 
 ## Troubleshooting
 
-If you’re stuck, hit me up on [Discord](https://snzb.stream/discord) or [GitHub issues](https://github.com/Gaisberg/streamnzb/issues) (they sync via [GitThread](https://gitthreadsync.snzb.stream/)). Include relevant log snippets from **Settings → Logs** and strip any sensitive data (API keys, hostnames, etc.) before posting.
+If you’re stuck, please either open a [GitHub issue](https://github.com/Gaisberg/streamnzb/issues) or report it in the [Discord](https://snzb.stream/discord) `#help` channel (they sync via [GitThread](https://gitthreadsync.snzb.stream/)). Include downloaded logs from **Settings → Logs** when relevant, and include the copied bad match report from **NZB History** when the issue is about a wrong or poor release match. Sensitive data should be automatically redacted but please double-check before posting. 
 
 
 ## Support
