@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { PasswordInput } from "@/components/ui/password-input"
-import { Trash2, Plus, ChevronDown, Search, Tv, Film, Info, Check, X } from "lucide-react"
+import { Trash2, Plus, ChevronDown, Search, Tv, Film, Info, Check, X, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const INDEXER_PRESETS = [
@@ -37,6 +37,12 @@ const INDEXER_PRESETS = [
     //{ name: 'Easynews (Experimental)', url: '', api_path: '/api', type: 'easynews' },
     //{ name: 'Custom Newznab', url: '', api_path: '/api', type: 'newznab' }
 ]
+
+const PROWLARR_INDEXER_ID_PLACEHOLDER = '{indexer_id}'
+
+function hasUnresolvedProwlarrIndexerID(value) {
+  return typeof value === 'string' && value.includes(PROWLARR_INDEXER_ID_PLACEHOLDER)
+}
 
 function CapsInfo({ caps }) {
   if (!caps) return null
@@ -264,6 +270,8 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                 const currentType = watch(`indexers.${index}.type`) || 'newznab';
                 const isEasynews = currentType === 'easynews';
                 const isAggregator = currentType === 'aggregator';
+                const currentAPIPath = watch(`indexers.${index}.api_path`) || '';
+                const hasProwlarrPlaceholder = hasUnresolvedProwlarrIndexerID(currentAPIPath);
 
                 return (
                     <Card key={field.id} className="relative flex flex-col h-full">
@@ -360,6 +368,11 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                 <FormField
                                     control={control}
                                     name={`indexers.${index}.api_path`}
+                                    rules={{
+                                        validate: (value) => hasUnresolvedProwlarrIndexerID(value)
+                                            ? 'Replace {indexer_id} with the Prowlarr indexer ID, for example 1/api'
+                                            : true
+                                    }}
                                     render={({ field }) => (
                                         <FormItem>
                                             <FormLabel>API Path</FormLabel>
@@ -367,6 +380,14 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                                 <Input placeholder="/api" className="h-8 text-xs" {...field} />
                                             </FormControl>
                                             <FormDescription className="text-[10px]">API endpoint path (default: /api, Tabula Rasa: /api/v1)</FormDescription>
+                                            {hasProwlarrPlaceholder && (
+                                                <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-900 dark:text-amber-200">
+                                                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                    <p>
+                                                        Prowlarr needs the real indexer ID here. Replace <code>{PROWLARR_INDEXER_ID_PLACEHOLDER}</code> with the numeric ID from Prowlarr, for example <code>1/api</code>.
+                                                    </p>
+                                                </div>
+                                            )}
                                             <FormMessage />
                                         </FormItem>
                                     )}

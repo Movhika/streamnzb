@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -645,6 +646,12 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 			if indexerCfg.URL == "" {
 				mu.Lock()
 				errors[fmt.Sprintf("indexers.%d.url", index)] = "URL is required"
+				mu.Unlock()
+				return
+			}
+			if strings.Contains(indexerCfg.APIPath, "{indexer_id}") {
+				mu.Lock()
+				errors[fmt.Sprintf("indexers.%d.api_path", index)] = "Replace {indexer_id} with the Prowlarr indexer ID (for example 1/api)"
 				mu.Unlock()
 				return
 			}
