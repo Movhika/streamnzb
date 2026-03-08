@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -112,6 +114,34 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	}()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "Restarting..."})
+}
+
+func (s *Server) handleDownloadLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	logPath := logger.GetCurrentLogPath()
+	info, err := os.Stat(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Log file not found", http.StatusNotFound)
+			return
+		}
+		logger.Error("Log download stat failed", "path", logPath, "err", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		http.Error(w, "Log file not found", http.StatusNotFound)
+		return
+	}
+
+	filename := filepath.Base(logPath)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	http.ServeFile(w, r, logPath)
 }
 
 func (s *Server) handleNZBAttempts(w http.ResponseWriter, r *http.Request) {

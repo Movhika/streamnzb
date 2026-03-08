@@ -46,10 +46,10 @@ type Server struct {
 	tmdbAPIKey     string
 	tvdbAPIKey     string
 
-	clients        map[*Client]bool
-	clientsMu      sync.Mutex
-	logCh          chan string
-	attemptLister  *persistence.StateManager
+	clients       map[*Client]bool
+	clientsMu     sync.Mutex
+	logCh         chan string
+	attemptLister *persistence.StateManager
 }
 
 type Client struct {
@@ -311,6 +311,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/stream/config", authMiddleware(http.HandlerFunc(s.handleStreamConfig)))
 	mux.Handle("/api/stream/configs/", authMiddleware(http.HandlerFunc(s.handleStreamConfigByID)))
 	mux.Handle("/api/stream/configs", authMiddleware(http.HandlerFunc(s.handleStreamConfigs)))
+	mux.Handle("/api/logs/download", authMiddleware(http.HandlerFunc(s.handleDownloadLogs)))
 	mux.Handle("/api/nzb-attempts", authMiddleware(http.HandlerFunc(s.handleNZBAttempts)))
 
 	return mux

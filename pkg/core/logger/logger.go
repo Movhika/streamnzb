@@ -19,14 +19,15 @@ import (
 var Log *slog.Logger
 
 const redactedValue = "[REDACTED]"
+const CurrentLogFileName = "streamnzb.log"
 
 var (
-	sensitiveURLUserRe  = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)([^/@\s]+)@`)
-	sensitiveQueryRe    = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|secret|auth_session)=)([^&#\s;]+)`)
-	sensitiveAssignRe   = regexp.MustCompile(`(?i)\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|secret|auth_session)=)([^\s&#;]+)`)
-	sensitiveJSONKVRe   = regexp.MustCompile(`(?i)("(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|secret|auth_session)"\s*:\s*")([^"]+)`)
-	authorizationKVRe   = regexp.MustCompile(`(?i)\b(authorization[=:]\s*)(bearer\s+|basic\s+)?([^\s,;]+)`)
-	hexPathSegmentRe    = regexp.MustCompile(`(/)(?i:[0-9a-f]{64})(/|$|[?#])`)
+	sensitiveURLUserRe = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)([^/@\s]+)@`)
+	sensitiveQueryRe   = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|secret|auth_session)=)([^&#\s;]+)`)
+	sensitiveAssignRe  = regexp.MustCompile(`(?i)\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|secret|auth_session)=)([^\s&#;]+)`)
+	sensitiveJSONKVRe  = regexp.MustCompile(`(?i)("(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|secret|auth_session)"\s*:\s*")([^"]+)`)
+	authorizationKVRe  = regexp.MustCompile(`(?i)\b(authorization[=:]\s*)(bearer\s+|basic\s+)?([^\s,;]+)`)
+	hexPathSegmentRe   = regexp.MustCompile(`(/)(?i:[0-9a-f]{64})(/|$|[?#])`)
 )
 
 func sanitizeString(s string) string {
@@ -210,8 +211,7 @@ func Init(levelStr string) {
 	locationMu.Unlock()
 
 	dataDir := paths.GetDataDir()
-	const currentLogName = "streamnzb.log"
-	currentPath := filepath.Join(dataDir, currentLogName)
+	currentPath := GetCurrentLogPath()
 
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create log directory: %v\n", err)
@@ -333,6 +333,10 @@ func GetHistory() []string {
 	cp := make([]string, len(history))
 	copy(cp, history)
 	return cp
+}
+
+func GetCurrentLogPath() string {
+	return filepath.Join(paths.GetDataDir(), CurrentLogFileName)
 }
 
 // PurgeOldLogs removes older rotated log files so at most keepCount log files remain

@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { History, Loader2, ExternalLink, RefreshCw } from 'lucide-react'
+import { History, Loader2, ExternalLink, RefreshCw, Copy, Check } from 'lucide-react'
 import { getApiUrl, apiFetch } from '../api'
 import { cn } from '@/lib/utils'
 
@@ -17,11 +17,43 @@ function formatSize(bytes) {
   return `${kb.toFixed(0)} KB`
 }
 
+function formatAttemptResult(attempt) {
+	if (attempt.preload) return 'Preload'
+	return attempt.success ? 'OK' : 'Failed'
+}
+
+function buildBadMatchReport(attempt) {
+	const details = [
+		['Time', attempt.tried_at ? new Date(attempt.tried_at).toISOString() : '—'],
+		['Content type', attempt.content_type || '—'],
+		['Content title', attempt.content_title || '—'],
+		['Content ID', attempt.content_id || '—'],
+		['Release title', attempt.release_title || '—'],
+		['Release size', formatSize(attempt.release_size)],
+		['Result', formatAttemptResult(attempt)],
+		['Failure reason', attempt.failure_reason || '—'],
+		['Release URL', attempt.release_url || '—'],
+		['Slot path', attempt.slot_path || '—'],
+	].map(([label, value]) => `- ${label}: ${value}`)
+
+	return [
+		'Bad match report',
+		'',
+		'Why this is a bad match:',
+		'- ',
+		'',
+		'Details:',
+		...details,
+	].join('\n')
+}
+
 export function NZBHistoryPage({ refreshTrigger }) {
   const [attempts, setAttempts] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
+	const [copyError, setCopyError] = useState(null)
+	const [copiedAttemptId, setCopiedAttemptId] = useState(null)
 
   const fetchAttempts = useCallback((showLoadingSpinner = true) => {
     if (showLoadingSpinner) setLoading(true)
@@ -50,6 +82,23 @@ export function NZBHistoryPage({ refreshTrigger }) {
     fetchAttempts(false)
   }, [refreshTrigger, fetchAttempts])
 
+	const handleCopyBadMatch = useCallback(async (attempt) => {
+		if (!navigator?.clipboard?.writeText) {
+			setCopyError('Clipboard access is unavailable in this browser.')
+			return
+		}
+		try {
+			await navigator.clipboard.writeText(buildBadMatchReport(attempt))
+			setCopyError(null)
+			setCopiedAttemptId(attempt.id)
+			setTimeout(() => {
+				setCopiedAttemptId((current) => (current === attempt.id ? null : current))
+			}, 2000)
+		} catch {
+			setCopyError('Failed to copy bad match details.')
+		}
+	}, [])
+
   return (
     <div className={cn('flex flex-col gap-4 py-4 md:gap-6 md:py-6 px-4 lg:px-6')}>
       <Card className="flex flex-col overflow-hidden flex-1 min-h-0">
@@ -61,7 +110,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                 NZB play attempts
               </CardTitle>
               <CardDescription>
-                Recent attempts to play releases: title requested, release tried, and whether it succeeded or failed.
+						Recent attempts to play releases: title requested, release tried, and whether it succeeded or failed. Use the copy action to grab a report for Discord or GitHub.
               </CardDescription>
             </div>
             <Button
@@ -90,6 +139,9 @@ export function NZBHistoryPage({ refreshTrigger }) {
           {error && (
             <div className="px-6 pb-4 text-destructive">{error}</div>
           )}
+			{copyError && !error && (
+			  <div className="px-6 pb-4 text-destructive">{copyError}</div>
+			)}
           {!loading && !error && (
             <ScrollArea className="flex-1 min-h-[360px] px-4 pb-4">
               <div className="pr-4">
@@ -105,7 +157,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                         <th className="text-right py-2 font-medium">Size</th>
                         <th className="text-center py-2 font-medium">Result</th>
                         <th className="text-left py-2 font-medium">Reason</th>
-                        <th className="text-center py-2 font-medium w-12">Details</th>
+						<th className="text-center py-2 font-medium">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -135,20 +187,31 @@ export function NZBHistoryPage({ refreshTrigger }) {
                           <td className="py-2 max-w-[200px] truncate text-muted-foreground" title={a.failure_reason}>
                             {a.failure_reason || '—'}
                           </td>
-                          <td className="py-2 text-center">
-                            {a.release_url ? (
-                              <a
-                                href={a.release_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center justify-center text-muted-foreground hover:text-primary"
-                                title="Open release details"
-                              >
-                                <ExternalLink className="size-4" />
-                              </a>
-                            ) : (
-                              <span className="text-muted-foreground/50">—</span>
-                            )}
+						  <td className="py-2 text-center">
+							<div className="flex items-center justify-center gap-1">
+							  <Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								onClick={() => handleCopyBadMatch(a)}
+								className="h-8 w-8 p-0"
+								aria-label={copiedAttemptId === a.id ? 'Bad match report copied' : 'Copy bad match report'}
+								title={copiedAttemptId === a.id ? 'Bad match report copied' : 'Copy bad match report'}
+							  >
+								{copiedAttemptId === a.id ? <Check className="size-4" /> : <Copy className="size-4" />}
+							  </Button>
+							  {a.release_url ? (
+								<a
+								  href={a.release_url}
+								  target="_blank"
+								  rel="noopener noreferrer"
+								  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-primary"
+								  title="Open release details"
+								>
+								  <ExternalLink className="size-4" />
+								</a>
+							  ) : null}
+							</div>
                           </td>
                         </tr>
                       ))}

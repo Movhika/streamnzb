@@ -440,9 +440,9 @@ function App() {
         onInstallClick={handleInstallClick}
         copied={copied}
       />
-      <SidebarInset>
+      <SidebarInset className="min-h-0">
         <SiteHeader activePage={activePage} />
-        <div className="flex flex-1 flex-col">
+        <div className="flex flex-1 min-h-0 flex-col">
           {activePage === 'dashboard' && (
             <DashboardPage
               stats={stats}
