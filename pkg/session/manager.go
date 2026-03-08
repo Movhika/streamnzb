@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/url"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -321,15 +320,6 @@ func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *rele
 	return session, nil
 }
 
-func isAggregatorIndexer(idx indexer.Indexer) bool {
-	t, ok := idx.(interface{ Type() string })
-	if !ok || t == nil {
-		return false
-	}
-	typ := t.Type()
-	return typ == "aggregator" || typ == "nzbhydra" || typ == "prowlarr"
-}
-
 func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	s.mu.Lock()
 	if s.NZB != nil {
@@ -357,12 +347,8 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	downloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	hasAPIKey := urlHasAPIKey(nzbURL)
-
-	if hasAPIKey || isAggregatorIndexer(idx) {
-		logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)
-		data, err = idx.DownloadNZB(downloadCtx, nzbURL)
-	}
+	logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)
+	data, err = idx.DownloadNZB(downloadCtx, nzbURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
 	}
@@ -923,13 +909,4 @@ func (m *Manager) UpdateUsenetPool(up *pool.Pool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.usenetPool = up
-}
-
-func urlHasAPIKey(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	q := u.Query()
-	return q.Get("apikey") != "" || q.Get("api_key") != "" || q.Get("r") != ""
 }

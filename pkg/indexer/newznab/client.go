@@ -472,6 +472,7 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	nzbURL = c.normalizeDownloadURL(nzbURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", nzbURL, nil)
 	if err != nil {
@@ -513,4 +514,56 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	}
 
 	return data, nil
+}
+
+func (c *Client) normalizeDownloadURL(rawURL string) string {
+	if rawURL == "" {
+		return rawURL
+	}
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	baseURL, err := url.Parse(c.baseURL)
+	if err != nil || baseURL.Hostname() == "" {
+		return rawURL
+	}
+
+	changed := false
+	if !parsedURL.IsAbs() || parsedURL.Hostname() == "" {
+		parsedURL = baseURL.ResolveReference(parsedURL)
+		changed = true
+	}
+	if !hostsMatch(baseURL.Hostname(), parsedURL.Hostname()) {
+		return rawURL
+	}
+
+	q := parsedURL.Query()
+	if q.Get("t") == "get" && q.Get("id") == "" && q.Get("guid") != "" {
+		q.Set("id", q.Get("guid"))
+		changed = true
+	}
+	if !queryHasAPIKey(q) && c.apiKey != "" {
+		q.Set("apikey", c.apiKey)
+		changed = true
+	}
+	if !changed {
+		return rawURL
+	}
+	parsedURL.RawQuery = q.Encode()
+	return parsedURL.String()
+}
+
+func hostsMatch(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || strings.TrimPrefix(a, "api.") == b || strings.TrimPrefix(b, "api.") == a
+}
+
+func queryHasAPIKey(q url.Values) bool {
+	return q.Get("apikey") != "" || q.Get("api_key") != "" || q.Get("r") != ""
 }

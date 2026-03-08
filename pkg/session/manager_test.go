@@ -15,16 +15,28 @@ import (
 )
 
 type fakeIndexer struct {
-	data []byte
-	err  error
+	data     []byte
+	err      error
+	calls    int
+	lastURL  string
+	typeName string
 }
 
-func (fakeIndexer) Search(indexer.SearchRequest) (*indexer.SearchResponse, error) { return nil, nil }
-func (f fakeIndexer) DownloadNZB(context.Context, string) ([]byte, error)         { return f.data, f.err }
-func (fakeIndexer) Ping() error                                                   { return nil }
-func (fakeIndexer) Name() string                                                  { return "fake" }
-func (fakeIndexer) GetUsage() indexer.Usage                                       { return indexer.Usage{} }
-func (fakeIndexer) Type() string                                                  { return "aggregator" }
+func (*fakeIndexer) Search(indexer.SearchRequest) (*indexer.SearchResponse, error) { return nil, nil }
+func (f *fakeIndexer) DownloadNZB(_ context.Context, rawURL string) ([]byte, error) {
+	f.calls++
+	f.lastURL = rawURL
+	return f.data, f.err
+}
+func (*fakeIndexer) Ping() error             { return nil }
+func (*fakeIndexer) Name() string            { return "fake" }
+func (*fakeIndexer) GetUsage() indexer.Usage { return indexer.Usage{} }
+func (f *fakeIndexer) Type() string {
+	if f.typeName != "" {
+		return f.typeName
+	}
+	return "newznab"
+}
 
 func TestSessionCloseClearsHeavyReferences(t *testing.T) {
 	logger.Init("ERROR")
@@ -43,7 +55,7 @@ func TestSessionCloseClearsHeavyReferences(t *testing.T) {
 		ContentIDs:  &AvailReportMeta{ImdbID: "tt123"},
 		Clients:     map[string]time.Time{"127.0.0.1": time.Now()},
 		downloadURL: "https://example.invalid/nzb",
-		indexer:     fakeIndexer{},
+		indexer:     &fakeIndexer{},
 		cancel:      cancel,
 	}
 
@@ -126,12 +138,16 @@ func TestGetOrDownloadNZBSelectsRequestedEpisode(t *testing.T) {
 		{Subject: "Show.S01E06.1080p.mkv", Segments: []nzb.Segment{{ID: "<a>", Bytes: 60}}},
 		{Subject: "Show.S01E05.1080p.mkv", Segments: []nzb.Segment{{ID: "<b>", Bytes: 50}}},
 	}})
-	s, err := m.CreateDeferredSession("sess-lazy", "https://example.invalid/get?nzb=1&apikey=test", nil, fakeIndexer{data: data}, &AvailReportMeta{Season: 1, Episode: 5}, "series", "tmdb:1:1:5")
+	idx := &fakeIndexer{data: data}
+	s, err := m.CreateDeferredSession("sess-lazy", "https://example.invalid/get?nzb=1&apikey=test", nil, idx, &AvailReportMeta{Season: 1, Episode: 5}, "series", "tmdb:1:1:5")
 	if err != nil {
 		t.Fatalf("CreateDeferredSession returned error: %v", err)
 	}
 	if _, err := s.GetOrDownloadNZB(m); err != nil {
 		t.Fatalf("GetOrDownloadNZB returned error: %v", err)
+	}
+	if idx.calls != 1 {
+		t.Fatalf("expected DownloadNZB to be called once, got %d", idx.calls)
 	}
 	if s.File == nil {
 		t.Fatal("expected session file after lazy load")
@@ -141,6 +157,34 @@ func TestGetOrDownloadNZBSelectsRequestedEpisode(t *testing.T) {
 	}
 	if len(s.Files) != 1 {
 		t.Fatalf("expected one selected file after lazy load, got %d", len(s.Files))
+	}
+	s.Close()
+}
+
+func TestGetOrDownloadNZBDownloadsKeylessURL(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	data := marshalTestNZB(t, &nzb.NZB{Files: []nzb.File{{
+		Subject:  "Movie.2024.1080p.mkv",
+		Segments: []nzb.Segment{{ID: "<a>", Bytes: 60}},
+	}}})
+	idx := &fakeIndexer{data: data, typeName: "newznab"}
+	s, err := m.CreateDeferredSession("sess-keyless", "https://nzbfinder.ws/api?t=get&id=abc123", nil, idx, nil, "movie", "tt123")
+	if err != nil {
+		t.Fatalf("CreateDeferredSession returned error: %v", err)
+	}
+	if _, err := s.GetOrDownloadNZB(m); err != nil {
+		t.Fatalf("GetOrDownloadNZB returned error: %v", err)
+	}
+	if idx.calls != 1 {
+		t.Fatalf("expected DownloadNZB to be called once for keyless URL, got %d", idx.calls)
+	}
+	if idx.lastURL != "https://nzbfinder.ws/api?t=get&id=abc123" {
+		t.Fatalf("DownloadNZB called with URL %q", idx.lastURL)
 	}
 	s.Close()
 }

@@ -1,6 +1,7 @@
 package newznab
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -181,5 +182,76 @@ func TestNewClientUsesEffectiveTimeout(t *testing.T) {
 				t.Fatalf("client timeout = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeDownloadURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		cfg    config.IndexerConfig
+		rawURL string
+		want   string
+	}{
+		{
+			name:   "adds api key and converts guid to id",
+			cfg:    config.IndexerConfig{URL: "https://nzbfinder.ws", APIKey: "test-key"},
+			rawURL: "https://api.nzbfinder.ws/api?t=get&guid=abc123",
+			want:   "https://api.nzbfinder.ws/api?apikey=test-key&guid=abc123&id=abc123&t=get",
+		},
+		{
+			name:   "preserves existing api key",
+			cfg:    config.IndexerConfig{URL: "https://nzbfinder.ws", APIKey: "test-key"},
+			rawURL: "https://nzbfinder.ws/api?t=get&id=abc123&apikey=existing-key",
+			want:   "https://nzbfinder.ws/api?t=get&id=abc123&apikey=existing-key",
+		},
+		{
+			name:   "does not rewrite other host",
+			cfg:    config.IndexerConfig{URL: "https://nzbfinder.ws", APIKey: "test-key"},
+			rawURL: "https://other.example/api?t=get&id=abc123",
+			want:   "https://other.example/api?t=get&id=abc123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient(tt.cfg, nil)
+			if got := client.normalizeDownloadURL(tt.rawURL); got != tt.want {
+				t.Fatalf("normalizeDownloadURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDownloadNZBUsesNormalizedURL(t *testing.T) {
+	logger.Init("DEBUG")
+	var gotAPIKey string
+	var gotID string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.URL.Query().Get("apikey")
+		gotID = r.URL.Query().Get("id")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "<nzb></nzb>")
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+
+	data, err := client.DownloadNZB(context.Background(), server.URL+"/api?t=get&guid=guid-123")
+	if err != nil {
+		t.Fatalf("DownloadNZB failed: %v", err)
+	}
+	if gotAPIKey != "test-api-key" {
+		t.Fatalf("apikey = %q, want %q", gotAPIKey, "test-api-key")
+	}
+	if gotID != "guid-123" {
+		t.Fatalf("id = %q, want %q", gotID, "guid-123")
+	}
+	if got := string(data); got != "<nzb></nzb>" {
+		t.Fatalf("DownloadNZB data = %q, want %q", got, "<nzb></nzb>")
 	}
 }
