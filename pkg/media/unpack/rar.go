@@ -504,6 +504,10 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 		logger.Trace("Probed continuation volume", "dataOffset", probe.dataOffset, "packedSize", probe.packedSize)
 	}
 
+	return aggregateRemainingVolumesFromStart(mainParts, allRarFiles, startIdx, name, headerSize, probe)
+}
+
+func aggregateRemainingVolumesFromStart(mainParts []filePart, allRarFiles []UnpackableFile, startIdx int, name string, headerSize int64, probe continuationProbe) []filePart {
 	first := mainParts[0]
 	result := []filePart{first}
 
@@ -525,9 +529,13 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 	added := 0
 	for i := startIdx + 1; i < len(allRarFiles); i++ {
 		f := allRarFiles[i]
-		_ = f.EnsureSegmentMap()
-		if f.Size() <= 0 {
-			continue
+		fileSize := int64(0)
+		if contPackedSize <= 0 {
+			_ = f.EnsureSegmentMap()
+			fileSize = f.Size()
+			if fileSize <= 0 {
+				continue
+			}
 		}
 
 		isLastVolume := i == len(allRarFiles)-1
@@ -543,7 +551,7 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 			}
 		} else {
 
-			dataSize = f.Size() - contDataOffset
+			dataSize = fileSize - contDataOffset
 		}
 
 		if dataSize <= 0 {

@@ -49,9 +49,13 @@ func (b *bytesReadSeekCloser) Close() error {
 	return nil
 }
 
-func TestBufferedResponseWriterSnapshotTracksStatusAndBytes(t *testing.T) {
+func TestBufferedResponseWriterSnapshotTracksStatusBytesAndHeaders(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	bw := newBufferedResponseWriter(recorder, 8)
+	bw.Header().Set("Content-Range", "bytes 5-7/8")
+	bw.Header().Set("Content-Length", "3")
+	bw.Header().Set("Content-Type", "video/x-matroska")
+	bw.Header().Set("Accept-Ranges", "bytes")
 
 	bw.WriteHeader(http.StatusPartialContent)
 	if _, err := bw.Write([]byte("abc")); err != nil {
@@ -65,6 +69,18 @@ func TestBufferedResponseWriterSnapshotTracksStatusAndBytes(t *testing.T) {
 	}
 	if !snap.WroteHeader {
 		t.Fatal("expected wroteHeader to be true")
+	}
+	if snap.ContentRange != "bytes 5-7/8" {
+		t.Fatalf("expected content range %q, got %q", "bytes 5-7/8", snap.ContentRange)
+	}
+	if snap.ContentLength != "3" {
+		t.Fatalf("expected content length %q, got %q", "3", snap.ContentLength)
+	}
+	if snap.ContentType != "video/x-matroska" {
+		t.Fatalf("expected content type %q, got %q", "video/x-matroska", snap.ContentType)
+	}
+	if snap.AcceptRanges != "bytes" {
+		t.Fatalf("expected accept ranges %q, got %q", "bytes", snap.AcceptRanges)
 	}
 	if snap.BytesWritten != 3 {
 		t.Fatalf("expected 3 bytes written, got %d", snap.BytesWritten)

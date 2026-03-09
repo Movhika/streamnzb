@@ -2248,6 +2248,10 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			"user_agent", userAgent,
 			"response_status", responseStats.StatusCode,
 			"response_wrote_header", responseStats.WroteHeader,
+			"response_content_range", responseStats.ContentRange,
+			"response_content_length", responseStats.ContentLength,
+			"response_content_type", responseStats.ContentType,
+			"response_accept_ranges", responseStats.AcceptRanges,
 			"response_bytes", responseStats.BytesWritten,
 			"response_writes", responseStats.WriteCalls,
 			"response_flushes", responseStats.FlushCalls,
@@ -2441,10 +2445,10 @@ func (s *Server) openPlaybackSource(ctx context.Context, sess *session.Session) 
 		}
 	}
 
-		// Skip IsFailed() when the session is actively serving OR has already validated playback.
+	// Skip IsFailed() when the session is actively serving OR has already validated playback.
 	// Stremio often cancels the initial probe request (dropping ActivePlays back to 0) immediately
 	// before sending a follow-up range request. During that brief gap IsActivelyServing() is false,
-		// but HasPreviouslyServed() tells us the file was already validated.
+	// but HasPreviouslyServed() tells us the file was already validated.
 	// If the file is truly bad during streaming, onReadError will catch it.
 	if !sess.IsActivelyServing() && !sess.HasPreviouslyServed() {
 		for _, f := range files {
@@ -2959,22 +2963,30 @@ func (b *bufferedResponseWriter) Flush() {
 }
 
 type bufferedResponseSnapshot struct {
-	StatusCode   int
-	WroteHeader  bool
-	BytesWritten int64
-	WriteCalls   int64
-	FlushCalls   int64
-	FlushError   string
+	StatusCode    int
+	WroteHeader   bool
+	ContentRange  string
+	ContentLength string
+	ContentType   string
+	AcceptRanges  string
+	BytesWritten  int64
+	WriteCalls    int64
+	FlushCalls    int64
+	FlushError    string
 }
 
 func (b *bufferedResponseWriter) Snapshot() bufferedResponseSnapshot {
 	return bufferedResponseSnapshot{
-		StatusCode:   b.statusCode,
-		WroteHeader:  b.wroteHeader,
-		BytesWritten: b.bytesWritten,
-		WriteCalls:   b.writeCalls,
-		FlushCalls:   b.flushCalls,
-		FlushError:   b.flushError,
+		StatusCode:    b.statusCode,
+		WroteHeader:   b.wroteHeader,
+		ContentRange:  b.Header().Get("Content-Range"),
+		ContentLength: b.Header().Get("Content-Length"),
+		ContentType:   b.Header().Get("Content-Type"),
+		AcceptRanges:  b.Header().Get("Accept-Ranges"),
+		BytesWritten:  b.bytesWritten,
+		WriteCalls:    b.writeCalls,
+		FlushCalls:    b.flushCalls,
+		FlushError:    b.flushError,
 	}
 }
 
