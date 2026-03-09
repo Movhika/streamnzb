@@ -14,7 +14,16 @@ import (
 	"streamnzb/pkg/release"
 )
 
-const apiPath = "/api/v1"
+const (
+	apiPath        = "/api/v1"
+	apiKeyStateKey = "availnzb_api_key"
+	DefaultAppName = "StreamNZB"
+)
+
+type KeyStore interface {
+	Get(key string, target interface{}) (bool, error)
+	Set(key string, value interface{}) error
+}
 
 type Client struct {
 	BaseURL string
@@ -53,6 +62,150 @@ type StatusResponse struct {
 	DownloadLink string                    `json:"download_link,omitempty"`
 	Size         int64                     `json:"size,omitempty"`
 	Summary      map[string]BackboneStatus `json:"summary"`
+}
+
+type MeResponse struct {
+	ID                     string     `json:"id"`
+	Name                   string     `json:"name"`
+	IsActive               bool       `json:"is_active"`
+	AppSource              string     `json:"app_source"`
+	TrustLevel             string     `json:"trust_level"`
+	TrustScore             float64    `json:"trust_score"`
+	ReportCount            int        `json:"report_count"`
+	PublicReportCount      int        `json:"public_report_count"`
+	VerifiedReportCount    int        `json:"verified_report_count"`
+	QuarantinedReportCount int        `json:"quarantined_report_count"`
+	RolledBackReportCount  int        `json:"rolled_back_report_count"`
+	LastReportAt           *time.Time `json:"last_report_at"`
+	LastRollbackAt         *time.Time `json:"last_rollback_at"`
+}
+
+func (m *MeResponse) UnmarshalJSON(data []byte) error {
+	type meResponseAlias MeResponse
+	var raw struct {
+		meResponseAlias
+		ID             json.RawMessage `json:"id"`
+		TrustLevel     json.RawMessage `json:"trust_level"`
+		LastReportAt   json.RawMessage `json:"last_report_at"`
+		LastRollbackAt json.RawMessage `json:"last_rollback_at"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	id, err := decodeFlexibleString(raw.ID)
+	if err != nil {
+		return fmt.Errorf("decode me response id: %w", err)
+	}
+	trustLevel, err := decodeFlexibleString(raw.TrustLevel)
+	if err != nil {
+		return fmt.Errorf("decode me response trust_level: %w", err)
+	}
+	lastReportAt, err := decodeFlexibleTime(raw.LastReportAt)
+	if err != nil {
+		return fmt.Errorf("decode me response last_report_at: %w", err)
+	}
+	lastRollbackAt, err := decodeFlexibleTime(raw.LastRollbackAt)
+	if err != nil {
+		return fmt.Errorf("decode me response last_rollback_at: %w", err)
+	}
+	*m = MeResponse(raw.meResponseAlias)
+	m.ID = id
+	m.TrustLevel = trustLevel
+	m.LastReportAt = lastReportAt
+	m.LastRollbackAt = lastRollbackAt
+	return nil
+}
+
+type KeyCreateRequest struct {
+	Name string `json:"name"`
+}
+
+type KeyCreateResponse struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Token          string `json:"token"`
+	RecoverySecret string `json:"recovery_secret"`
+	CreatedAt      string `json:"created_at"`
+}
+
+func (k *KeyCreateResponse) UnmarshalJSON(data []byte) error {
+	type keyCreateResponseAlias KeyCreateResponse
+	var raw struct {
+		keyCreateResponseAlias
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	id, err := decodeFlexibleString(raw.ID)
+	if err != nil {
+		return fmt.Errorf("decode key create response id: %w", err)
+	}
+	*k = KeyCreateResponse(raw.keyCreateResponseAlias)
+	k.ID = id
+	return nil
+}
+
+type apiKeyState struct {
+	ID             string `json:"id,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Token          string `json:"token"`
+	RecoverySecret string `json:"recovery_secret,omitempty"`
+	CreatedAt      string `json:"created_at,omitempty"`
+}
+
+func decodeFlexibleString(data json.RawMessage) (string, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", nil
+	}
+
+	var asString string
+	if err := json.Unmarshal(trimmed, &asString); err == nil {
+		return asString, nil
+	}
+
+	var asNumber json.Number
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber()
+	if err := dec.Decode(&asNumber); err == nil {
+		return asNumber.String(), nil
+	}
+
+	return "", fmt.Errorf("expected string or number, got %s", string(trimmed))
+}
+
+func decodeFlexibleTime(data json.RawMessage) (*time.Time, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+
+	var value string
+	if err := json.Unmarshal(trimmed, &value); err != nil {
+		return nil, fmt.Errorf("expected string or null, got %s", string(trimmed))
+	}
+
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02T15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return &parsed, nil
+		}
+	}
+
+	return nil, fmt.Errorf("unsupported time format %q", value)
 }
 
 type releaseItemJSON struct {
@@ -98,6 +251,122 @@ func NewClient(baseURL, apiKey string) *Client {
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+func ResolveAPIKey(store KeyStore, baseURL, explicitKey, appName string) (string, error) {
+	explicitKey = strings.TrimSpace(explicitKey)
+	if explicitKey != "" {
+		logger.Debug("AvailNZB key bootstrap using explicit API key")
+		return explicitKey, nil
+	}
+
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		logger.Debug("AvailNZB key bootstrap skipped", "reason", "no base URL configured")
+		return "", nil
+	}
+	if store == nil {
+		return "", fmt.Errorf("availnzb key bootstrap: store is required")
+	}
+	if strings.TrimSpace(appName) == "" {
+		appName = DefaultAppName
+	}
+
+	storedKey, err := loadStoredAPIKey(store)
+	if err != nil {
+		return "", err
+	}
+	if storedKey != "" {
+		logger.Debug("AvailNZB key bootstrap using stored API key")
+		return storedKey, nil
+	}
+
+	created, err := NewClient(baseURL, "").RegisterKey(appName)
+	if err != nil {
+		return "", err
+	}
+	if created == nil || strings.TrimSpace(created.Token) == "" {
+		return "", fmt.Errorf("availnzb register: empty token in response")
+	}
+
+	state := apiKeyState{
+		ID:             strings.TrimSpace(created.ID),
+		Name:           strings.TrimSpace(created.Name),
+		Token:          strings.TrimSpace(created.Token),
+		RecoverySecret: strings.TrimSpace(created.RecoverySecret),
+		CreatedAt:      strings.TrimSpace(created.CreatedAt),
+	}
+	if err := store.Set(apiKeyStateKey, state); err != nil {
+		return "", fmt.Errorf("availnzb key bootstrap: failed to persist API key: %w", err)
+	}
+
+	logger.Info("Registered new AvailNZB API key", "name", state.Name, "id", state.ID)
+	return state.Token, nil
+}
+
+func loadStoredAPIKey(store KeyStore) (string, error) {
+	var state apiKeyState
+	found, err := store.Get(apiKeyStateKey, &state)
+	if err == nil {
+		if found && strings.TrimSpace(state.Token) != "" {
+			return strings.TrimSpace(state.Token), nil
+		}
+		return "", nil
+	}
+
+	var legacy string
+	legacyFound, legacyErr := store.Get(apiKeyStateKey, &legacy)
+	if legacyErr == nil {
+		if legacyFound && strings.TrimSpace(legacy) != "" {
+			return strings.TrimSpace(legacy), nil
+		}
+		return "", nil
+	}
+
+	return "", fmt.Errorf("availnzb key bootstrap: failed to read stored API key: %w", err)
+}
+
+func (c *Client) RegisterKey(name string) (*KeyCreateResponse, error) {
+	if c.BaseURL == "" {
+		return nil, fmt.Errorf("availnzb register: no base URL configured")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = DefaultAppName
+	}
+
+	logger.Debug("AvailNZB RegisterKey", "name", name)
+
+	reqBody, err := json.Marshal(KeyCreateRequest{Name: name})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", c.BaseURL+apiPath+"/keys", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		logger.Error("AvailNZB RegisterKey request failed", "err", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		logger.Error("AvailNZB RegisterKey unexpected status", "status", resp.StatusCode)
+		return nil, fmt.Errorf("availnzb register: unexpected status code: %d", resp.StatusCode)
+	}
+
+	var created KeyCreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		logger.Error("AvailNZB RegisterKey decode failed", "err", err)
+		return nil, err
+	}
+
+	return &created, nil
 }
 
 func (c *Client) ReportAvailability(releaseURL string, providerURL string, status bool, meta ReportMeta) error {
@@ -228,6 +497,44 @@ func (c *Client) GetBackbones() (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+func (c *Client) GetMe() (*MeResponse, error) {
+	if c.BaseURL == "" {
+		logger.Trace("AvailNZB GetMe skipped", "reason", "no base URL")
+		return nil, nil
+	}
+
+	reqURL := c.BaseURL + apiPath + "/me"
+	logger.Debug("AvailNZB GetMe")
+
+	req, err := http.NewRequest("GET", reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.APIKey != "" {
+		req.Header.Set("X-API-Key", c.APIKey)
+	}
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		logger.Error("AvailNZB GetMe request failed", "err", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Error("AvailNZB GetMe unexpected status", "status", resp.StatusCode)
+		return nil, fmt.Errorf("availnzb me: unexpected status code: %d", resp.StatusCode)
+	}
+
+	var me MeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		logger.Error("AvailNZB GetMe decode failed", "err", err)
+		return nil, err
+	}
+
+	return &me, nil
 }
 
 func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {

@@ -18,6 +18,7 @@ import (
 	"streamnzb/pkg/server/api"
 	"streamnzb/pkg/server/stremio"
 	"streamnzb/pkg/server/web"
+	"streamnzb/pkg/services/availnzb"
 	"streamnzb/pkg/session"
 	"streamnzb/pkg/stream"
 	"streamnzb/pkg/usenet/nntp/proxy"
@@ -26,7 +27,7 @@ import (
 )
 
 var (
-	AvailNZBURL    = ""
+	AvailNZBURL    = "https://snzb.stream"
 	AvailNZBAPIKey = ""
 
 	TMDBKey = ""
@@ -173,6 +174,15 @@ func main() {
 				}
 			}
 		}
+	}
+
+	if cfg.AvailNZBMode != "disabled" {
+		availNZBAPIKey, err = availnzb.ResolveAPIKey(stateMgr, availNZBUrl, availNZBAPIKey, availnzb.DefaultAppName)
+		if err != nil {
+			initialization.WaitForInputAndExit(fmt.Errorf("failed to resolve AvailNZB API key: %w", err))
+		}
+	} else {
+		logger.Debug("AvailNZB key bootstrap skipped", "reason", "disabled mode")
 	}
 
 	application := app.New()

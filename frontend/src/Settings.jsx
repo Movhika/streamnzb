@@ -12,6 +12,7 @@ import { Loader2, Info, AlertTriangle } from "lucide-react"
 import { IndexerSettings } from "@/components/IndexerSettings"
 import { ProviderSettings } from "@/components/ProviderSettings"
 import DeviceManagement from "@/components/DeviceManagement"
+import { apiFetch } from './api'
 
 function EnvOverrideNote({ show }) {
   if (!show) return null
@@ -27,6 +28,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   const [loading, setLoading] = useState(!initialConfig)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [initialFormValues, setInitialFormValues] = useState(null)
+  const [availNZBStatus, setAvailNZBStatus] = useState(null)
+  const [availNZBStatusLoading, setAvailNZBStatusLoading] = useState(false)
+  const [availNZBStatusError, setAvailNZBStatusError] = useState('')
   const deviceManagementRef = useRef(null)
 
   const form = useForm({
@@ -123,6 +127,26 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       }
   }, [saveStatus.errors, setError]);
 
+  const fetchAvailNZBStatus = async () => {
+    setAvailNZBStatusLoading(true)
+    setAvailNZBStatusError('')
+    try {
+      const data = await apiFetch('/api/availnzb/status')
+      setAvailNZBStatus(data || null)
+    } catch (error) {
+      setAvailNZBStatus(null)
+      setAvailNZBStatusError(error.message || 'Failed to load AvailNZB key status.')
+    } finally {
+      setAvailNZBStatusLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activePage === 'general') {
+      fetchAvailNZBStatus()
+    }
+  }, [activePage])
+
   const onSubmit = async (data) => {
     try {
       if (deviceManagementRef.current) {
@@ -178,6 +202,23 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   }
 
   if (loading) return null
+
+  const rawAvailNZBTrustScore = Number(availNZBStatus?.trust_score)
+  const availNZBTrustScore = Number.isFinite(rawAvailNZBTrustScore)
+    ? Math.max(0, Math.min(100, rawAvailNZBTrustScore))
+    : null
+  const availNZBTrustSummary = availNZBStatusLoading
+    ? 'Loading…'
+    : availNZBTrustScore !== null
+      ? `${Math.round(availNZBTrustScore)}% trust`
+      : 'Trust unavailable'
+  const availNZBTrustBarClass = availNZBTrustScore === null
+    ? 'bg-muted-foreground/20'
+    : availNZBTrustScore < 34
+      ? 'bg-destructive'
+      : availNZBTrustScore < 67
+        ? 'bg-chart-4'
+        : 'bg-primary'
 
   const saveFooter = (
     <div className="sticky bottom-0 z-10 -mx-4 mt-3 pb-4 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2 border-t bg-background px-4 pt-3 sm:px-0 sm:pt-4">
@@ -316,7 +357,23 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                 )} />
                 <FormField control={control} name="availnzb_mode" render={({ field }) => (
                   <FormItem className="space-y-2 col-span-full">
-                    <FormLabel className="text-sm font-medium">AvailNZB mode</FormLabel>
+                    <FormLabel className="flex items-start justify-between gap-3 text-sm font-medium">
+                      <span>AvailNZB mode</span>
+                      <span className="flex flex-col items-end gap-1">
+                        <span className={`flex items-center gap-1 text-xs font-normal ${availNZBStatusError ? 'text-destructive/80' : 'text-muted-foreground'}`}>
+                          {availNZBStatusLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                          {availNZBTrustSummary}
+                        </span>
+                        {availNZBTrustScore !== null && !availNZBStatusLoading && !availNZBStatusError && (
+                          <span className="h-1.5 w-20 overflow-hidden rounded-full bg-muted/70" aria-hidden="true">
+                            <span
+                              className={`block h-full rounded-full transition-all ${availNZBTrustBarClass}`}
+                              style={{ width: `${availNZBTrustScore}%` }}
+                            />
+                          </span>
+                        )}
+                      </span>
+	                    </FormLabel>
                     <FormControl>
                       <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" {...field}>
                         <option value="">GET status + POST report</option>

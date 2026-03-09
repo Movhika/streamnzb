@@ -300,6 +300,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/devices/", authMiddleware(http.HandlerFunc(s.handleDevices)))
 	mux.Handle("/api/indexer/caps", authMiddleware(http.HandlerFunc(s.handleGetIndexerCaps)))
 	mux.Handle("/api/indexer/caps/refresh", authMiddleware(http.HandlerFunc(s.handleRefreshIndexerCaps)))
+	mux.Handle("/api/availnzb/status", authMiddleware(http.HandlerFunc(s.handleAvailNZBStatus)))
 	mux.Handle("/api/sessions/close", authMiddleware(http.HandlerFunc(s.handleCloseSession)))
 	mux.Handle("/api/restart", authMiddleware(http.HandlerFunc(s.handleRestart)))
 	mux.Handle("/api/auth/change-password", authMiddleware(http.HandlerFunc(s.handleChangePassword)))
