@@ -15,13 +15,14 @@ import (
 )
 
 type SegmentReader struct {
-	file           *File
-	ctx            context.Context
-	cancel         context.CancelFunc
-	prefetchCtx    context.Context
-	prefetchCancel context.CancelFunc
-	parent         context.Context
-	traceID        uint64
+	file            *File
+	ctx             context.Context
+	cancel          context.CancelFunc
+	prefetchCtx     context.Context
+	prefetchCancel  context.CancelFunc
+	parent          context.Context
+	traceID         uint64
+	prefetchEnabled bool
 
 	mu     sync.Mutex
 	segIdx int
@@ -32,6 +33,10 @@ type SegmentReader struct {
 	prefetchWg         sync.WaitGroup
 	prefetching        map[int]uint64
 	prefetchGeneration uint64
+}
+
+type SegmentReaderOptions struct {
+	EnablePrefetch bool
 }
 
 var liveSegmentReaders atomic.Int64
@@ -57,18 +62,30 @@ func LiveSegmentReaderDetails() []string {
 }
 
 func NewSegmentReader(parent context.Context, f *File, startOffset int64) *SegmentReader {
+	return NewSegmentReaderWithOptions(parent, f, startOffset, SegmentReaderOptions{EnablePrefetch: true})
+}
+
+func NewSegmentReaderWithOptions(parent context.Context, f *File, startOffset int64, opts SegmentReaderOptions) *SegmentReader {
+	if parent == nil {
+		parent = context.Background()
+	}
+
 	ctx, cancel := context.WithCancel(parent)
-	prefetchCtx, prefetchCancel := context.WithCancel(parent)
 	sr := &SegmentReader{
-		file:           f,
-		ctx:            ctx,
-		cancel:         cancel,
-		prefetchCtx:    prefetchCtx,
-		prefetchCancel: prefetchCancel,
-		parent:         parent,
-		traceID:        nextSegmentReaderID.Add(1),
-		offset:         startOffset,
-		prefetching:    make(map[int]uint64),
+		file:            f,
+		ctx:             ctx,
+		cancel:          cancel,
+		parent:          parent,
+		traceID:         nextSegmentReaderID.Add(1),
+		offset:          startOffset,
+		prefetching:     make(map[int]uint64),
+		prefetchEnabled: opts.EnablePrefetch,
+	}
+	if sr.prefetchEnabled {
+		sr.prefetchCtx, sr.prefetchCancel = context.WithCancel(parent)
+	} else {
+		sr.prefetchCtx = parent
+		sr.prefetchCancel = func() {}
 	}
 
 	idx := f.FindSegmentIndex(startOffset)
@@ -84,7 +101,9 @@ func NewSegmentReader(parent context.Context, f *File, startOffset int64) *Segme
 	}
 
 	sr.applyCacheWindow(sr.segIdx)
-	sr.startPrefetch()
+	if sr.prefetchEnabled {
+		sr.startPrefetch()
+	}
 	liveSegmentReaders.Add(1)
 	liveSegmentReaderRegistry.Store(sr.traceID, sr)
 
@@ -188,7 +207,7 @@ func (r *SegmentReader) waitForSegment(index int) ([]byte, error) {
 
 func (r *SegmentReader) startPrefetch() {
 	r.mu.Lock()
-	if r.closed {
+	if r.closed || !r.prefetchEnabled {
 		r.mu.Unlock()
 		return
 	}
@@ -279,11 +298,12 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 		return target, nil
 	}
 
-	r.prefetchCancel()
-
-	r.prefetchCtx, r.prefetchCancel = context.WithCancel(r.parent)
-	r.prefetchGeneration++
-	r.prefetching = make(map[int]uint64)
+	if r.prefetchEnabled {
+		r.prefetchCancel()
+		r.prefetchCtx, r.prefetchCancel = context.WithCancel(r.parent)
+		r.prefetchGeneration++
+		r.prefetching = make(map[int]uint64)
+	}
 	r.offset = target
 	if target >= r.file.Size() {
 		r.segIdx = len(r.file.segments)
@@ -301,7 +321,9 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 	currentSegIdx := r.segIdx
 	r.mu.Unlock()
 	r.applyCacheWindow(currentSegIdx)
-	r.startPrefetch()
+	if r.prefetchEnabled {
+		r.startPrefetch()
+	}
 
 	return target, nil
 }

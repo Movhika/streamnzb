@@ -215,24 +215,46 @@ func (f *File) detectSegmentSize() error {
 	}
 	f.mu.Unlock()
 
+	if len(f.segments) == 0 {
+		f.mu.Lock()
+		f.totalSize = 0
+		f.detected = true
+		f.mu.Unlock()
+		return nil
+	}
+
 	firstEncoded := f.segments[0].Bytes
+	segSize := int64(0)
+	usedEstimator := false
 	if f.estimator != nil {
 		if decoded, ok := f.estimator.Get(firstEncoded); ok {
-			f.mu.Lock()
-			if f.detected {
-				f.mu.Unlock()
-				return nil
-			}
-			logger.Trace("Using estimated segment size", "name", f.Name(), "size", decoded)
-			f.applySegmentSize(decoded)
-			f.mu.Unlock()
-			return nil
+			segSize = decoded
+			usedEstimator = true
 		}
 	}
 
-	data, err := f.DownloadSegment(f.ctx, 0)
-	if err != nil {
-		return err
+	if !usedEstimator {
+		data, err := f.DownloadSegment(f.ctx, 0)
+		if err != nil {
+			return err
+		}
+		if len(data) == 0 {
+			return errors.New("empty first segment")
+		}
+		segSize = int64(len(data))
+	}
+
+	lastSegSize := segSize
+	lastIdx := len(f.segments) - 1
+	if lastIdx > 0 {
+		data, err := f.DownloadSegment(f.ctx, lastIdx)
+		if err != nil {
+			return err
+		}
+		if len(data) == 0 {
+			return errors.New("empty last segment")
+		}
+		lastSegSize = int64(len(data))
 	}
 
 	f.mu.Lock()
@@ -240,32 +262,34 @@ func (f *File) detectSegmentSize() error {
 	if f.detected {
 		return nil
 	}
-	if len(data) == 0 {
-		return errors.New("empty first segment")
+	if usedEstimator {
+		logger.Trace("Using estimated segment size", "name", f.Name(), "size", segSize)
+	} else {
+		logger.Debug("Detected segment size", "name", f.Name(), "size", segSize, "nzb_size", f.segments[0].Bytes)
+		if f.estimator != nil {
+			f.estimator.Set(f.segments[0].Bytes, segSize)
+		}
 	}
-
-	segSize := int64(len(data))
-	logger.Debug("Detected segment size", "name", f.Name(), "size", segSize, "nzb_size", f.segments[0].Bytes)
-	if f.estimator != nil {
-		f.estimator.Set(f.segments[0].Bytes, segSize)
+	if lastIdx > 0 {
+		logger.Debug("Detected last segment size", "name", f.Name(), "size", lastSegSize, "nzb_size", f.segments[lastIdx].Bytes)
 	}
-	f.applySegmentSize(segSize)
+	f.applySegmentSize(segSize, lastSegSize)
 	return nil
 }
 
-func (f *File) applySegmentSize(segSize int64) {
+func (f *File) applySegmentSize(segSize, lastSegSize int64) {
+	if lastSegSize <= 0 {
+		lastSegSize = segSize
+	}
 	var offset int64
 	for i := range f.segments {
 		f.segments[i].StartOffset = offset
-		if i < len(f.segments)-1 {
-			f.segments[i].EndOffset = offset + segSize
-			offset += segSize
-		} else {
-			ratio := float64(segSize) / float64(f.segments[0].Bytes)
-			estSize := int64(float64(f.segments[i].Bytes) * ratio)
-			f.segments[i].EndOffset = offset + estSize
-			offset += estSize
+		currentSize := segSize
+		if i == len(f.segments)-1 {
+			currentSize = lastSegSize
 		}
+		f.segments[i].EndOffset = offset + currentSize
+		offset += currentSize
 	}
 	f.totalSize = offset
 	f.detected = true
@@ -435,6 +459,10 @@ func (f *File) doDownloadSegment(ctx context.Context, index int, countFailures b
 		return data, nil
 	}
 
+	// Callers wait on a shared in-flight fetch keyed by segment index, but they do
+	// not own the underlying request lifecycle. That shared fetch runs on the file
+	// context so short-lived probe/prefetch/read cancellations do not poison a
+	// segment download that another reader may still need moments later.
 	req, leader := f.startInflightDownload(index, countFailures)
 	if leader {
 		go f.runInflightDownload(index, req)
@@ -454,18 +482,11 @@ func (f *File) startInflightDownload(index int, countFailures bool) (*inflightSe
 	defer f.downloadMu.Unlock()
 
 	if req, ok := f.inflightDownloads[index]; ok {
-		// A waiterless request has already been canceled by releaseInflightDownloadWaiter,
-		// but its goroutine may not have removed it from inflightDownloads yet. Don't let
-		// a new caller join that stale canceled request and inherit its context.Canceled.
-		if req.waiters == 0 {
-			delete(f.inflightDownloads, index)
-		} else {
-			req.waiters++
-			if countFailures {
-				req.countFailures = true
-			}
-			return req, false
+		req.waiters++
+		if countFailures {
+			req.countFailures = true
 		}
+		return req, false
 	}
 
 	baseCtx := f.ctx
@@ -495,9 +516,6 @@ func (f *File) releaseInflightDownloadWaiter(index int, req *inflightSegmentDown
 	}
 	if req.waiters > 0 {
 		req.waiters--
-	}
-	if req.waiters == 0 {
-		req.cancel()
 	}
 }
 
@@ -756,14 +774,14 @@ func (f *File) OpenStreamCtx(ctx context.Context) (io.ReadSeekCloser, error) {
 	if err := f.EnsureSegmentMap(); err != nil {
 		return nil, err
 	}
-	return NewSegmentReader(ctx, f, 0), nil
+	return NewSegmentReaderWithOptions(ctx, f, 0, SegmentReaderOptions{EnablePrefetch: true}), nil
 }
 
 func (f *File) OpenReaderAt(ctx context.Context, offset int64) (io.ReadCloser, error) {
 	if err := f.EnsureSegmentMap(); err != nil {
 		return nil, err
 	}
-	return NewSegmentReader(ctx, f, offset), nil
+	return NewSegmentReaderWithOptions(ctx, f, offset, SegmentReaderOptions{EnablePrefetch: false}), nil
 }
 
 // MaxSegmentSizeEstimatorEntries caps the number of size entries to prevent unbounded growth.

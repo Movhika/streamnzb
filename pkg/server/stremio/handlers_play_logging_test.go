@@ -2,6 +2,7 @@ package stremio
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -147,5 +148,101 @@ func TestStreamMonitorSnapshotTracksReadErrorAndReadErrorOnce(t *testing.T) {
 	}
 	if callbackCalls != 1 {
 		t.Fatalf("expected onReadError to be called once, got %d", callbackCalls)
+	}
+}
+
+func TestClassifyProbeLikeServeDetectsTailEOFProbe(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/play/test", nil)
+
+	probeLike, reason := classifyProbeLikeServe(
+		req,
+		10<<30,
+		"bytes=10737418239-",
+		bufferedResponseSnapshot{},
+		streamMonitorSnapshot{SawEOF: true},
+		"",
+	)
+
+	if !probeLike {
+		t.Fatal("expected tail EOF request to be classified as probe-like")
+	}
+	if reason != "tail_eof_probe" {
+		t.Fatalf("expected tail_eof_probe reason, got %q", reason)
+	}
+}
+
+func TestClassifyProbeLikeServeDetectsEmptyCanceledRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/play/test", nil).WithContext(ctx)
+	cancel()
+
+	probeLike, reason := classifyProbeLikeServe(
+		req,
+		10<<30,
+		"bytes=0-",
+		bufferedResponseSnapshot{},
+		streamMonitorSnapshot{},
+		"playback canceled",
+	)
+
+	if !probeLike {
+		t.Fatal("expected empty canceled request to be classified as probe-like")
+	}
+	if reason != "empty_canceled_request" {
+		t.Fatalf("expected empty_canceled_request reason, got %q", reason)
+	}
+}
+
+func TestClassifyProbeLikeServeDoesNotClassifyActualPlayback(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/play/test", nil)
+
+	probeLike, reason := classifyProbeLikeServe(
+		req,
+		10<<30,
+		"bytes=0-",
+		bufferedResponseSnapshot{BytesWritten: 1024},
+		streamMonitorSnapshot{BytesRead: 1024},
+		"",
+	)
+
+	if probeLike {
+		t.Fatalf("expected request with media bytes to be treated as playback, got reason %q", reason)
+	}
+}
+
+func TestClassifyProbeLikeServeDetectsSmallTailEOFProbe(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/play/test", nil)
+
+	probeLike, reason := classifyProbeLikeServe(
+		req,
+		16994390140,
+		"bytes=16994239897-",
+		bufferedResponseSnapshot{BytesWritten: 140886},
+		streamMonitorSnapshot{BytesRead: 140886, SawEOF: true},
+		"",
+	)
+
+	if !probeLike {
+		t.Fatal("expected small near-EOF request that hits EOF to be classified as probe-like")
+	}
+	if reason != "tail_small_eof_probe" {
+		t.Fatalf("expected tail_small_eof_probe reason, got %q", reason)
+	}
+}
+
+func TestClassifyProbeLikeServeDoesNotClassifySmallTailReadWithoutEOF(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/play/test", nil)
+
+	probeLike, reason := classifyProbeLikeServe(
+		req,
+		12554040792,
+		"bytes=12553854793-",
+		bufferedResponseSnapshot{BytesWritten: 185999},
+		streamMonitorSnapshot{BytesRead: 185999, SawEOF: false},
+		"",
+	)
+
+	if probeLike {
+		t.Fatalf("expected small near-EOF request without EOF to remain playback, got reason %q", reason)
 	}
 }

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/xml"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -11,8 +12,43 @@ import (
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/media/nzb"
+	"streamnzb/pkg/media/seek"
 	"streamnzb/pkg/release"
 )
+
+type fakePlaybackStream struct {
+	pos        int64
+	closed     bool
+	closeCalls int
+}
+
+func (f *fakePlaybackStream) Read(_ []byte) (int, error) {
+	if f.closed {
+		return 0, io.ErrClosedPipe
+	}
+	return 0, io.EOF
+}
+
+func (f *fakePlaybackStream) Seek(offset int64, whence int) (int64, error) {
+	if f.closed {
+		return 0, io.ErrClosedPipe
+	}
+	switch whence {
+	case io.SeekStart:
+		f.pos = offset
+	case io.SeekCurrent:
+		f.pos += offset
+	case io.SeekEnd:
+		f.pos = offset
+	}
+	return f.pos, nil
+}
+
+func (f *fakePlaybackStream) Close() error {
+	f.closed = true
+	f.closeCalls++
+	return nil
+}
 
 type fakeIndexer struct {
 	data     []byte
@@ -102,6 +138,26 @@ func TestCreateSessionAssignsFileOwners(t *testing.T) {
 	s.Close()
 }
 
+func TestMarkPlaybackValidatedSeparatesValidationFromPlaybackEnd(t *testing.T) {
+	logger.Init("ERROR")
+
+	s := &Session{ID: "sess-1", Clients: make(map[string]time.Time)}
+	m := &Manager{sessions: map[string]*Session{"sess-1": s}}
+
+	if s.HasPreviouslyServed() {
+		t.Fatal("expected unvalidated session to report false")
+	}
+
+	m.MarkPlaybackValidated("sess-1")
+
+	if !s.HasPreviouslyServed() {
+		t.Fatal("expected validated session to report true")
+	}
+	if !s.PlaybackEndedAt.IsZero() {
+		t.Fatal("expected validation to stay separate from playback end bookkeeping")
+	}
+}
+
 func TestCreateSessionSelectsRequestedEpisode(t *testing.T) {
 	logger.Init("ERROR")
 
@@ -187,6 +243,270 @@ func TestGetOrDownloadNZBDownloadsKeylessURL(t *testing.T) {
 		t.Fatalf("DownloadNZB called with URL %q", idx.lastURL)
 	}
 	s.Close()
+}
+
+func TestAcquirePlaybackStreamReusesSameKey(t *testing.T) {
+	logger.Init("ERROR")
+
+	s := &Session{}
+	spec := PlaybackStreamSpec{Key: "sess-1|video.mkv|100", Name: "video.mkv", Size: 100}
+	openCalls := 0
+	first := &fakePlaybackStream{}
+
+	lease1, reused, err := s.AcquirePlaybackStream(spec, func() (io.ReadSeekCloser, error) {
+		openCalls++
+		return first, nil
+	})
+	if err != nil {
+		t.Fatalf("AcquirePlaybackStream first call error: %v", err)
+	}
+	if reused {
+		t.Fatal("expected first acquire to open a new stream")
+	}
+	if err := lease1.Close(); err != nil {
+		t.Fatalf("closing first lease: %v", err)
+	}
+	if first.closed {
+		t.Fatal("closing a lease should not close the underlying stream")
+	}
+
+	lease2, reused, err := s.AcquirePlaybackStream(spec, func() (io.ReadSeekCloser, error) {
+		openCalls++
+		return &fakePlaybackStream{}, nil
+	})
+	if err != nil {
+		t.Fatalf("AcquirePlaybackStream second call error: %v", err)
+	}
+	if !reused {
+		t.Fatal("expected second acquire to reuse the existing stream")
+	}
+	if openCalls != 1 {
+		t.Fatalf("expected open to be called once, got %d", openCalls)
+	}
+	if _, err := lease2.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("reused lease seek failed: %v", err)
+	}
+	if err := lease2.Close(); err != nil {
+		t.Fatalf("closing second lease: %v", err)
+	}
+}
+
+func TestTryAcquirePlaybackStreamReportsBusyForSameKeyInUse(t *testing.T) {
+	logger.Init("ERROR")
+
+	s := &Session{}
+	spec := PlaybackStreamSpec{Key: "sess-1|video.mkv|100", Name: "video.mkv", Size: 100}
+	openCalls := 0
+	first := &fakePlaybackStream{}
+
+	lease1, reused, err := s.AcquirePlaybackStream(spec, func() (io.ReadSeekCloser, error) {
+		openCalls++
+		return first, nil
+	})
+	if err != nil {
+		t.Fatalf("AcquirePlaybackStream first call error: %v", err)
+	}
+	if reused {
+		t.Fatal("expected first acquire to open a new stream")
+	}
+
+	lease2, reused, busy, err := s.TryAcquirePlaybackStream(spec, func() (io.ReadSeekCloser, error) {
+		openCalls++
+		return &fakePlaybackStream{}, nil
+	})
+	if err != nil {
+		t.Fatalf("TryAcquirePlaybackStream busy call error: %v", err)
+	}
+	if lease2 != nil {
+		t.Fatal("expected busy acquire to return no lease")
+	}
+	if reused {
+		t.Fatal("expected busy acquire to report reused=false")
+	}
+	if !busy {
+		t.Fatal("expected busy acquire to report busy=true")
+	}
+	if openCalls != 1 {
+		t.Fatalf("expected open to still be called once, got %d", openCalls)
+	}
+
+	if err := lease1.Close(); err != nil {
+		t.Fatalf("closing first lease: %v", err)
+	}
+
+	lease3, reused, busy, err := s.TryAcquirePlaybackStream(spec, func() (io.ReadSeekCloser, error) {
+		openCalls++
+		return &fakePlaybackStream{}, nil
+	})
+	if err != nil {
+		t.Fatalf("TryAcquirePlaybackStream reuse call error: %v", err)
+	}
+	if busy {
+		t.Fatal("expected stream to no longer be busy after lease close")
+	}
+	if !reused {
+		t.Fatal("expected same-key acquire after release to reuse existing stream")
+	}
+	if lease3 == nil {
+		t.Fatal("expected a lease after busy stream was released")
+	}
+	if err := lease3.Close(); err != nil {
+		t.Fatalf("closing third lease: %v", err)
+	}
+}
+
+func TestAcquirePlaybackStreamNewKeyClosesOldStreamAndClearsStartupInfo(t *testing.T) {
+	logger.Init("ERROR")
+
+	s := &Session{}
+	firstSpec := PlaybackStreamSpec{Key: "sess-1|video-a.mkv|100", Name: "video-a.mkv", Size: 100}
+	secondSpec := PlaybackStreamSpec{Key: "sess-1|video-b.mkv|200", Name: "video-b.mkv", Size: 200}
+	first := &fakePlaybackStream{}
+	second := &fakePlaybackStream{}
+
+	lease1, _, err := s.AcquirePlaybackStream(firstSpec, func() (io.ReadSeekCloser, error) {
+		return first, nil
+	})
+	if err != nil {
+		t.Fatalf("AcquirePlaybackStream first key error: %v", err)
+	}
+	s.SetPlaybackStreamStartInfo(firstSpec.Key, seek.StreamStartInfo{HeaderValid: true, DurationSec: 120, DurationKnown: true})
+	if err := lease1.Close(); err != nil {
+		t.Fatalf("closing first lease: %v", err)
+	}
+
+	lease2, reused, err := s.AcquirePlaybackStream(secondSpec, func() (io.ReadSeekCloser, error) {
+		return second, nil
+	})
+	if err != nil {
+		t.Fatalf("AcquirePlaybackStream second key error: %v", err)
+	}
+	if reused {
+		t.Fatal("expected different key to open a new stream")
+	}
+	if first.closeCalls != 1 {
+		t.Fatalf("expected old stream to be closed once, got %d", first.closeCalls)
+	}
+	snapshot, ok := s.PlaybackStreamSnapshot()
+	if !ok {
+		t.Fatal("expected playback snapshot after second acquire")
+	}
+	if snapshot.Spec.Key != secondSpec.Key {
+		t.Fatalf("expected snapshot key %q, got %q", secondSpec.Key, snapshot.Spec.Key)
+	}
+	if snapshot.HasStartupInfo {
+		t.Fatal("expected startup info to be cleared when key changes")
+	}
+	if err := lease2.Close(); err != nil {
+		t.Fatalf("closing second lease: %v", err)
+	}
+}
+
+func TestCachePlaybackStreamSnapshotStoresMetadataWithoutReusableStream(t *testing.T) {
+	logger.Init("ERROR")
+
+	s := &Session{}
+	spec := PlaybackStreamSpec{Key: "sess-1|video.mkv|100", Name: "video.mkv", Size: 100}
+	info := seek.StreamStartInfo{HeaderValid: true, DurationSec: 120, DurationKnown: true}
+	openCalls := 0
+
+	s.CachePlaybackStreamSnapshot(spec, info, true)
+
+	snapshot, ok := s.PlaybackStreamSnapshot()
+	if !ok {
+		t.Fatal("expected playback snapshot to be cached")
+	}
+	if snapshot.Spec != spec {
+		t.Fatalf("expected cached spec %#v, got %#v", spec, snapshot.Spec)
+	}
+	if !snapshot.HasStartupInfo {
+		t.Fatal("expected cached startup info to be present")
+	}
+	if snapshot.StartupInfo != info {
+		t.Fatalf("expected cached startup info %#v, got %#v", info, snapshot.StartupInfo)
+	}
+
+	lease, reused, err := s.AcquirePlaybackStream(spec, func() (io.ReadSeekCloser, error) {
+		openCalls++
+		return &fakePlaybackStream{}, nil
+	})
+	if err != nil {
+		t.Fatalf("AcquirePlaybackStream after caching snapshot error: %v", err)
+	}
+	if reused {
+		t.Fatal("expected cached snapshot without stream to force a fresh open")
+	}
+	if openCalls != 1 {
+		t.Fatalf("expected open to be called once, got %d", openCalls)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("closing lease: %v", err)
+	}
+}
+
+func TestCachePlaybackStreamSnapshotClosesRetainedUnusedStream(t *testing.T) {
+	logger.Init("ERROR")
+
+	s := &Session{}
+	spec := PlaybackStreamSpec{Key: "sess-1|video.mkv|100", Name: "video.mkv", Size: 100}
+	stream := &fakePlaybackStream{}
+
+	lease, _, err := s.AcquirePlaybackStream(spec, func() (io.ReadSeekCloser, error) {
+		return stream, nil
+	})
+	if err != nil {
+		t.Fatalf("AcquirePlaybackStream error: %v", err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("closing lease: %v", err)
+	}
+
+	info := seek.StreamStartInfo{HeaderValid: true, DurationSec: 120, DurationKnown: true}
+	s.CachePlaybackStreamSnapshot(spec, info, true)
+
+	if stream.closeCalls != 1 {
+		t.Fatalf("expected retained playback stream to be closed once, got %d", stream.closeCalls)
+	}
+	snapshot, ok := s.PlaybackStreamSnapshot()
+	if !ok {
+		t.Fatal("expected playback snapshot after caching")
+	}
+	if snapshot.Spec != spec {
+		t.Fatalf("expected cached spec %#v, got %#v", spec, snapshot.Spec)
+	}
+	if !snapshot.HasStartupInfo || snapshot.StartupInfo != info {
+		t.Fatalf("expected cached startup info %#v, got %#v (present=%v)", info, snapshot.StartupInfo, snapshot.HasStartupInfo)
+	}
+}
+
+func TestSessionCloseClosesPlaybackStream(t *testing.T) {
+	logger.Init("ERROR")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s := &Session{ctx: ctx, cancel: cancel}
+	stream := &fakePlaybackStream{}
+	spec := PlaybackStreamSpec{Key: "sess-1|video.mkv|100", Name: "video.mkv", Size: 100}
+
+	lease, _, err := s.AcquirePlaybackStream(spec, func() (io.ReadSeekCloser, error) {
+		return stream, nil
+	})
+	if err != nil {
+		t.Fatalf("AcquirePlaybackStream error: %v", err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("closing lease: %v", err)
+	}
+
+	s.Close()
+
+	if stream.closeCalls != 1 {
+		t.Fatalf("expected underlying stream to be closed once, got %d", stream.closeCalls)
+	}
+	if s.playback != nil {
+		t.Fatal("expected playback state to be cleared on session close")
+	}
 }
 
 func marshalTestNZB(t *testing.T, doc *nzb.NZB) []byte {

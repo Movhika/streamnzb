@@ -124,52 +124,6 @@ func (f *dedupBlockingSegmentFetcher) Release() {
 	})
 }
 
-type staleInflightSegmentFetcher struct {
-	data                  []byte
-	callObserved          chan int
-	cancelObserved        chan int
-	releaseCanceledCall   chan struct{}
-	releaseSuccessfulCall chan struct{}
-	mu                    sync.Mutex
-	calls                 int
-}
-
-func newStaleInflightSegmentFetcher(data []byte) *staleInflightSegmentFetcher {
-	return &staleInflightSegmentFetcher{
-		data:                  data,
-		callObserved:          make(chan int, 4),
-		cancelObserved:        make(chan int, 4),
-		releaseCanceledCall:   make(chan struct{}),
-		releaseSuccessfulCall: make(chan struct{}),
-	}
-}
-
-func (f *staleInflightSegmentFetcher) FetchSegment(ctx context.Context, segment *nzb.Segment, groups []string) (pool.SegmentData, error) {
-	f.mu.Lock()
-	f.calls++
-	call := f.calls
-	f.mu.Unlock()
-
-	f.callObserved <- call
-
-	select {
-	case <-ctx.Done():
-		f.cancelObserved <- call
-		<-f.releaseCanceledCall
-		return pool.SegmentData{}, ctx.Err()
-	case <-f.releaseSuccessfulCall:
-		return pool.SegmentData{Body: append([]byte(nil), f.data...)}, nil
-	}
-}
-
-func (f *staleInflightSegmentFetcher) ReleaseCanceledCall() {
-	close(f.releaseCanceledCall)
-}
-
-func (f *staleInflightSegmentFetcher) ReleaseSuccessfulCall() {
-	close(f.releaseSuccessfulCall)
-}
-
 func testNZBFileWithSegments(sizes ...int64) *nzb.File {
 	segments := make([]nzb.Segment, len(sizes))
 	for i, size := range sizes {
@@ -334,14 +288,14 @@ func TestDownloadSegmentLeaderCancellationDoesNotCancelFollower(t *testing.T) {
 	}
 }
 
-func TestDownloadSegmentDoesNotJoinWaiterlessCanceledInflightRequest(t *testing.T) {
+func TestDownloadSegmentReusesWaiterlessInflightRequest(t *testing.T) {
 	oldLogger := logger.Log
 	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	defer func() {
 		logger.Log = oldLogger
 	}()
 
-	fetcher := newStaleInflightSegmentFetcher([]byte("fresh"))
+	fetcher := newDedupBlockingSegmentFetcher([]byte("fresh"), nil)
 	f := NewFile(context.Background(), testNZBFileWithSegments(5), nil, nil, fetcher, nil)
 
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
@@ -369,12 +323,9 @@ func TestDownloadSegmentDoesNotJoinWaiterlessCanceledInflightRequest(t *testing.
 	}
 
 	select {
-	case got := <-fetcher.cancelObserved:
-		if got != 1 {
-			t.Fatalf("expected canceled fetch call to be 1, got %d", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for canceled fetch observation")
+	case got := <-fetcher.callObserved:
+		t.Fatalf("expected waiterless inflight request to remain reusable, saw call %d", got)
+	case <-time.After(100 * time.Millisecond):
 	}
 
 	followerData := make(chan []byte, 1)
@@ -387,14 +338,11 @@ func TestDownloadSegmentDoesNotJoinWaiterlessCanceledInflightRequest(t *testing.
 
 	select {
 	case got := <-fetcher.callObserved:
-		if got != 2 {
-			t.Fatalf("expected fresh underlying fetch call to be 2, got %d", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for second underlying fetch; stale request was likely reused")
+		t.Fatalf("expected follower to reuse waiterless in-flight request, saw call %d", got)
+	case <-time.After(100 * time.Millisecond):
 	}
 
-	fetcher.ReleaseSuccessfulCall()
+	fetcher.Release()
 
 	select {
 	case err := <-followerErrs:
@@ -407,6 +355,94 @@ func TestDownloadSegmentDoesNotJoinWaiterlessCanceledInflightRequest(t *testing.
 	if got := string(<-followerData); got != "fresh" {
 		t.Fatalf("expected follower data %q, got %q", "fresh", got)
 	}
+}
 
-	fetcher.ReleaseCanceledCall()
+type varyingSizeSegmentFetcher struct {
+	sizes []int64
+	mu    sync.Mutex
+	calls []int
+}
+
+func (f *varyingSizeSegmentFetcher) FetchSegment(ctx context.Context, segment *nzb.Segment, groups []string) (pool.SegmentData, error) {
+	idx := segment.Number - 1
+	if idx < 0 || idx >= len(f.sizes) {
+		return pool.SegmentData{}, fmt.Errorf("unexpected segment number %d", segment.Number)
+	}
+	f.mu.Lock()
+	f.calls = append(f.calls, segment.Number)
+	f.mu.Unlock()
+	size := f.sizes[idx]
+	data := bytes.Repeat([]byte{byte('a' + idx)}, int(size))
+	return pool.SegmentData{Body: data, Size: size}, nil
+}
+
+func (f *varyingSizeSegmentFetcher) Calls() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.calls...)
+}
+
+func TestEnsureSegmentMapUsesActualLastSegmentSize(t *testing.T) {
+	oldLogger := logger.Log
+	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	defer func() {
+		logger.Log = oldLogger
+	}()
+
+	fetcher := &varyingSizeSegmentFetcher{sizes: []int64{8, 8, 5}}
+	f := NewFile(context.Background(), testNZBFileWithSegments(10, 10, 10), nil, nil, fetcher, nil)
+
+	if err := f.EnsureSegmentMap(); err != nil {
+		t.Fatalf("EnsureSegmentMap returned error: %v", err)
+	}
+	if got := f.Size(); got != 21 {
+		t.Fatalf("expected decoded size %d, got %d", 21, got)
+	}
+	segs := f.Segments()
+	if got := segs[2].StartOffset; got != 16 {
+		t.Fatalf("expected last segment start offset %d, got %d", 16, got)
+	}
+	if got := segs[2].EndOffset; got != 21 {
+		t.Fatalf("expected last segment end offset %d, got %d", 21, got)
+	}
+	calls := fetcher.Calls()
+	if len(calls) != 2 || calls[0] != 1 || calls[1] != 3 {
+		t.Fatalf("expected first and last segment detection fetches, got %v", calls)
+	}
+	reader, err := f.OpenReaderAt(context.Background(), 16)
+	if err != nil {
+		t.Fatalf("OpenReaderAt returned error: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll returned error: %v", err)
+	}
+	if got := string(data); got != "ccccc" {
+		t.Fatalf("expected tail data %q, got %q", "ccccc", got)
+	}
+}
+
+func TestEnsureSegmentMapEstimatorStillUsesActualLastSegmentSize(t *testing.T) {
+	oldLogger := logger.Log
+	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	defer func() {
+		logger.Log = oldLogger
+	}()
+
+	estimator := NewSegmentSizeEstimator()
+	estimator.Set(10, 8)
+	fetcher := &varyingSizeSegmentFetcher{sizes: []int64{8, 8, 5}}
+	f := NewFile(context.Background(), testNZBFileWithSegments(10, 10, 10), nil, estimator, fetcher, nil)
+
+	if err := f.EnsureSegmentMap(); err != nil {
+		t.Fatalf("EnsureSegmentMap returned error: %v", err)
+	}
+	if got := f.Size(); got != 21 {
+		t.Fatalf("expected decoded size %d, got %d", 21, got)
+	}
+	calls := fetcher.Calls()
+	if len(calls) != 1 || calls[0] != 3 {
+		t.Fatalf("expected estimator hit plus last-segment fetch, got %v", calls)
+	}
 }

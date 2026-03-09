@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -17,11 +18,40 @@ import (
 	"streamnzb/pkg/media/fileutil"
 	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/media/nzb"
+	"streamnzb/pkg/media/seek"
 	"streamnzb/pkg/media/unpack"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/usenet/nntp"
 	"streamnzb/pkg/usenet/pool"
 )
+
+type PlaybackStreamSpec struct {
+	Key  string
+	Name string
+	Size int64
+}
+
+type PlaybackStreamSnapshot struct {
+	Spec           PlaybackStreamSpec
+	StartupInfo    seek.StreamStartInfo
+	HasStartupInfo bool
+}
+
+type playbackStreamState struct {
+	spec           PlaybackStreamSpec
+	stream         io.ReadSeekCloser
+	opening        bool
+	inUse          bool
+	startupInfo    seek.StreamStartInfo
+	hasStartupInfo bool
+	cond           *sync.Cond
+}
+
+type playbackLease struct {
+	session *Session
+	state   *playbackStreamState
+	closed  bool
+}
 
 type Session struct {
 	ID    string
@@ -33,6 +63,7 @@ type Session struct {
 	CreatedAt         time.Time
 	LastAccess        time.Time
 	ActivePlays       int32
+	PlaybackValidatedAt time.Time // when probe/prepare proved the file is playable; separate from playback end bookkeeping
 	PlaybackStartedAt time.Time // when ActivePlays went from 0 to >0; used to evict stuck sessions
 	PlaybackEndedAt   time.Time // when ActivePlays went to 0; used to evict session soon after stream stops
 	Clients           map[string]time.Time
@@ -53,6 +84,7 @@ type Session struct {
 	indexer     indexer.Indexer
 
 	bytesRead atomic.Int64 // bytes read during playback; used for AvailNZB good-report threshold
+	playback  *playbackStreamState
 }
 
 // Done returns a channel that is closed when the session is closed (e.g. user closed from dashboard).
@@ -62,6 +94,13 @@ func (s *Session) Done() <-chan struct{} {
 		return nil
 	}
 	return s.ctx.Done()
+}
+
+func (s *Session) Context() context.Context {
+	if s == nil || s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
 }
 
 func (s *Session) ReleaseURL() string {
@@ -109,16 +148,16 @@ func (s *Session) IsActivelyServing() bool {
 	return s.ActivePlays > 0
 }
 
-// HasPreviouslyServed returns true if this session has completed at least one full serve cycle
-// (i.e. StartPlayback was called and then EndPlayback dropped ActivePlays back to 0).
-// PlaybackEndedAt is set when ActivePlays reaches zero, so a non-zero value means the file
-// was successfully probed and streamed at least once. Used by tryPlaySlot to skip IsFailed()
-// for sessions that proved their file was good but whose ActivePlays is momentarily 0 between
-// the client cancelling the initial probe and sending a follow-up range request.
+// HasPreviouslyServed returns true if this session has already validated its playback source.
+// This is intentionally separate from PlaybackEndedAt: probe requests should still establish
+// that the file is playable, but they should not be conflated with meaningful playback ending.
+// Used by tryPlaySlot to skip IsFailed() for sessions that proved their file was good but whose
+// ActivePlays is momentarily 0 between the client cancelling an initial probe and sending a
+// follow-up range request.
 func (s *Session) HasPreviouslyServed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.PlaybackEndedAt.IsZero()
+	return !s.PlaybackValidatedAt.IsZero()
 }
 
 // MaxPlaybackDuration is the maximum time a session can stay in "active playback"
@@ -168,6 +207,217 @@ func (s *Session) SetBlueprint(bp interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Blueprint = bp
+}
+
+func (s *Session) ensurePlaybackStateLocked() *playbackStreamState {
+	if s.playback == nil {
+		s.playback = &playbackStreamState{}
+		s.playback.cond = sync.NewCond(&s.mu)
+	}
+	return s.playback
+}
+
+func (s *Session) PlaybackStreamSnapshot() (PlaybackStreamSnapshot, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.playback == nil || s.playback.spec.Key == "" {
+		return PlaybackStreamSnapshot{}, false
+	}
+	return PlaybackStreamSnapshot{
+		Spec:           s.playback.spec,
+		StartupInfo:    s.playback.startupInfo,
+		HasStartupInfo: s.playback.hasStartupInfo,
+	}, true
+}
+
+func (s *Session) SetPlaybackStreamStartInfo(key string, info seek.StreamStartInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.playback == nil || s.playback.spec.Key == "" || s.playback.spec.Key != key {
+		return
+	}
+	s.playback.startupInfo = info
+	s.playback.hasStartupInfo = true
+}
+
+func (s *Session) CachePlaybackStreamSnapshot(spec PlaybackStreamSpec, info seek.StreamStartInfo, hasStartupInfo bool) {
+	if spec.Key == "" {
+		return
+	}
+
+	var oldStream io.ReadSeekCloser
+
+	s.mu.Lock()
+	state := s.ensurePlaybackStateLocked()
+	if state.stream != nil && !state.inUse && !state.opening {
+		oldStream = state.stream
+		state.stream = nil
+	}
+	state.spec = spec
+	if hasStartupInfo {
+		state.startupInfo = info
+		state.hasStartupInfo = true
+	} else {
+		state.startupInfo = seek.StreamStartInfo{}
+		state.hasStartupInfo = false
+	}
+	s.LastAccess = time.Now()
+	if state.cond != nil {
+		state.cond.Broadcast()
+	}
+	s.mu.Unlock()
+
+	if oldStream != nil {
+		_ = oldStream.Close()
+	}
+}
+
+func (s *Session) AcquirePlaybackStream(spec PlaybackStreamSpec, open func() (io.ReadSeekCloser, error)) (io.ReadSeekCloser, bool, error) {
+	stream, reused, _, err := s.acquirePlaybackStream(spec, open, false)
+	return stream, reused, err
+}
+
+func (s *Session) TryAcquirePlaybackStream(spec PlaybackStreamSpec, open func() (io.ReadSeekCloser, error)) (io.ReadSeekCloser, bool, bool, error) {
+	return s.acquirePlaybackStream(spec, open, true)
+}
+
+func (s *Session) acquirePlaybackStream(spec PlaybackStreamSpec, open func() (io.ReadSeekCloser, error), allowBusySameKey bool) (io.ReadSeekCloser, bool, bool, error) {
+	if spec.Key == "" {
+		return nil, false, false, fmt.Errorf("playback stream key required")
+	}
+
+	s.mu.Lock()
+	state := s.ensurePlaybackStateLocked()
+	for {
+		if state.stream != nil && state.spec.Key == spec.Key && !state.inUse && !state.opening {
+			state.spec = spec
+			state.inUse = true
+			s.LastAccess = time.Now()
+			s.mu.Unlock()
+			return &playbackLease{session: s, state: state}, true, false, nil
+		}
+		if allowBusySameKey && state.spec.Key == spec.Key && (state.opening || state.inUse) {
+			s.LastAccess = time.Now()
+			s.mu.Unlock()
+			return nil, false, true, nil
+		}
+		if state.opening || state.inUse {
+			state.cond.Wait()
+			continue
+		}
+
+		oldStream := state.stream
+		oldKey := state.spec.Key
+		state.stream = nil
+		state.spec = spec
+		state.opening = true
+		state.inUse = false
+		if oldKey != spec.Key {
+			state.startupInfo = seek.StreamStartInfo{}
+			state.hasStartupInfo = false
+		}
+		s.LastAccess = time.Now()
+		s.mu.Unlock()
+
+		if oldStream != nil {
+			_ = oldStream.Close()
+		}
+
+		stream, err := open()
+
+		s.mu.Lock()
+		state.opening = false
+		if err != nil {
+			if state.stream == nil && state.spec.Key == spec.Key {
+				state.spec = PlaybackStreamSpec{}
+				state.startupInfo = seek.StreamStartInfo{}
+				state.hasStartupInfo = false
+			}
+			state.cond.Broadcast()
+			s.mu.Unlock()
+			return nil, false, false, err
+		}
+
+		state.stream = stream
+		state.spec = spec
+		state.inUse = true
+		s.LastAccess = time.Now()
+		state.cond.Broadcast()
+		s.mu.Unlock()
+		return &playbackLease{session: s, state: state}, false, false, nil
+	}
+}
+
+func (s *Session) ResetPlaybackStream() {
+	s.mu.Lock()
+	state := s.playback
+	if state == nil {
+		s.mu.Unlock()
+		return
+	}
+	stream := state.stream
+	state.stream = nil
+	state.spec = PlaybackStreamSpec{}
+	state.opening = false
+	state.inUse = false
+	state.startupInfo = seek.StreamStartInfo{}
+	state.hasStartupInfo = false
+	if state.cond != nil {
+		state.cond.Broadcast()
+	}
+	s.mu.Unlock()
+
+	if stream != nil {
+		_ = stream.Close()
+	}
+}
+
+func (l *playbackLease) activeStream() io.ReadSeekCloser {
+	if l == nil || l.session == nil || l.state == nil {
+		return nil
+	}
+	l.session.mu.Lock()
+	defer l.session.mu.Unlock()
+	if l.closed || l.session.playback != l.state {
+		return nil
+	}
+	return l.state.stream
+}
+
+func (l *playbackLease) Read(p []byte) (int, error) {
+	stream := l.activeStream()
+	if stream == nil {
+		return 0, io.ErrClosedPipe
+	}
+	return stream.Read(p)
+}
+
+func (l *playbackLease) Seek(offset int64, whence int) (int64, error) {
+	stream := l.activeStream()
+	if stream == nil {
+		return 0, io.ErrClosedPipe
+	}
+	return stream.Seek(offset, whence)
+}
+
+func (l *playbackLease) Close() error {
+	if l == nil || l.session == nil || l.state == nil {
+		return nil
+	}
+	l.session.mu.Lock()
+	defer l.session.mu.Unlock()
+	if l.closed {
+		return nil
+	}
+	l.closed = true
+	if l.session.playback == l.state {
+		l.state.inUse = false
+		l.session.LastAccess = time.Now()
+		if l.state.cond != nil {
+			l.state.cond.Broadcast()
+		}
+	}
+	return nil
 }
 
 func NewManager(pools []*nntp.ClientPool, usenetPool *pool.Pool, ttl time.Duration, cacheBudget *pool.SegmentCacheBudget) *Manager {
@@ -672,6 +922,21 @@ func (s *Session) Close() {
 		s.cancel()
 		s.cancel = nil
 	}
+	if s.playback != nil {
+		if s.playback.stream != nil {
+			_ = s.playback.stream.Close()
+			s.playback.stream = nil
+		}
+		s.playback.spec = PlaybackStreamSpec{}
+		s.playback.opening = false
+		s.playback.inUse = false
+		s.playback.startupInfo = seek.StreamStartInfo{}
+		s.playback.hasStartupInfo = false
+		if s.playback.cond != nil {
+			s.playback.cond.Broadcast()
+		}
+		s.playback = nil
+	}
 	// Drop segment caches so memory is released immediately instead of waiting for GC.
 	n := 0
 	for _, f := range s.Files {
@@ -794,6 +1059,17 @@ func (m *Manager) StartPlayback(id, ip string) {
 		}
 		s.ActivePlays++
 		s.Clients[ip] = time.Now()
+		s.mu.Unlock()
+	}
+}
+
+func (m *Manager) MarkPlaybackValidated(id string) {
+	s, err := m.GetSession(id)
+	if err == nil {
+		s.mu.Lock()
+		if s.PlaybackValidatedAt.IsZero() {
+			s.PlaybackValidatedAt = time.Now()
+		}
 		s.mu.Unlock()
 	}
 }

@@ -66,7 +66,7 @@ type Server struct {
 	streamManager             *stream.Manager
 	playListCache             sync.Map
 	rawSearchCache            sync.Map
-	recordedSuccessSessionIDs sync.Map // session ID -> struct{}; record success only once per stream
+	recordedSuccessSessionIDs sync.Map // session ID -> struct{}; record actual playback success only once per stream
 	recordedPreloadSessionIDs sync.Map // session ID -> struct{}; record preload only once per session lifetime
 	recordedFailureSessionIDs sync.Map // session ID -> struct{}; record failure only once per session lifetime (prevents concurrent goroutines from inserting duplicate rows)
 	nextReleaseIndex          sync.Map // key: deviceToken|key.CacheKey() → *nextReleaseCursor; tracks manual "next" progression
@@ -2008,6 +2008,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	wantTimeOffset := r.Header.Get("Range") == "" && hasTimeOffset
 	var startupInfo seek.StreamStartInfo
 	var haveStartupInfo bool
+	streamMode := ""
 
 	var mergedCtx context.Context
 	var mergedCancel context.CancelFunc
@@ -2054,21 +2055,24 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 				s.recordedPreloadSessionIDs.Delete(id)
 			}(sessionID, sess.Done())
 		}
-		stream, name, size, err = s.tryPlaySlot(mergedCtx, sess)
-		if err != nil {
+
+		preparedStream, prepareErr := s.preparePlaybackStream(mergedCtx, sess, requestedSessionID, sessionID, wantTimeOffset)
+		if prepareErr != nil {
 			mergedCancel()
+			if errors.Is(prepareErr, context.Canceled) || errors.Is(prepareErr, context.DeadlineExceeded) {
+				logger.Debug("play prepare canceled", "session", sessionID, "err", prepareErr)
+				return
+			}
 			// Always mark slot as permanently failed when we abandon it, so future retries on the same URL
-			// get a redirect instead of a 404. isSegmentUnavailableErr gates AvailNZB reporting only.
+			// get a redirect instead of a 404.
 			s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
-			if isSegmentUnavailableErr(err) {
-				if s.availReporter != nil {
-					s.availReporter.ReportBad(sess, err.Error())
-				}
+			if (isSegmentUnavailableErr(prepareErr) || isDataCorruptErr(prepareErr)) && s.availReporter != nil {
+				s.availReporter.ReportBad(sess, prepareErr.Error())
 			}
 			// Gate failure recording: concurrent goroutines for the same session (Stremio's automatic
 			// re-requests) must not each insert a Failure row. Only the first one wins.
 			if _, alreadyFailed := s.recordedFailureSessionIDs.LoadOrStore(sessionID, struct{}{}); !alreadyFailed {
-				s.recordAttempt(sess, false, err.Error())
+				s.recordAttempt(sess, false, prepareErr.Error())
 				go func(id string, done <-chan struct{}) {
 					<-done
 					s.recordedFailureSessionIDs.Delete(id)
@@ -2081,250 +2085,331 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 				return
 			}
 			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
-				logger.Info("Trying next fallback slot (internal)", "from", sessionID, "to", nextID, "err", err)
+				logger.Info("Trying next fallback slot (internal)", "from", sessionID, "to", nextID, "err", prepareErr)
 				failoverCount++
 				sess, sessionID = nextSess, nextID
 				continue
 			}
-			logger.Info("No more fallback slots", "last", sessionID, "err", err)
+			logger.Info("No more fallback slots", "last", sessionID, "err", prepareErr)
 			forceDisconnect(w, s.baseURL)
 			return
 		}
-		inspectBytes := unpack.ProbeSize
-		needDuration := wantTimeOffset && sessionID == requestedSessionID
-		if needDuration && seek.MaxBytesToRead > inspectBytes {
-			inspectBytes = seek.MaxBytesToRead
-		}
-		startInfo, inspectErr := seek.InspectStreamStart(stream, size, name, inspectBytes)
-		var probeErr error
-		switch {
-		case inspectErr != nil:
-			probeErr = fmt.Errorf("probe inspect: %w", inspectErr)
-		case !startInfo.HeaderValid:
-			probeErr = fmt.Errorf("probe: invalid container header for %s", name)
-		default:
-			if needDuration {
-				startupInfo = startInfo
-				haveStartupInfo = true
+
+		stream = preparedStream.Stream
+		name = preparedStream.Spec.Name
+		size = preparedStream.Spec.Size
+		startupInfo = preparedStream.StartupInfo
+		haveStartupInfo = preparedStream.HasStartupInfo
+		streamMode = preparedStream.Mode
+		break
+	}
+	defer mergedCancel()
+	servedSessionID := sessionID
+	requestedRange := r.Header.Get("Range")
+	requestedTimeOffset := r.URL.Query().Get("t")
+	userAgent := r.Header.Get("User-Agent")
+	var closeReason atomic.Value
+	var closeStreamOnce sync.Once
+	closeStream := func(reason string) {
+		closeStreamOnce.Do(func() {
+			closeReason.Store(reason)
+			if stream != nil {
+				logger.Debug("play handler closing stream", "session", servedSessionID, "reason", reason)
+				stream.Close()
+				stream = nil
 			}
+		})
+	}
+	go func(done <-chan struct{}) {
+		<-done
+		closeStream("playback canceled")
+	}(mergedCtx.Done())
+
+	// After internal failover we serve a different file; don't apply the original request's Range or t= to it.
+	failedOver := sessionID != requestedSessionID
+	if failedOver {
+		r.Header.Del("Range")
+	}
+	if !failedOver && wantTimeOffset && r.Header.Get("Range") == "" && haveStartupInfo {
+		if byteOffset, seekOK := seek.TimeToByteOffsetFromDuration(size, startupInfo.DurationSec, tSec); seekOK {
+			r.Header.Set("Range", "bytes="+strconv.FormatInt(byteOffset, 10)+"-")
 		}
-		if probeErr != nil {
-			mergedCancel()
-			// Always mark slot as permanently failed when we abandon it; AvailNZB reporting is selective.
-			s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
-			if isSegmentUnavailableErr(probeErr) || isDataCorruptErr(probeErr) {
-				if s.availReporter != nil {
-					s.availReporter.ReportBad(sess, probeErr.Error())
-				}
+	}
+
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+	s.sessionManager.MarkPlaybackValidated(sessionID)
+	s.sessionManager.StartPlayback(sessionID, clientIP)
+	var endPlaybackOnce sync.Once
+	endPlayback := func() { s.sessionManager.EndPlayback(sessionID, clientIP) }
+	defer endPlaybackOnce.Do(endPlayback)
+	// When client cancels (e.g. stop in Stremio), request context is cancelled; end playback so we stop downloading and session can be evicted.
+	go func() {
+		<-r.Context().Done()
+		endPlaybackOnce.Do(endPlayback)
+	}()
+
+	// serveFailureRecorded is set to true when onReadError records a failure for the
+	// currently-served session. The success defer checks this flag so it never
+	// overwrites a Failure with an OK (the "flip-flop" bug).
+	serveFailureRecorded := false
+	onReadError := func(playbackSessionID string, readErr error) {
+		// Trigger slot failover for any permanent mid-stream error:
+		//   - 430 No Such Article (segment missing on all providers)
+		//   - yEnc decode failure (data corruption)
+		//   - ErrTooManyZeroFills (too many segments failed across all providers)
+		// All three mean the slot is unrecoverable. SetSlotFailedDuringPlayback marks it so the
+		// existing redirect logic at the top of handlePlay redirects the player to the next slot
+		// on reconnect, without requiring the user to manually switch in Stremio.
+		if !isSegmentUnavailableErr(readErr) && !isDataCorruptErr(readErr) && !errors.Is(readErr, unpack.ErrTooManyZeroFills) {
+			return
+		}
+		s.sessionManager.SetSlotFailedDuringPlayback(playbackSessionID)
+		if errSess, _ := s.sessionManager.GetSession(playbackSessionID); errSess != nil {
+			errSess.ResetPlaybackStream()
+			if s.availReporter != nil {
+				s.availReporter.ReportBad(errSess, readErr.Error())
 			}
-			if _, alreadyFailed := s.recordedFailureSessionIDs.LoadOrStore(sessionID, struct{}{}); !alreadyFailed {
-				s.recordAttempt(sess, false, probeErr.Error())
+			if _, alreadyFailed := s.recordedFailureSessionIDs.LoadOrStore(playbackSessionID, struct{}{}); !alreadyFailed {
+				s.recordAttempt(errSess, false, readErr.Error())
 				go func(id string, done <-chan struct{}) {
 					<-done
 					s.recordedFailureSessionIDs.Delete(id)
-				}(sessionID, sess.Done())
+				}(playbackSessionID, errSess.Done())
 			}
-			stream.Close()
-			stream = nil
-			s.sessionManager.DeleteSession(sessionID)
-			if isPreload && failoverCount >= MaxPreloadFailovers {
-				logger.Info("Preload failover limit reached (probe), stopping preload", "session", sessionID, "failovers", failoverCount)
-				forceDisconnect(w, s.baseURL)
-				return
+			if playbackSessionID == sessionID {
+				serveFailureRecorded = true
 			}
-			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
-				logger.Info("Probe failed, trying next fallback", "from", sessionID, "to", nextID, "err", probeErr)
-				failoverCount++
-				sess, sessionID = nextSess, nextID
-				continue
-			}
-			logger.Info("No more fallback slots after probe", "last", sessionID, "err", probeErr)
-			forceDisconnect(w, s.baseURL)
-			return
 		}
-		break
 	}
-		defer mergedCancel()
-		servedSessionID := sessionID
-		requestedRange := r.Header.Get("Range")
-		requestedTimeOffset := r.URL.Query().Get("t")
-		userAgent := r.Header.Get("User-Agent")
-		var closeReason atomic.Value
-		var closeStreamOnce sync.Once
-		closeStream := func(reason string) {
-			closeStreamOnce.Do(func() {
-				closeReason.Store(reason)
-				if stream != nil {
-					logger.Debug("play handler closing stream", "session", servedSessionID, "reason", reason)
-					stream.Close()
-					stream = nil
-				}
-			})
-		}
-		go func(done <-chan struct{}) {
-			<-done
-			closeStream("playback canceled")
-		}(mergedCtx.Done())
+	monitoredStream := &StreamMonitor{
+		ReadSeekCloser: stream,
+		sessionID:      sessionID,
+		clientIP:       clientIP,
+		manager:        s.sessionManager,
+		onReadError:    onReadError,
+		lastUpdate:     time.Now(),
+	}
 
-		// After internal failover we serve a different file; don't apply the original request's Range or t= to it.
-		failedOver := sessionID != requestedSessionID
-		if failedOver {
-			r.Header.Del("Range")
-		}
-		if !failedOver && wantTimeOffset && r.Header.Get("Range") == "" && haveStartupInfo {
-			if byteOffset, seekOK := seek.TimeToByteOffsetFromDuration(size, startupInfo.DurationSec, tSec); seekOK {
-				r.Header.Set("Range", "bytes="+strconv.FormatInt(byteOffset, 10)+"-")
-			}
-		}
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == ".mkv" {
+		w.Header().Set("Content-Type", "video/x-matroska")
+	} else if ext == ".avi" {
+		w.Header().Set("Content-Type", "video/x-msvideo")
+	} else if ext == ".mp4" || ext == ".m4v" {
+		w.Header().Set("Content-Type", "video/mp4")
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filepath.Base(name)))
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
+	bufW := newBufferedResponseWriter(w, 256*1024)
+	serveStartedAt := time.Now()
+	effectiveRange := r.Header.Get("Range")
+	probeLikeServe := false
+	probeLikeServeReason := ""
 
-		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if clientIP == "" {
-			clientIP = r.RemoteAddr
-		}
-		s.sessionManager.StartPlayback(sessionID, clientIP)
-		var endPlaybackOnce sync.Once
-		endPlayback := func() { s.sessionManager.EndPlayback(sessionID, clientIP) }
-		defer endPlaybackOnce.Do(endPlayback)
-		// When client cancels (e.g. stop in Stremio), request context is cancelled; end playback so we stop downloading and session can be evicted.
-		go func() {
-			<-r.Context().Done()
-			endPlaybackOnce.Do(endPlayback)
-		}()
+	logger.Debug("play handler serving stream", "session", sessionID, "name", name, "size", size)
+	logger.Info("Serving media",
+		"session", sessionID,
+		"requested_session", requestedSessionID,
+		"name", name,
+		"size", size,
+		"method", r.Method,
+		"requested_range", requestedRange,
+		"effective_range", effectiveRange,
+		"time_offset", requestedTimeOffset,
+		"user_agent", userAgent,
+		"client_ip", clientIP,
+		"failed_over", failedOver,
+		"stream_mode", streamMode,
+	)
+	defer func() {
+		closeStream("handler exit")
+		bufW.Flush()
 
-		// serveFailureRecorded is set to true when onReadError records a failure for the
-		// currently-served session. The success defer checks this flag so it never
-		// overwrites a Failure with an OK (the "flip-flop" bug).
-		serveFailureRecorded := false
-		onReadError := func(slotPath string, readErr error) {
-			// Trigger slot failover for any permanent mid-stream error:
-			//   - 430 No Such Article (segment missing on all providers)
-			//   - yEnc decode failure (data corruption)
-			//   - ErrTooManyZeroFills (too many segments failed across all providers)
-			// All three mean the slot is unrecoverable. SetSlotFailedDuringPlayback marks it so the
-			// existing redirect logic at the top of handlePlay redirects the player to the next slot
-			// on reconnect, without requiring the user to manually switch in Stremio.
-			if !isSegmentUnavailableErr(readErr) && !isDataCorruptErr(readErr) && !errors.Is(readErr, unpack.ErrTooManyZeroFills) {
-				return
-			}
-			s.sessionManager.SetSlotFailedDuringPlayback(slotPath)
-			if errSess, _ := s.sessionManager.GetSession(slotPath); errSess != nil {
-				if s.availReporter != nil {
-					s.availReporter.ReportBad(errSess, readErr.Error())
-				}
-				if _, alreadyFailed := s.recordedFailureSessionIDs.LoadOrStore(slotPath, struct{}{}); !alreadyFailed {
-					s.recordAttempt(errSess, false, readErr.Error())
-					go func(id string, done <-chan struct{}) {
-						<-done
-						s.recordedFailureSessionIDs.Delete(id)
-					}(slotPath, errSess.Done())
-				}
-				if slotPath == sessionID {
-					serveFailureRecorded = true
-				}
-			}
+		responseStats := bufW.Snapshot()
+		streamStats := monitoredStream.Snapshot()
+		closeReasonText := ""
+		if v := closeReason.Load(); v != nil {
+			closeReasonText = v.(string)
 		}
-		monitoredStream := &StreamMonitor{
-			ReadSeekCloser: stream,
-			sessionID:      sessionID,
-			clientIP:       clientIP,
-			manager:        s.sessionManager,
-			onReadError:    onReadError,
-			lastUpdate:     time.Now(),
-		}
+		probeLikeServe, probeLikeServeReason = classifyProbeLikeServe(r, size, effectiveRange, responseStats, streamStats, closeReasonText)
 
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext == ".mkv" {
-			w.Header().Set("Content-Type", "video/x-matroska")
-		} else if ext == ".avi" {
-			w.Header().Set("Content-Type", "video/x-msvideo")
-		} else if ext == ".mp4" || ext == ".m4v" {
-			w.Header().Set("Content-Type", "video/mp4")
-		}
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filepath.Base(name)))
-		w.Header().Set("Accept-Ranges", "bytes")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
-		bufW := newBufferedResponseWriter(w, 256*1024)
-		serveStartedAt := time.Now()
-		effectiveRange := r.Header.Get("Range")
-
-		logger.Debug("play handler serving stream", "session", sessionID, "name", name, "size", size)
-		logger.Info("Serving media",
+		logger.Info("Finished serving media",
 			"session", sessionID,
 			"requested_session", requestedSessionID,
-			"name", name,
-			"size", size,
 			"method", r.Method,
 			"requested_range", requestedRange,
 			"effective_range", effectiveRange,
 			"time_offset", requestedTimeOffset,
 			"user_agent", userAgent,
-			"client_ip", clientIP,
+			"response_status", responseStats.StatusCode,
+			"response_wrote_header", responseStats.WroteHeader,
+			"response_bytes", responseStats.BytesWritten,
+			"response_writes", responseStats.WriteCalls,
+			"response_flushes", responseStats.FlushCalls,
+			"response_flush_error", responseStats.FlushError,
+			"stream_bytes", streamStats.BytesRead,
+			"stream_reads", streamStats.ReadCalls,
+			"stream_eof", streamStats.SawEOF,
+			"stream_error", streamStats.LastReadError,
+			"request_context_err", errorString(r.Context().Err()),
+			"serve_context_err", errorString(mergedCtx.Err()),
 			"failed_over", failedOver,
+			"stream_mode", streamMode,
+			"probe_like", probeLikeServe,
+			"probe_reason", probeLikeServeReason,
+			"serve_failure_recorded", serveFailureRecorded,
+			"close_reason", closeReasonText,
+			"duration", time.Since(serveStartedAt),
 		)
-		defer func() {
-			closeStream("handler exit")
-			bufW.Flush()
+	}()
 
-			responseStats := bufW.Snapshot()
-			streamStats := monitoredStream.Snapshot()
-			closeReasonText := ""
-			if v := closeReason.Load(); v != nil {
-				closeReasonText = v.(string)
-			}
-
-			logger.Info("Finished serving media",
+	// Report good only after serving, so bytes-read threshold can be met (StreamMonitor tracks bytes).
+	// Record success at most once per session: multiple HTTP requests (e.g. range/seek) for the same stream
+	// would otherwise each run this defer and create duplicate "OK" entries in NZB history.
+	// If onReadError already recorded a failure for this session, skip — we must not flip it back to OK.
+	defer func() {
+		if serveFailureRecorded {
+			return
+		}
+		probeLikeServe, probeLikeServeReason = classifyProbeLikeServe(
+			r,
+			size,
+			effectiveRange,
+			bufW.Snapshot(),
+			monitoredStream.Snapshot(),
+			errorString(r.Context().Err()),
+		)
+		if probeLikeServe {
+			logger.Debug("Skipping success bookkeeping for probe-like play request",
 				"session", sessionID,
 				"requested_session", requestedSessionID,
-				"method", r.Method,
-				"requested_range", requestedRange,
 				"effective_range", effectiveRange,
-				"time_offset", requestedTimeOffset,
-				"user_agent", userAgent,
-				"response_status", responseStats.StatusCode,
-				"response_wrote_header", responseStats.WroteHeader,
-				"response_bytes", responseStats.BytesWritten,
-				"response_writes", responseStats.WriteCalls,
-				"response_flushes", responseStats.FlushCalls,
-				"response_flush_error", responseStats.FlushError,
-				"stream_bytes", streamStats.BytesRead,
-				"stream_reads", streamStats.ReadCalls,
-				"stream_eof", streamStats.SawEOF,
-				"stream_error", streamStats.LastReadError,
-				"request_context_err", errorString(r.Context().Err()),
-				"serve_context_err", errorString(mergedCtx.Err()),
-				"failed_over", failedOver,
-				"serve_failure_recorded", serveFailureRecorded,
-				"close_reason", closeReasonText,
-				"duration", time.Since(serveStartedAt),
+				"stream_mode", streamMode,
+				"reason", probeLikeServeReason,
 			)
-		}()
+			return
+		}
+		if s.availReporter != nil {
+			s.availReporter.ReportGood(sess)
+		}
+		if _, already := s.recordedSuccessSessionIDs.LoadOrStore(sessionID, struct{}{}); !already {
+			s.recordAttempt(sess, true, "")
+			// When session is gone, allow recording success again for a future play of the same release.
+			go func() {
+				<-sess.Done()
+				s.recordedSuccessSessionIDs.Delete(sessionID)
+			}()
+		}
+	}()
 
-		// Report good only after serving, so bytes-read threshold can be met (StreamMonitor tracks bytes).
-		// Record success at most once per session: multiple HTTP requests (e.g. range/seek) for the same stream
-		// would otherwise each run this defer and create duplicate "OK" entries in NZB history.
-		// If onReadError already recorded a failure for this session, skip — we must not flip it back to OK.
-		defer func() {
-			if serveFailureRecorded {
-				return
-			}
-			if s.availReporter != nil {
-				s.availReporter.ReportGood(sess)
-			}
-			if _, already := s.recordedSuccessSessionIDs.LoadOrStore(sessionID, struct{}{}); !already {
-				s.recordAttempt(sess, true, "")
-				// When session is gone, allow recording success again for a future play of the same release.
-				go func() {
-					<-sess.Done()
-					s.recordedSuccessSessionIDs.Delete(sessionID)
-				}()
-			}
-		}()
-
-		http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
+	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
 }
 
-func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.ReadSeekCloser, string, int64, error) {
+type preparedPlaybackStream struct {
+	Stream         io.ReadSeekCloser
+	Spec           session.PlaybackStreamSpec
+	StartupInfo    seek.StreamStartInfo
+	HasStartupInfo bool
+	Mode           string
+}
+
+// preparePlaybackStream probes with a temporary reader when startup metadata is missing,
+// then opens a fresh playback reader for the current HTTP request while caching the
+// validated playback spec/startup metadata on the session.
+func (s *Server) preparePlaybackStream(ctx context.Context, sess *session.Session, requestedSessionID, currentSessionID string, wantTimeOffset bool) (preparedPlaybackStream, error) {
+	preparedStream := preparedPlaybackStream{}
+	needDurationProbe := wantTimeOffset && currentSessionID == requestedSessionID
+
+	snapshot, haveSnapshot := sess.PlaybackStreamSnapshot()
+	if haveSnapshot {
+		preparedStream.Spec = snapshot.Spec
+		preparedStream.StartupInfo = snapshot.StartupInfo
+		preparedStream.HasStartupInfo = snapshot.HasStartupInfo
+	}
+
+	needProbe := !haveSnapshot || !snapshot.HasStartupInfo || (needDurationProbe && !snapshot.StartupInfo.DurationKnown)
+	if needProbe {
+		spec, startupInfo, err := s.probePlaybackSource(ctx, sess, needDurationProbe)
+		if err != nil {
+			return preparedPlaybackStream{}, err
+		}
+		preparedStream.Spec = spec
+		preparedStream.StartupInfo = startupInfo
+		preparedStream.HasStartupInfo = true
+	}
+
+	if preparedStream.Spec.Key == "" {
+		return preparedPlaybackStream{}, fmt.Errorf("playback stream spec missing for session %s", sess.ID)
+	}
+
+	stream, err := s.openExpectedPlaybackSource(ctx, sess, preparedStream.Spec)
+	if err != nil {
+		sess.ResetPlaybackStream()
+		return preparedPlaybackStream{}, err
+	}
+
+	preparedStream.Stream = stream
+	preparedStream.Mode = "per_request"
+	sess.CachePlaybackStreamSnapshot(preparedStream.Spec, preparedStream.StartupInfo, preparedStream.HasStartupInfo)
+	return preparedStream, nil
+}
+
+func (s *Server) openExpectedPlaybackSource(ctx context.Context, sess *session.Session, spec session.PlaybackStreamSpec) (io.ReadSeekCloser, error) {
+	bodyStream, bodyName, bodySize, err := s.openPlaybackSource(ctx, sess)
+	if err != nil {
+		return nil, err
+	}
+	if bodyName != spec.Name || bodySize != spec.Size {
+		_ = bodyStream.Close()
+		return nil, fmt.Errorf("playback stream changed during open: expected %q (%d), got %q (%d)", spec.Name, spec.Size, bodyName, bodySize)
+	}
+	return bodyStream, nil
+}
+
+// probePlaybackSource validates the selected media and gathers startup metadata using
+// a disposable probe reader so that small scans never disturb the session body stream.
+func (s *Server) probePlaybackSource(ctx context.Context, sess *session.Session, needDurationProbe bool) (session.PlaybackStreamSpec, seek.StreamStartInfo, error) {
+	probeStream, probeName, probeSize, err := s.openPlaybackSource(ctx, sess)
+	if err != nil {
+		return session.PlaybackStreamSpec{}, seek.StreamStartInfo{}, err
+	}
+	defer probeStream.Close()
+
+	inspectBytes := unpack.ProbeSize
+	if needDurationProbe && seek.MaxBytesToRead > inspectBytes {
+		inspectBytes = seek.MaxBytesToRead
+	}
+
+	startInfo, inspectErr := seek.InspectStreamStart(probeStream, probeSize, probeName, inspectBytes)
+	if inspectErr != nil {
+		return session.PlaybackStreamSpec{}, seek.StreamStartInfo{}, fmt.Errorf("probe inspect: %w", inspectErr)
+	}
+	if !startInfo.HeaderValid {
+		return session.PlaybackStreamSpec{}, seek.StreamStartInfo{}, fmt.Errorf("probe: invalid container header for %s", probeName)
+	}
+
+	return newPlaybackStreamSpec(sess.ID, probeName, probeSize), startInfo, nil
+}
+
+// newPlaybackStreamSpec creates the stable session/file key used to cache validated
+// playback metadata and verify that fresh per-request readers still target the same file.
+func newPlaybackStreamSpec(sessionID, name string, size int64) session.PlaybackStreamSpec {
+	return session.PlaybackStreamSpec{
+		Key:  fmt.Sprintf("%s|%s|%d", sessionID, name, size),
+		Name: name,
+		Size: size,
+	}
+}
+
+// openPlaybackSource opens a fresh reader for the currently selected playback source.
+// Callers decide whether that reader is used as a disposable probe stream or as the
+// request-local body stream for a single /play response.
+func (s *Server) openPlaybackSource(ctx context.Context, sess *session.Session) (io.ReadSeekCloser, string, int64, error) {
 	sessionID := sess.ID
 	if _, err := sess.GetOrDownloadNZB(s.sessionManager); err != nil {
 		logger.Error("Failed to lazy load NZB", "id", sessionID, "err", err)
@@ -2356,10 +2441,10 @@ func (s *Server) tryPlaySlot(ctx context.Context, sess *session.Session) (io.Rea
 		}
 	}
 
-	// Skip IsFailed() when the session is actively serving OR has previously completed a serve cycle.
+		// Skip IsFailed() when the session is actively serving OR has already validated playback.
 	// Stremio often cancels the initial probe request (dropping ActivePlays back to 0) immediately
 	// before sending a follow-up range request. During that brief gap IsActivelyServing() is false,
-	// but HasPreviouslyServed() (PlaybackEndedAt != zero) tells us the file was already validated.
+		// but HasPreviouslyServed() tells us the file was already validated.
 	// If the file is truly bad during streaming, onReadError will catch it.
 	if !sess.IsActivelyServing() && !sess.HasPreviouslyServed() {
 		for _, f := range files {
@@ -2963,6 +3048,76 @@ func (s *StreamMonitor) Close() error {
 		return s.ReadSeekCloser.Close()
 	}
 	return nil
+}
+
+func classifyProbeLikeServe(r *http.Request, size int64, effectiveRange string, responseStats bufferedResponseSnapshot, streamStats streamMonitorSnapshot, closeReason string) (bool, string) {
+	if r == nil {
+		return false, ""
+	}
+	if r.Method == http.MethodHead {
+		return true, "head_request"
+	}
+	isNearEOFEofRequest := streamStats.SawEOF && isNearEOFRange(effectiveRange, size)
+	if isNearEOFEofRequest {
+		if responseStats.BytesWritten == 0 && streamStats.BytesRead == 0 {
+			return true, "tail_eof_probe"
+		}
+		if isSmallTailProbe(responseStats, streamStats) {
+			return true, "tail_small_eof_probe"
+		}
+	}
+	if responseStats.BytesWritten != 0 || streamStats.BytesRead != 0 {
+		return false, ""
+	}
+	if isNearEOFEofRequest {
+		return true, "tail_eof_probe"
+	}
+	if errors.Is(r.Context().Err(), context.Canceled) || errors.Is(r.Context().Err(), context.DeadlineExceeded) || closeReason == "playback canceled" {
+		return true, "empty_canceled_request"
+	}
+	return true, "empty_request"
+}
+
+func isSmallTailProbe(responseStats bufferedResponseSnapshot, streamStats streamMonitorSnapshot) bool {
+	const smallTailProbeLimit int64 = 256 << 10
+
+	probeBytes := responseStats.BytesWritten
+	if streamStats.BytesRead > probeBytes {
+		probeBytes = streamStats.BytesRead
+	}
+	return probeBytes > 0 && probeBytes <= smallTailProbeLimit
+}
+
+func isNearEOFRange(rangeHeader string, size int64) bool {
+	if size <= 0 {
+		return false
+	}
+	start, ok := parseRangeStart(rangeHeader)
+	if !ok || start < 0 || start >= size {
+		return false
+	}
+	const eofProbeWindow int64 = 1 << 20
+	return size-start <= eofProbeWindow
+}
+
+func parseRangeStart(rangeHeader string) (int64, bool) {
+	rangeHeader = strings.TrimSpace(rangeHeader)
+	if len(rangeHeader) < len("bytes=") || !strings.EqualFold(rangeHeader[:len("bytes=")], "bytes=") {
+		return 0, false
+	}
+	spec := strings.TrimSpace(rangeHeader[len("bytes="):])
+	if spec == "" || strings.Contains(spec, ",") {
+		return 0, false
+	}
+	dash := strings.IndexByte(spec, '-')
+	if dash <= 0 {
+		return 0, false
+	}
+	start, err := strconv.ParseInt(strings.TrimSpace(spec[:dash]), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return start, true
 }
 
 func errorString(err error) string {
