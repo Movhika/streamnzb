@@ -326,6 +326,32 @@ func loadStoredAPIKey(store KeyStore) (string, error) {
 	return "", fmt.Errorf("availnzb key bootstrap: failed to read stored API key: %w", err)
 }
 
+func LoadStoredRecoverySecret(store KeyStore) (string, error) {
+	if store == nil {
+		return "", nil
+	}
+
+	var state apiKeyState
+	found, err := store.Get(apiKeyStateKey, &state)
+	if err == nil {
+		if found {
+			return strings.TrimSpace(state.RecoverySecret), nil
+		}
+		return "", nil
+	}
+
+	var legacy string
+	legacyFound, legacyErr := store.Get(apiKeyStateKey, &legacy)
+	if legacyErr == nil {
+		if legacyFound {
+			return "", nil
+		}
+		return "", nil
+	}
+
+	return "", fmt.Errorf("availnzb key bootstrap: failed to read stored recovery secret: %w", err)
+}
+
 func (c *Client) RegisterKey(name string) (*KeyCreateResponse, error) {
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("availnzb register: no base URL configured")

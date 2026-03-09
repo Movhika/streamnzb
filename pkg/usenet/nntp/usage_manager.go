@@ -4,10 +4,13 @@ import (
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/core/persistence"
 	"sync"
+	"time"
 )
 
 type ProviderUsageData struct {
-	TotalBytes int64 `json:"total_bytes"`
+	LastResetDay string `json:"last_reset_day"`
+	TotalBytes   int64  `json:"total_bytes"`
+	AllTimeBytes int64  `json:"all_time_bytes"`
 }
 
 type ProviderUsageManager struct {
@@ -48,7 +51,24 @@ func (m *ProviderUsageManager) load() error {
 	defer m.mu.Unlock()
 
 	_, err := m.state.Get("provider_usage", &m.data)
-	return err
+	if err != nil {
+		return err
+	}
+
+	today := time.Now().Format("2006-01-02")
+	needSave := false
+	for _, data := range m.data {
+		if data == nil {
+			continue
+		}
+		if m.resetIfNeededLocked(data, today) {
+			needSave = true
+		}
+	}
+	if needSave {
+		_ = m.state.Set("provider_usage", m.data)
+	}
+	return nil
 }
 
 func (m *ProviderUsageManager) initLastPersisted() {
@@ -66,14 +86,18 @@ func (m *ProviderUsageManager) save() error {
 }
 
 func (m *ProviderUsageManager) GetUsage(name string) *ProviderUsageData {
+	today := time.Now().Format("2006-01-02")
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
-	data, ok := m.data[name]
-	if !ok {
-		data = &ProviderUsageData{}
-		m.data[name] = data
+	data, reset := m.ensureUsageLocked(name, today)
+	m.mu.Unlock()
+
+	if reset {
+		if err := m.persistAndUpdateLast(); err != nil {
+			logger.Error("Failed to save reset provider usage data", "name", name, "err", err)
+		}
 	}
+
 	return data
 }
 
@@ -81,26 +105,32 @@ func (m *ProviderUsageManager) AddBytes(name string, delta int64) {
 	if delta <= 0 {
 		return
 	}
+	today := time.Now().Format("2006-01-02")
 	m.mu.Lock()
-	data, ok := m.data[name]
-	if !ok {
-		data = &ProviderUsageData{}
-		m.data[name] = data
-	}
+	data, reset := m.ensureUsageLocked(name, today)
 	data.TotalBytes += delta
+	data.AllTimeBytes += delta
 	total := data.TotalBytes
 	last := m.lastPersisted[name]
 	m.mu.Unlock()
 
+	if reset {
+		if err := m.persistAndUpdateLast(); err != nil {
+			logger.Error("Failed to save reset provider usage data", "name", name, "err", err)
+		}
+		return
+	}
+
 	if total-last >= 1024*1024 {
-		m.persistAndUpdateLast()
+		if err := m.persistAndUpdateLast(); err != nil {
+			logger.Error("Failed to save provider usage data", "name", name, "err", err)
+		}
 	}
 }
 
-func (m *ProviderUsageManager) persistAndUpdateLast() {
+func (m *ProviderUsageManager) persistAndUpdateLast() error {
 	if err := m.save(); err != nil {
-		logger.Error("Failed to save provider usage data", "err", err)
-		return
+		return err
 	}
 	m.mu.Lock()
 	for n, d := range m.data {
@@ -109,11 +139,17 @@ func (m *ProviderUsageManager) persistAndUpdateLast() {
 		}
 	}
 	m.mu.Unlock()
+	return nil
 }
 
 func (m *ProviderUsageManager) FlushProvider(name string) {
 	m.mu.Lock()
-	data := m.data[name]
+	today := time.Now().Format("2006-01-02")
+	data, ok := m.data[name]
+	reset := false
+	if ok && data != nil {
+		reset = m.resetIfNeededLocked(data, today)
+	}
 	if data == nil {
 		m.mu.Unlock()
 		return
@@ -122,8 +158,10 @@ func (m *ProviderUsageManager) FlushProvider(name string) {
 	last := m.lastPersisted[name]
 	m.mu.Unlock()
 
-	if total > last {
-		m.persistAndUpdateLast()
+	if reset || total > last {
+		if err := m.persistAndUpdateLast(); err != nil {
+			logger.Error("Failed to flush provider usage data", "name", name, "err", err)
+		}
 	}
 }
 
@@ -151,4 +189,39 @@ func (m *ProviderUsageManager) SyncUsage(activeNames []string) {
 			logger.Error("Failed to save provider usage data after sync", "err", err)
 		}
 	}
+}
+
+func (m *ProviderUsageManager) ensureUsageLocked(name, today string) (*ProviderUsageData, bool) {
+	data, ok := m.data[name]
+	if !ok {
+		data = &ProviderUsageData{LastResetDay: today}
+		m.data[name] = data
+		return data, false
+	}
+
+	return data, m.resetIfNeededLocked(data, today)
+}
+
+func (m *ProviderUsageManager) resetIfNeededLocked(data *ProviderUsageData, today string) bool {
+	if data == nil {
+		return false
+	}
+
+	if data.LastResetDay == "" {
+		if data.TotalBytes > data.AllTimeBytes {
+			data.AllTimeBytes = data.TotalBytes
+		}
+		data.LastResetDay = today
+		data.TotalBytes = 0
+		return true
+	}
+
+	if data.LastResetDay == today {
+		return false
+	}
+
+	logger.Debug("Resetting daily usage for provider", "last_reset", data.LastResetDay, "today", today)
+	data.LastResetDay = today
+	data.TotalBytes = 0
+	return true
 }

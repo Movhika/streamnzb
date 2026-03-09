@@ -100,6 +100,8 @@ func (c *Client) Name() string {
 }
 
 func (c *Client) GetUsage() indexer.Usage {
+	usageData := c.refreshUsageFromManager()
+
 	c.mu.RLock()
 	u := indexer.Usage{
 		APIHitsLimit:       c.apiLimit,
@@ -110,12 +112,37 @@ func (c *Client) GetUsage() indexer.Usage {
 		DownloadsRemaining: c.downloadRemaining,
 	}
 	c.mu.RUnlock()
-	if c.usageManager != nil && c.name != "" {
-		ud := c.usageManager.GetIndexerUsage(c.name)
-		u.AllTimeAPIHitsUsed = ud.AllTimeAPIHitsUsed
-		u.AllTimeDownloadsUsed = ud.AllTimeDownloadsUsed
+	if usageData != nil {
+		u.AllTimeAPIHitsUsed = usageData.AllTimeAPIHitsUsed
+		u.AllTimeDownloadsUsed = usageData.AllTimeDownloadsUsed
 	}
 	return u
+}
+
+func (c *Client) refreshUsageFromManager() *indexer.UsageData {
+	if c.usageManager == nil || c.name == "" {
+		return nil
+	}
+
+	ud := c.usageManager.GetIndexerUsage(c.name)
+	c.mu.Lock()
+	c.apiUsed = ud.APIHitsUsed
+	c.downloadUsed = ud.DownloadsUsed
+	if c.apiLimit > 0 {
+		c.apiRemaining = c.apiLimit - c.apiUsed
+		if c.apiRemaining < 0 {
+			c.apiRemaining = 0
+		}
+	}
+	if c.downloadLimit > 0 {
+		c.downloadRemaining = c.downloadLimit - c.downloadUsed
+		if c.downloadRemaining < 0 {
+			c.downloadRemaining = 0
+		}
+	}
+	c.mu.Unlock()
+
+	return ud
 }
 
 func (c *Client) Ping() error {
@@ -340,6 +367,8 @@ func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, er
 }
 
 func (c *Client) checkAPILimit() error {
+	c.refreshUsageFromManager()
+
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.apiLimit > 0 && c.apiRemaining <= 0 {
@@ -349,6 +378,8 @@ func (c *Client) checkAPILimit() error {
 }
 
 func (c *Client) checkDownloadLimit() error {
+	c.refreshUsageFromManager()
+
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.downloadLimit > 0 && c.downloadRemaining <= 0 {

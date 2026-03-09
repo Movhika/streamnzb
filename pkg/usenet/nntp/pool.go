@@ -121,9 +121,18 @@ func (p *ClientPool) GetSpeed() float64 {
 
 func (p *ClientPool) TotalMegabytes() float64 {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	usageMgr := p.usageManager
+	providerName := p.providerName
+	totalBytesRead := p.totalBytesRead
+	p.mu.Unlock()
 
-	return float64(p.totalBytesRead) / (1024 * 1024)
+	if usageMgr != nil && providerName != "" {
+		if usage := usageMgr.GetUsage(providerName); usage != nil {
+			return float64(usage.TotalBytes) / (1024 * 1024)
+		}
+	}
+
+	return float64(totalBytesRead) / (1024 * 1024)
 }
 
 func (p *ClientPool) Get(ctx context.Context) (*Client, error) {

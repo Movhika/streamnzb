@@ -318,3 +318,31 @@ func TestResolveAPIKeyRegistersAndPersistsWhenMissing(t *testing.T) {
 		t.Fatalf("unexpected persisted state: %+v", saved)
 	}
 }
+
+func TestLoadStoredRecoverySecretReturnsPersistedValue(t *testing.T) {
+	t.Parallel()
+
+	store := &stubKeyStore{raw: map[string][]byte{apiKeyStateKey: []byte(`{"token":"stored-token","recovery_secret":"recover-2"}`)}}
+
+	got, err := LoadStoredRecoverySecret(store)
+	if err != nil {
+		t.Fatalf("LoadStoredRecoverySecret: %v", err)
+	}
+	if got != "recover-2" {
+		t.Fatalf("LoadStoredRecoverySecret() = %q, want %q", got, "recover-2")
+	}
+}
+
+func TestLoadStoredRecoverySecretReturnsEmptyForLegacyKeyState(t *testing.T) {
+	t.Parallel()
+
+	store := &stubKeyStore{raw: map[string][]byte{apiKeyStateKey: []byte(`"stored-token"`)}}
+
+	got, err := LoadStoredRecoverySecret(store)
+	if err != nil {
+		t.Fatalf("LoadStoredRecoverySecret: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("LoadStoredRecoverySecret() = %q, want empty string", got)
+	}
+}

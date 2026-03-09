@@ -8,7 +8,7 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDes
 import { Switch } from "@/components/ui/switch"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Loader2, Info, AlertTriangle } from "lucide-react"
+import { Loader2, Info, AlertTriangle, Eye, EyeOff, Copy, Check } from "lucide-react"
 import { IndexerSettings } from "@/components/IndexerSettings"
 import { ProviderSettings } from "@/components/ProviderSettings"
 import DeviceManagement from "@/components/DeviceManagement"
@@ -31,6 +31,8 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   const [availNZBStatus, setAvailNZBStatus] = useState(null)
   const [availNZBStatusLoading, setAvailNZBStatusLoading] = useState(false)
   const [availNZBStatusError, setAvailNZBStatusError] = useState('')
+  const [showAvailNZBRecoverySecret, setShowAvailNZBRecoverySecret] = useState(false)
+  const [availNZBRecoverySecretCopied, setAvailNZBRecoverySecretCopied] = useState(false)
   const deviceManagementRef = useRef(null)
 
   const form = useForm({
@@ -130,6 +132,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   const fetchAvailNZBStatus = async () => {
     setAvailNZBStatusLoading(true)
     setAvailNZBStatusError('')
+    setAvailNZBRecoverySecretCopied(false)
     try {
       const data = await apiFetch('/api/availnzb/status')
       setAvailNZBStatus(data || null)
@@ -138,6 +141,22 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       setAvailNZBStatusError(error.message || 'Failed to load AvailNZB key status.')
     } finally {
       setAvailNZBStatusLoading(false)
+    }
+  }
+
+  const handleCopyAvailNZBRecoverySecret = async () => {
+    const recoverySecret = availNZBStatus?.recovery_secret?.trim?.() || ''
+    if (!recoverySecret) return
+    if (!navigator?.clipboard?.writeText) {
+      setAvailNZBStatusError('Clipboard access is unavailable in this browser.')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(recoverySecret)
+      setAvailNZBRecoverySecretCopied(true)
+      window.setTimeout(() => setAvailNZBRecoverySecretCopied(false), 1500)
+    } catch (error) {
+      setAvailNZBStatusError(error?.message || 'Failed to copy AvailNZB recovery secret.')
     }
   }
 
@@ -203,7 +222,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
 
   if (loading) return null
 
-  const rawAvailNZBTrustScore = Number(availNZBStatus?.trust_score)
+  const availNZBRecoverySecret = availNZBStatus?.recovery_secret || ''
+  const availNZBStatusMessage = availNZBStatusError || availNZBStatus?.status_error || ''
+  const rawAvailNZBTrustScore = Number(availNZBStatus?.status?.trust_score)
   const availNZBTrustScore = Number.isFinite(rawAvailNZBTrustScore)
     ? Math.max(0, Math.min(100, rawAvailNZBTrustScore))
     : null
@@ -211,7 +232,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
     ? 'Loading…'
     : availNZBTrustScore !== null
       ? `${Math.round(availNZBTrustScore)}% trust`
-      : 'Trust unavailable'
+      : availNZBStatusMessage
+        ? 'Status unavailable'
+        : 'Trust unavailable'
   const availNZBTrustBarClass = availNZBTrustScore === null
     ? 'bg-muted-foreground/20'
     : availNZBTrustScore < 34
@@ -386,6 +409,48 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                       "GET status only" fetches availability data but does not report your playback results back to the community.
                       "Disabled" skips AvailNZB entirely.
                     </FormDescription>
+	                    {availNZBStatusMessage && (
+	                      <p className="text-xs text-destructive/80">{availNZBStatusMessage}</p>
+	                    )}
+	                    {availNZBRecoverySecret && (
+	                      <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
+	                        <div className="flex items-center justify-between gap-2">
+	                          <span className="text-sm font-medium">Recovery secret</span>
+	                          <span className="text-xs text-muted-foreground">
+	                            {availNZBRecoverySecretCopied ? 'Copied' : 'Reveal to copy'}
+	                          </span>
+	                        </div>
+	                        <div className="flex items-center gap-2">
+	                          <Input
+	                            type={showAvailNZBRecoverySecret ? 'text' : 'password'}
+	                            value={availNZBRecoverySecret}
+	                            readOnly
+	                            className="font-mono"
+	                          />
+	                          <Button
+	                            type="button"
+	                            variant="outline"
+	                            size="icon"
+	                            aria-label={showAvailNZBRecoverySecret ? 'Hide AvailNZB recovery secret' : 'Show AvailNZB recovery secret'}
+	                            onClick={() => setShowAvailNZBRecoverySecret((current) => !current)}
+	                          >
+	                            {showAvailNZBRecoverySecret ? <EyeOff /> : <Eye />}
+	                          </Button>
+	                          <Button
+	                            type="button"
+	                            variant="outline"
+	                            size="icon"
+	                            aria-label="Copy AvailNZB recovery secret"
+	                            onClick={handleCopyAvailNZBRecoverySecret}
+	                          >
+	                            {availNZBRecoverySecretCopied ? <Check /> : <Copy />}
+	                          </Button>
+	                        </div>
+	                        <p className="text-xs text-muted-foreground">
+	                          Save this recovery secret somewhere safe. You can use it to recover the AvailNZB app key later.
+	                        </p>
+	                      </div>
+	                    )}
                     <FormMessage />
                   </FormItem>
                 )} />

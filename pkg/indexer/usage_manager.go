@@ -80,24 +80,30 @@ func (m *UsageManager) save() error {
 
 func (m *UsageManager) GetIndexerUsage(name string) *UsageData {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	today := time.Now().Format("2006-01-02")
 	data, ok := m.data[name]
 	if !ok {
 		data = &UsageData{LastResetDay: today}
 		m.data[name] = data
+		m.mu.Unlock()
 		return data
 	}
 
+	reset := false
 	if data.LastResetDay != today {
 		logger.Debug("Resetting daily usage for indexer", "name", name, "last_reset", data.LastResetDay, "today", today)
-		data.AllTimeAPIHitsUsed += data.APIHitsUsed
-		data.AllTimeDownloadsUsed += data.DownloadsUsed
 		data.LastResetDay = today
 		data.APIHitsUsed = 0
 		data.DownloadsUsed = 0
-		_ = m.save()
+		reset = true
+	}
+	m.mu.Unlock()
+
+	if reset {
+		if err := m.save(); err != nil {
+			logger.Error("Failed to save reset usage data", "name", name, "err", err)
+		}
 	}
 
 	return data
@@ -115,26 +121,19 @@ func (m *UsageManager) UpdateUsage(name string, apiHits, downloads int) {
 
 	if data.LastResetDay != today {
 		data.LastResetDay = today
+		data.APIHitsUsed = 0
+		data.DownloadsUsed = 0
+	}
 
-		data.AllTimeAPIHitsUsed += data.APIHitsUsed
-		data.AllTimeDownloadsUsed += data.DownloadsUsed
-		data.APIHitsUsed = apiHits
-		data.DownloadsUsed = downloads
-
-		data.AllTimeAPIHitsUsed += apiHits
-		data.AllTimeDownloadsUsed += downloads
-	} else {
-
-		deltaHits := apiHits - data.APIHitsUsed
-		deltaDls := downloads - data.DownloadsUsed
-		data.APIHitsUsed = apiHits
-		data.DownloadsUsed = downloads
-		if deltaHits > 0 {
-			data.AllTimeAPIHitsUsed += deltaHits
-		}
-		if deltaDls > 0 {
-			data.AllTimeDownloadsUsed += deltaDls
-		}
+	deltaHits := apiHits - data.APIHitsUsed
+	deltaDls := downloads - data.DownloadsUsed
+	data.APIHitsUsed = apiHits
+	data.DownloadsUsed = downloads
+	if deltaHits > 0 {
+		data.AllTimeAPIHitsUsed += deltaHits
+	}
+	if deltaDls > 0 {
+		data.AllTimeDownloadsUsed += deltaDls
 	}
 	m.mu.Unlock()
 
