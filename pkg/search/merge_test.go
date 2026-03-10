@@ -26,6 +26,16 @@ func TestNormalizedTitleMatches(t *testing.T) {
 		{"The Walking Dead", "The Walking Dead S06E07", true},
 		{"Some Show", "Other Show", false},
 		{"Law and Order", "Law & Order", true},
+		{"Pokémon", "Pokemon", true},
+		{"Pokémon", "pokemon", true},
+		{"Pokémon", "PokÃ©mon", true},
+		{"Pokémon", "PokÃÂ©mon", true},
+		{"Pokémon", "Pokmon", true},
+		{"Pokémon", "Pokemon.S01E01.1080p.WEB-DL", true},
+		{"Pokémon", "Pokmon.S01E01.1080p.WEB-DL", true},
+		{"Pokémon", "Pokemon.Horizons.S01E01.1080p.WEB-DL", false},
+		{"Pokémon", "Pokmon.Horizons.S01E01.1080p.WEB-DL", false},
+		{"Pokémon", "Pokemon.Origins.S01E01.1080p.WEB-DL", false},
 		{"Show 2024", "Show 2024 1080p", true},
 		{"Interstellar", "The.Science.of.Interstellar", false},
 		{"Interstellar", "Interstellar.2014.2160p.BluRay", true},
@@ -130,6 +140,28 @@ func TestFilterResultsSeriesEpisodeRequestRejectsSingleWordTitleVariants(t *test
 	}
 	if filtered[0].Title != releases[0].Title {
 		t.Fatalf("expected %q, got %q", releases[0].Title, filtered[0].Title)
+	}
+}
+
+func TestFilterResultsSeriesEpisodeRequestMatchesPokemonAccentVariants(t *testing.T) {
+	logger.Init("ERROR")
+
+	releases := []*release.Release{
+		{Title: "Pokemon.S01E01.1080p.WEB-DL"},
+		{Title: "PokÃ©mon.S01E01.1080p.WEB-DL"},
+		{Title: "Pokmon.S01E01.1080p.WEB-DL"},
+		{Title: "Pokemon.Horizons.S01E01.1080p.WEB-DL"},
+		{Title: "Pokemon.Origins.S01E01.1080p.WEB-DL"},
+	}
+
+	filtered := FilterResults(releases, "series", "Pokémon S01E01", "1", "1")
+	if len(filtered) != 3 {
+		t.Fatalf("expected 3 matches, got %d: %+v", len(filtered), filtered)
+	}
+	for i, want := range []string{releases[0].Title, releases[1].Title, releases[2].Title} {
+		if filtered[i].Title != want {
+			t.Fatalf("expected filtered[%d] = %q, got %q", i, want, filtered[i].Title)
+		}
 	}
 }
 

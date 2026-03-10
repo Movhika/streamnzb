@@ -65,20 +65,7 @@ func titleWordsForMatch(s string) []string {
 			s = parsedTitle
 		}
 	}
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.ReplaceAll(s, "&", " and ")
-	for _, sep := range []string{".", "-", "_", ":", "  "} {
-		s = strings.ReplaceAll(s, sep, " ")
-	}
-	var b strings.Builder
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-		} else if r == ' ' || r == '\t' {
-			b.WriteRune(' ')
-		}
-	}
-	return strings.Fields(b.String())
+	return release.NormalizeTitleWordsForMatch(s)
 }
 
 func fuzzyTitleMatches(expect, gotTitle string) bool {

@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 func IsPrivateReleaseURL(rawURL string) bool {
@@ -65,17 +68,7 @@ func NormalizeTitle(s string) string {
 }
 
 func NormalizeTitleForDedup(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	// Normalize "&" to "and" so "Law & Order" matches "Law and Order" from indexers.
-	s = strings.ReplaceAll(s, "&", " and ")
-	s = strings.Join(strings.Fields(s), " ")
-	var b strings.Builder
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return strings.Join(normalizeTitleWords(s, true), "")
 }
 
 // NormalizeTitleLettersOnly returns a lowercase, letters-and-spaces-only form for fuzzy matching.
@@ -83,21 +76,98 @@ func NormalizeTitleForDedup(s string) string {
 // Dots and common separators become spaces so "Star.Trek.Starfleet" keeps word boundaries.
 // Season/episode/year are filtered separately in FilterResults.
 func NormalizeTitleLettersOnly(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.Join(normalizeTitleWords(s, false), " ")
+}
+
+func NormalizeTitleWordsForMatch(s string) []string {
+	return normalizeTitleWords(s, true)
+}
+
+func normalizeTitleWords(s string, keepDigits bool) []string {
+	s = normalizeTitleForMatchBase(s)
 	s = strings.ReplaceAll(s, "&", " and ")
-	// Treat dots, dashes, underscores as word separators so release titles like "Show.Name.S01E01" tokenize.
 	for _, sep := range []string{".", "-", "_", ":", "  "} {
 		s = strings.ReplaceAll(s, sep, " ")
 	}
 	var b strings.Builder
 	for _, r := range s {
-		if unicode.IsLetter(r) {
+		if unicode.IsLetter(r) || (keepDigits && unicode.IsNumber(r)) {
 			b.WriteRune(r)
 		} else if r == ' ' || r == '\t' {
 			b.WriteRune(' ')
 		}
 	}
-	return strings.Join(strings.Fields(b.String()), " ")
+	words := strings.Fields(b.String())
+	for i, word := range words {
+		words[i] = canonicalizeCommonTitleWord(word)
+	}
+	return words
+}
+
+func normalizeTitleForMatchBase(s string) string {
+	s = strings.TrimSpace(s)
+	s = repairMojibakeUTF8(s)
+	s = strings.ToLower(s)
+	s = stripDiacritics(s)
+	return NormalizeTitleForFilename(s)
+}
+
+func canonicalizeCommonTitleWord(word string) string {
+	switch word {
+	case "pokmon", "pokamon":
+		return "pokemon"
+	default:
+		return word
+	}
+}
+
+func repairMojibakeUTF8(s string) string {
+	best := s
+	for range 2 {
+		candidate, ok := decodeLatin1AsUTF8(best)
+		if !ok || mojibakeScore(candidate) >= mojibakeScore(best) {
+			break
+		}
+		best = candidate
+	}
+	return best
+}
+
+func decodeLatin1AsUTF8(s string) (string, bool) {
+	buf := make([]byte, 0, len(s))
+	for _, r := range s {
+		if r > 255 {
+			return "", false
+		}
+		buf = append(buf, byte(r))
+	}
+	if !utf8.Valid(buf) {
+		return "", false
+	}
+	return string(buf), true
+}
+
+func mojibakeScore(s string) int {
+	count := 0
+	for _, r := range s {
+		switch r {
+		case 'Ã', 'Â', 'ã', 'â', '©', '€', '™', '�':
+			count++
+		}
+	}
+	return count
+}
+
+func stripDiacritics(s string) string {
+	decomposed := norm.NFD.String(s)
+	var b strings.Builder
+	for _, r := range decomposed {
+		if unicode.Is(unicode.Mn, r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return norm.NFC.String(b.String())
 }
 
 var filenameReplacer = strings.NewReplacer(
