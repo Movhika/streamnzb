@@ -21,6 +21,13 @@ type memoryUnpackableFile struct {
 	data []byte
 }
 
+type sizedUnpackableFile struct {
+	*memoryUnpackableFile
+	size         int64
+	resolvedSize int64
+	ensureCalls  int
+}
+
 func (f *memoryUnpackableFile) Name() string { return f.name }
 
 func (f *memoryUnpackableFile) Size() int64 { return int64(len(f.data)) }
@@ -47,6 +54,50 @@ func (f *memoryUnpackableFile) OpenReaderAt(ctx context.Context, offset int64) (
 
 func (f *memoryUnpackableFile) ReadAt(p []byte, off int64) (int, error) {
 	return bytes.NewReader(f.data).ReadAt(p, off)
+}
+
+func (f *sizedUnpackableFile) Size() int64 { return f.size }
+
+func (f *sizedUnpackableFile) EnsureSegmentMap() error {
+	f.ensureCalls++
+	f.size = f.resolvedSize
+	return nil
+}
+
+func TestFilesToPartsSplitSevenZipUsesFirstVolumeSizeForMiddleParts(t *testing.T) {
+	first := &sizedUnpackableFile{
+		memoryUnpackableFile: &memoryUnpackableFile{name: "release.7z.001"},
+		size:                 110,
+		resolvedSize:         100,
+	}
+	middle := &sizedUnpackableFile{
+		memoryUnpackableFile: &memoryUnpackableFile{name: "release.7z.002"},
+		size:                 130,
+		resolvedSize:         120,
+	}
+	last := &sizedUnpackableFile{
+		memoryUnpackableFile: &memoryUnpackableFile{name: "release.7z.003"},
+		size:                 90,
+		resolvedSize:         80,
+	}
+
+	parts := filesToParts([]UnpackableFile{first, middle, last})
+
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d", len(parts))
+	}
+	if parts[0].Size != 100 || parts[1].Size != 100 || parts[2].Size != 80 {
+		t.Fatalf("expected part sizes [100 100 80], got [%d %d %d]", parts[0].Size, parts[1].Size, parts[2].Size)
+	}
+	if first.ensureCalls != 1 {
+		t.Fatalf("expected first volume EnsureSegmentMap once, got %d", first.ensureCalls)
+	}
+	if middle.ensureCalls != 0 {
+		t.Fatalf("expected middle volume EnsureSegmentMap to be skipped, got %d", middle.ensureCalls)
+	}
+	if last.ensureCalls != 1 {
+		t.Fatalf("expected last volume EnsureSegmentMap once, got %d", last.ensureCalls)
+	}
 }
 
 func TestGetMediaStreamForEpisodeUsesCachedSevenZipBlueprintFiles(t *testing.T) {

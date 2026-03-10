@@ -132,11 +132,29 @@ func filter7zFiles(files []UnpackableFile) []UnpackableFile {
 
 func filesToParts(files []UnpackableFile) []Part {
 	parts := make([]Part, len(files))
+	if len(files) == 0 {
+		return parts
+	}
+
+	firstSize := resolved7zVolumeSize(files[0])
+	lastSize := firstSize
+	if len(files) > 1 {
+		lastSize = resolved7zVolumeSize(files[len(files)-1])
+	}
+
 	for i, f := range files {
-		_ = f.EnsureSegmentMap()
-		parts[i] = Part{Reader: f, Offset: 0, Size: f.Size()}
+		size := firstSize
+		if i == len(files)-1 {
+			size = lastSize
+		}
+		parts[i] = Part{Reader: f, Offset: 0, Size: size}
 	}
 	return parts
+}
+
+func resolved7zVolumeSize(f UnpackableFile) int64 {
+	_ = f.EnsureSegmentMap()
+	return f.Size()
 }
 
 func mapOffsetToParts(volumes []Part, startOffset, size int64) ([]virtualPart, error) {
