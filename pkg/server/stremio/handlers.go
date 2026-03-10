@@ -2193,19 +2193,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		lastUpdate:     time.Now(),
 	}
 
-	ext := strings.ToLower(filepath.Ext(name))
-	if ext == ".mkv" {
-		w.Header().Set("Content-Type", "video/x-matroska")
-	} else if ext == ".avi" {
-		w.Header().Set("Content-Type", "video/x-msvideo")
-	} else if ext == ".mp4" || ext == ".m4v" {
-		w.Header().Set("Content-Type", "video/mp4")
-	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filepath.Base(name)))
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
-	bufW := newBufferedResponseWriter(w, 256*1024)
+	bufW := newMediaResponseWriter(w, name)
 	serveStartedAt := time.Now()
 	effectiveRange := r.Header.Get("Range")
 	probeLikeServe := false
@@ -2312,6 +2300,33 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	}()
 
 	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
+}
+
+func mediaContentType(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".mkv":
+		return "video/x-matroska"
+	case ".avi":
+		return "video/x-msvideo"
+	case ".mp4", ".m4v":
+		return "video/mp4"
+	default:
+		return ""
+	}
+}
+
+func applyMediaResponseHeaders(w http.ResponseWriter, name string) {
+	if contentType := mediaContentType(name); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filepath.Base(name)))
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+}
+
+func newMediaResponseWriter(w http.ResponseWriter, name string) *bufferedResponseWriter {
+	applyMediaResponseHeaders(w, name)
+	return newBufferedResponseWriter(newWriteTimeoutResponseWriter(w, 10*time.Minute), 256*1024)
 }
 
 type preparedPlaybackStream struct {
@@ -2824,10 +2839,7 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	logger.Info("Serving debug media", "name", name, "size", size)
 	logger.Debug("HTTP Request", "method", r.Method, "range", r.Header.Get("Range"), "user_agent", r.Header.Get("User-Agent"))
 
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Accept-Ranges", "bytes")
-	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
-	bufW := newBufferedResponseWriter(w, 256*1024)
+	bufW := newMediaResponseWriter(w, name)
 	defer bufW.Flush()
 	http.ServeContent(bufW, r, name, time.Time{}, monitoredStream)
 

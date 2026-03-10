@@ -96,6 +96,47 @@ func TestBufferedResponseWriterSnapshotTracksStatusBytesAndHeaders(t *testing.T)
 	}
 }
 
+func TestMediaContentTypeReturnsExpectedTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		want string
+	}{
+		{name: "mkv", file: "movie.mkv", want: "video/x-matroska"},
+		{name: "avi", file: "movie.avi", want: "video/x-msvideo"},
+		{name: "mp4", file: "movie.mp4", want: "video/mp4"},
+		{name: "m4v", file: "movie.m4v", want: "video/mp4"},
+		{name: "unknown", file: "movie.ts", want: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mediaContentType(tc.file); got != tc.want {
+				t.Fatalf("mediaContentType(%q) = %q, want %q", tc.file, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyMediaResponseHeadersSetsSharedMediaHeaders(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	applyMediaResponseHeaders(recorder, `folder/Test.Movie.2026.mkv`)
+
+	if got := recorder.Header().Get("Content-Type"); got != "video/x-matroska" {
+		t.Fatalf("Content-Type = %q, want %q", got, "video/x-matroska")
+	}
+	if got := recorder.Header().Get("Content-Disposition"); got != `inline; filename="Test.Movie.2026.mkv"` {
+		t.Fatalf("Content-Disposition = %q, want %q", got, `inline; filename="Test.Movie.2026.mkv"`)
+	}
+	if got := recorder.Header().Get("Accept-Ranges"); got != "bytes" {
+		t.Fatalf("Accept-Ranges = %q, want %q", got, "bytes")
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "*")
+	}
+}
+
 func TestStreamMonitorSnapshotTracksEOFWithoutErrorString(t *testing.T) {
 	monitor := &StreamMonitor{
 		ReadSeekCloser: &bytesReadSeekCloser{Reader: bytes.NewReader([]byte("abc"))},

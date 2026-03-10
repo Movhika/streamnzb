@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -6,9 +6,9 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { AlertCircle, Plus, Trash2, RefreshCw, Copy, Check, Loader2 } from "lucide-react"
-import { getApiUrl } from "@/api"
+import { apiFetch, getApiUrl } from "@/api"
 
-const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws, globalConfig: globalConfigProp }, ref) {
+function DeviceManagement({ sendCommand, globalConfig }) {
   const [devices, setDevices] = useState([])
   const [streams, setStreams] = useState([])
   const [loading, setLoading] = useState(true)
@@ -19,7 +19,6 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [newUsername, setNewUsername] = useState('')
   const [copiedToken, setCopiedToken] = useState('')
-  const globalConfig = globalConfigProp ?? null
   const hasLoadedRef = React.useRef(false)
 
   // Fetch available streams for assignment
@@ -30,34 +29,46 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
       .catch(() => {})
   }, [])
 
-  useImperativeHandle(ref, () => {
-    const buildConfigs = () => {
-      const out = {}
-      devices.forEach((d) => {
-        out[d.username] = {
-          indexer_overrides: d.indexer_overrides ?? {},
-          stream_ids: d.stream_ids ?? []
-        }
-      })
-      return out
-    }
-    return {
-      getDeviceConfigs: buildConfigs,
-      getUserConfigs: buildConfigs
-    }
-  }, [devices])
+  const saveDeviceConfig = useCallback(async (device) => {
+    setError('')
+    setSuccess('')
+    setActionLoading(`streams-${device.username}`)
 
-  // Toggle a stream ID for a device (local state only; saved via parent save button)
-  const handleStreamToggle = useCallback((username, streamId, checked) => {
-    setDevices(prev => prev.map(d => {
-      if (d.username !== username) return d
-      const current = d.stream_ids ?? []
-      const next = checked
-        ? [...current, streamId]
-        : current.filter(id => id !== streamId)
-      return { ...d, stream_ids: next }
-    }))
+    try {
+      const data = await apiFetch('/api/devices/configs', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          [device.username]: {
+            indexer_overrides: device.indexer_overrides ?? {},
+            stream_ids: device.stream_ids ?? []
+          }
+        })
+      })
+      setSuccess(data?.message || `Saved allowed streams for "${device.username}"`)
+    } finally {
+      setActionLoading(null)
+    }
   }, [])
+
+  const handleStreamToggle = useCallback((username, streamId, checked) => {
+    const previousDevice = devices.find((d) => d.username === username)
+    if (!previousDevice) return
+
+    const current = previousDevice.stream_ids ?? []
+    const next = checked
+      ? Array.from(new Set([...current, streamId]))
+      : current.filter((id) => id !== streamId)
+
+    const updatedDevice = { ...previousDevice, stream_ids: next }
+
+    setDevices((prev) => prev.map((d) => d.username === username ? updatedDevice : d))
+
+    saveDeviceConfig(updatedDevice).catch((err) => {
+      setDevices((prev) => prev.map((d) => d.username === username ? previousDevice : d))
+      setError(err?.message || `Failed to save allowed streams for "${username}"`)
+    })
+  }, [devices, saveDeviceConfig])
 
   // Fetch devices list (uses API via sendCommand)
   const fetchDevices = useCallback((showLoader = true) => {
@@ -202,7 +213,7 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardDescription>
-              Create device tokens for Stremio access. Per-indexer overrides can be set per device; streams are configured under Streams.
+              Create device tokens for Stremio access. Allowed stream changes save immediately, so there is no separate save button on this page.
             </CardDescription>
           </div>
           <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
@@ -322,9 +333,17 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
                         </div>
                         {streams.length > 0 && (
                           <div className="mt-3 space-y-1">
-                            <Label className="text-xs text-muted-foreground block">
-                              Allowed streams <span className="font-normal">(leave all unchecked to allow all)</span>:
-                            </Label>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs text-muted-foreground block">
+                                Allowed streams <span className="font-normal">(leave all unchecked to allow all)</span>:
+                              </Label>
+                              {actionLoading === `streams-${device.username}` && (
+                                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  Saving...
+                                </span>
+                              )}
+                            </div>
                             <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
                               {streams.map((st) => {
                                 const checked = (device.stream_ids ?? []).includes(st.id)
@@ -333,6 +352,7 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
                                     <Checkbox
                                       id={`stream-${device.username}-${st.id}`}
                                       checked={checked}
+                                      disabled={loading || actionLoading !== null}
                                       onCheckedChange={(v) => handleStreamToggle(device.username, st.id, !!v)}
                                     />
                                     <label
@@ -393,6 +413,6 @@ const DeviceManagement = forwardRef(function DeviceManagement({ sendCommand, ws,
       </CardContent>
     </Card>
   )
-})
+}
 
 export default DeviceManagement

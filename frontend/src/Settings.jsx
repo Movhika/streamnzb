@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -33,7 +34,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   const [availNZBStatusError, setAvailNZBStatusError] = useState('')
   const [showAvailNZBRecoverySecret, setShowAvailNZBRecoverySecret] = useState(false)
   const [availNZBRecoverySecretCopied, setAvailNZBRecoverySecretCopied] = useState(false)
-  const deviceManagementRef = useRef(null)
 
   const form = useForm({
     defaultValues: {
@@ -168,24 +168,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
 
   const onSubmit = async (data) => {
     try {
-      if (deviceManagementRef.current) {
-        const deviceConfigs = deviceManagementRef.current.getDeviceConfigs()
-        if (Object.keys(deviceConfigs).length > 0) {
-          const configsToSave = {}
-          const adminUsername = initialConfig?.admin_username || 'admin'
-          for (const [username, deviceConfig] of Object.entries(deviceConfigs)) {
-            if (username === adminUsername || !deviceConfig) continue
-            configsToSave[username] = {
-              indexer_overrides: deviceConfig.indexer_overrides ?? {},
-              stream_ids: deviceConfig.stream_ids ?? []
-            }
-          }
-          if (Object.keys(configsToSave).length > 0) {
-            sendCommand('save_user_configs', configsToSave)
-          }
-        }
-      }
-      
       const trimData = (obj) => {
         if (typeof obj !== 'object' || obj === null) return obj;
         if (Array.isArray(obj)) {
@@ -224,10 +206,19 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
 
   const availNZBRecoverySecret = availNZBStatus?.recovery_secret || ''
   const availNZBStatusMessage = availNZBStatusError || availNZBStatus?.status_error || ''
+	const availNZBMode = watch('availnzb_mode') || ''
+	const availNZBModeDoesNotImproveScore = availNZBMode === 'status_only' || availNZBMode === 'disabled'
   const rawAvailNZBTrustScore = Number(availNZBStatus?.status?.trust_score)
+	const maxAvailNZBTrustScore = 60
   const availNZBTrustScore = Number.isFinite(rawAvailNZBTrustScore)
-    ? Math.max(0, Math.min(100, rawAvailNZBTrustScore))
+	  ? (Math.max(0, Math.min(maxAvailNZBTrustScore, rawAvailNZBTrustScore)) / maxAvailNZBTrustScore) * 100
     : null
+	const availNZBTrustBlocksStatusResults = availNZBTrustScore !== null && availNZBTrustScore < 100
+	const availNZBBadgeClass = availNZBTrustBlocksStatusResults
+	  ? 'border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-900 dark:text-red-200'
+	  : availNZBModeDoesNotImproveScore
+	    ? 'border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:text-amber-200'
+	    : 'px-2 py-0.5 text-[10px] font-semibold'
   const availNZBTrustSummary = availNZBStatusLoading
     ? 'Loading…'
     : availNZBTrustScore !== null
@@ -383,10 +374,44 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                     <FormLabel className="flex items-start justify-between gap-3 text-sm font-medium">
                       <span>AvailNZB mode</span>
                       <span className="flex flex-col items-end gap-1">
-                        <span className={`flex items-center gap-1 text-xs font-normal ${availNZBStatusError ? 'text-destructive/80' : 'text-muted-foreground'}`}>
+		                        <TooltipProvider delayDuration={150}>
+		                          <span className="flex flex-wrap items-center justify-end gap-2">
+		                            <Tooltip>
+		                              <TooltipTrigger asChild>
+		                                <span className="inline-flex cursor-help">
+		                                  <Badge variant="outline" className={availNZBBadgeClass}>
+		                                    {availNZBTrustBlocksStatusResults || availNZBModeDoesNotImproveScore ? (
+		                                      <AlertTriangle className="mr-1 h-3 w-3" />
+		                                    ) : (
+		                                      <Info className="mr-1 h-3 w-3" />
+		                                    )}
+		                                  </Badge>
+		                                </span>
+		                              </TooltipTrigger>
+		                              <TooltipContent side="bottom" align="end" className="max-w-xs p-3">
+		                                <div className="space-y-1 text-xs font-normal">
+		                                  <div className="font-medium">
+		                                    {availNZBTrustBlocksStatusResults ? 'AvailNZB /status trust requirement' : 'AvailNZB scoring'}
+		                                  </div>
+		                                  {availNZBTrustBlocksStatusResults && (
+		                                    <>
+		                                      <div>AvailNZB /status availability results require 100 trust.</div>
+		                                      <div>Below that, /status will not return available results.</div>
+		                                    </>
+		                                  )}
+		                                  <div>Only "GET status + POST report" increases your AvailNZB score.</div>
+		                                  <div>"GET status only" fetches availability data but does not report your playback results back to the community.</div>
+		                                  <div>"Disabled" skips AvailNZB entirely.</div>
+		                                </div>
+		                              </TooltipContent>
+		                            </Tooltip>
+
+		                            <span className={`flex items-center gap-1 text-xs font-normal ${availNZBStatusError ? 'text-destructive/80' : 'text-muted-foreground'}`}>
                           {availNZBStatusLoading && <Loader2 className="h-3 w-3 animate-spin" />}
                           {availNZBTrustSummary}
                         </span>
+		                          </span>
+		                        </TooltipProvider>
                         {availNZBTrustScore !== null && !availNZBStatusLoading && !availNZBStatusError && (
                           <span className="h-1.5 w-20 overflow-hidden rounded-full bg-muted/70" aria-hidden="true">
                             <span
@@ -406,8 +431,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                     </FormControl>
                     <FormDescription>
                       Controls how StreamNZB interacts with AvailNZB.
-                      "GET status only" fetches availability data but does not report your playback results back to the community.
-                      "Disabled" skips AvailNZB entirely.
                     </FormDescription>
 	                    {availNZBStatusMessage && (
 	                      <p className="text-xs text-destructive/80">{availNZBStatusMessage}</p>
@@ -506,15 +529,13 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         {activePage === 'devices' && (
           <div className="space-y-4">
             <DeviceManagement
-              ref={deviceManagementRef}
               sendCommand={sendCommand}
-              ws={window.ws}
               globalConfig={initialConfig}
             />
           </div>
         )}
 
-        {saveFooter}
+        {activePage !== 'devices' && saveFooter}
       </form>
     </Form>
   )
