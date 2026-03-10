@@ -2880,9 +2880,11 @@ func (s *Server) Reload(opts *ServerOptions) {
 		if reloadMode == "status_only" {
 			s.availReporter.Disabled = true
 		}
-		if err := opts.AvailClient.RefreshBackbones(); err != nil {
-			logger.Debug("AvailNZB backbones refresh on reload", "err", err)
-		}
+		go func(client *availnzb.Client) {
+			if err := client.RefreshBackbones(); err != nil {
+				logger.Debug("AvailNZB backbones refresh", "source", "stremio_reload", "err", err)
+			}
+		}(opts.AvailClient)
 	} else {
 		s.availClient = nil
 		s.availReporter = nil

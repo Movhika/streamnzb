@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -153,6 +154,12 @@ func (s *Server) SetProxyServer(p *proxy.Server) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.proxyServer = p
+}
+
+func (s *Server) SetAvailNZBAPIKey(apiKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.availNZBAPIKey = strings.TrimSpace(apiKey)
 }
 
 func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {

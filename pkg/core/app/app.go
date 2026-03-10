@@ -3,6 +3,7 @@ package app
 import (
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +69,17 @@ func (a *App) Build(cfg *config.Config, opts BuildOpts) (*Components, error) {
 	return comp, nil
 }
 
+func (a *App) SetAvailNZBAPIKey(apiKey string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	apiKey = strings.TrimSpace(apiKey)
+	a.opts.AvailNZBAPIKey = apiKey
+	if a.components != nil && a.components.AvailClient != nil {
+		a.components.AvailClient.SetAPIKey(apiKey)
+	}
+}
+
 func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error) {
 	base, err := initialization.BuildComponents(cfg)
 	if err != nil {
@@ -80,9 +92,11 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 	defaultSorting := config.DefaultSortConfig()
 	triageSvc := triage.NewService(&defaultFilters, defaultSorting)
 	availClient := availnzb.NewClient(opts.AvailNZBURL, opts.AvailNZBAPIKey)
-	if err := availClient.RefreshBackbones(); err != nil {
-		logger.Debug("AvailNZB backbones refresh on start", "err", err)
-	}
+	go func(client *availnzb.Client) {
+		if err := client.RefreshBackbones(); err != nil {
+			logger.Debug("AvailNZB backbones refresh", "source", "app_build", "err", err)
+		}
+	}(availClient)
 	dataDir := opts.DataDir
 	if dataDir == "" {
 		dataDir = filepath.Dir(cfg.LoadedPath)

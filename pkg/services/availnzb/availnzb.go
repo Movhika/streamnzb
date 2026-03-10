@@ -30,6 +30,7 @@ type Client struct {
 	APIKey  string
 	HTTP    *http.Client
 
+	apiKeyMu    sync.RWMutex
 	backbonesMu sync.RWMutex
 	backbones   map[string]string
 }
@@ -253,7 +254,19 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
-func ResolveAPIKey(store KeyStore, baseURL, explicitKey, appName string) (string, error) {
+func (c *Client) GetAPIKey() string {
+	c.apiKeyMu.RLock()
+	defer c.apiKeyMu.RUnlock()
+	return c.APIKey
+}
+
+func (c *Client) SetAPIKey(apiKey string) {
+	c.apiKeyMu.Lock()
+	c.APIKey = strings.TrimSpace(apiKey)
+	c.apiKeyMu.Unlock()
+}
+
+func ResolveStartupAPIKey(store KeyStore, baseURL, explicitKey string) (string, error) {
 	explicitKey = strings.TrimSpace(explicitKey)
 	if explicitKey != "" {
 		logger.Debug("AvailNZB key bootstrap using explicit API key")
@@ -268,9 +281,6 @@ func ResolveAPIKey(store KeyStore, baseURL, explicitKey, appName string) (string
 	if store == nil {
 		return "", fmt.Errorf("availnzb key bootstrap: store is required")
 	}
-	if strings.TrimSpace(appName) == "" {
-		appName = DefaultAppName
-	}
 
 	storedKey, err := loadStoredAPIKey(store)
 	if err != nil {
@@ -278,7 +288,32 @@ func ResolveAPIKey(store KeyStore, baseURL, explicitKey, appName string) (string
 	}
 	if storedKey != "" {
 		logger.Debug("AvailNZB key bootstrap using stored API key")
-		return storedKey, nil
+	}
+	return storedKey, nil
+}
+
+func ResolveAPIKey(store KeyStore, baseURL, explicitKey, appName string) (string, error) {
+	resolvedKey, err := ResolveStartupAPIKey(store, baseURL, explicitKey)
+	if err != nil {
+		return "", err
+	}
+	if resolvedKey != "" || strings.TrimSpace(baseURL) == "" {
+		return resolvedKey, nil
+	}
+
+	return RegisterAndPersistAPIKey(store, baseURL, appName)
+}
+
+func RegisterAndPersistAPIKey(store KeyStore, baseURL, appName string) (string, error) {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return "", fmt.Errorf("availnzb register: no base URL configured")
+	}
+	if store == nil {
+		return "", fmt.Errorf("availnzb key bootstrap: store is required")
+	}
+	if strings.TrimSpace(appName) == "" {
+		appName = DefaultAppName
 	}
 
 	created, err := NewClient(baseURL, "").RegisterKey(appName)
@@ -400,7 +435,8 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 		logger.Debug("AvailNZB report skipped", "reason", "no base URL configured")
 		return nil
 	}
-	if c.APIKey == "" {
+	apiKey := c.GetAPIKey()
+	if apiKey == "" {
 		logger.Debug("AvailNZB report skipped", "reason", "no API key configured")
 		return nil
 	}
@@ -443,7 +479,7 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 		return err
 	}
 
-	req.Header.Set("X-API-Key", c.APIKey)
+	req.Header.Set("X-API-Key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTP.Do(req)
@@ -469,13 +505,14 @@ func (c *Client) RefreshBackbones() error {
 	if c.BaseURL == "" {
 		return nil
 	}
+	apiKey := c.GetAPIKey()
 	reqURL := c.BaseURL + apiPath + "/backbones"
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return err
 	}
-	if c.APIKey != "" {
-		req.Header.Set("X-API-Key", c.APIKey)
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -530,6 +567,7 @@ func (c *Client) GetMe() (*MeResponse, error) {
 		logger.Trace("AvailNZB GetMe skipped", "reason", "no base URL")
 		return nil, nil
 	}
+	apiKey := c.GetAPIKey()
 
 	reqURL := c.BaseURL + apiPath + "/me"
 	logger.Debug("AvailNZB GetMe")
@@ -538,8 +576,8 @@ func (c *Client) GetMe() (*MeResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.APIKey != "" {
-		req.Header.Set("X-API-Key", c.APIKey)
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
 	}
 
 	resp, err := c.HTTP.Do(req)
@@ -568,6 +606,7 @@ func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {
 		logger.Trace("AvailNZB GetStatus skipped", "reason", "no base URL")
 		return nil, nil
 	}
+	apiKey := c.GetAPIKey()
 
 	params := url.Values{}
 	params.Set("url", releaseURL)
@@ -579,8 +618,8 @@ func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.APIKey != "" {
-		req.Header.Set("X-API-Key", c.APIKey)
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -620,6 +659,7 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 		logger.Trace("AvailNZB GetReleases skipped", "reason", "no base URL")
 		return nil, nil
 	}
+	apiKey := c.GetAPIKey()
 
 	var path string
 	if tvdbID != "" && (season > 0 || episode > 0) {
@@ -647,8 +687,8 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 	if err != nil {
 		return nil, err
 	}
-	if c.APIKey != "" {
-		req.Header.Set("X-API-Key", c.APIKey)
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"streamnzb/pkg/auth"
@@ -177,7 +178,7 @@ func main() {
 	}
 
 	if cfg.AvailNZBMode != "disabled" {
-		availNZBAPIKey, err = availnzb.ResolveAPIKey(stateMgr, availNZBUrl, availNZBAPIKey, availnzb.DefaultAppName)
+		availNZBAPIKey, err = availnzb.ResolveStartupAPIKey(stateMgr, availNZBUrl, availNZBAPIKey)
 		if err != nil {
 			initialization.WaitForInputAndExit(fmt.Errorf("failed to resolve AvailNZB API key: %w", err))
 		}
@@ -235,6 +236,28 @@ func main() {
 	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, streamManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
 	apiServer.SetIndexerCaps(comp.IndexerCaps)
 	apiServer.SetAttemptLister(stateMgr)
+	if cfg.AvailNZBMode != "disabled" && strings.TrimSpace(availNZBAPIKey) == "" && strings.TrimSpace(availNZBUrl) != "" {
+		logger.Info("AvailNZB API key registration deferred", "mode", cfg.AvailNZBMode)
+		go func() {
+			registeredKey, err := availnzb.RegisterAndPersistAPIKey(stateMgr, availNZBUrl, availnzb.DefaultAppName)
+			if err != nil {
+				logger.Warn("AvailNZB background key registration failed", "err", err)
+				return
+			}
+
+			application.SetAvailNZBAPIKey(registeredKey)
+			apiServer.SetAvailNZBAPIKey(registeredKey)
+
+			current := application.Components()
+			if current != nil && current.AvailClient != nil {
+				if err := current.AvailClient.RefreshBackbones(); err != nil {
+					logger.Debug("AvailNZB backbones refresh", "source", "background_registration", "err", err)
+				}
+			}
+
+			logger.Info("AvailNZB background key registration completed")
+		}()
+	}
 
 	stremioServer.SetWebHandler(web.Handler())
 	stremioServer.SetAPIHandler(apiServer.Handler())

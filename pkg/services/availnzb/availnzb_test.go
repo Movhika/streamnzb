@@ -277,6 +277,27 @@ func TestResolveAPIKeyReturnsStoredLegacyKey(t *testing.T) {
 	}
 }
 
+func TestResolveStartupAPIKeyReturnsEmptyWhenMissingWithoutRegistering(t *testing.T) {
+	t.Parallel()
+
+	store := &stubKeyStore{raw: map[string][]byte{}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("unexpected registration request")
+	}))
+	defer server.Close()
+
+	got, err := ResolveStartupAPIKey(store, server.URL, "")
+	if err != nil {
+		t.Fatalf("ResolveStartupAPIKey: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("ResolveStartupAPIKey() = %q, want empty string", got)
+	}
+	if store.setCalls != 0 {
+		t.Fatalf("setCalls = %d, want 0", store.setCalls)
+	}
+}
+
 func TestResolveAPIKeyRegistersAndPersistsWhenMissing(t *testing.T) {
 	t.Parallel()
 
@@ -316,6 +337,35 @@ func TestResolveAPIKeyRegistersAndPersistsWhenMissing(t *testing.T) {
 	}
 	if saved.ID != "2" || saved.Token != "registered-token" || saved.RecoverySecret != "recover-2" {
 		t.Fatalf("unexpected persisted state: %+v", saved)
+	}
+}
+
+func TestClientSetAPIKeyIsUsedBySubsequentRequests(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-API-Key"); got != "updated-key" {
+			t.Fatalf("X-API-Key = %q, want %q", got, "updated-key")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"app-1","name":"StreamNZB","is_active":true,"app_source":"self_service","trust_level":"trusted","trust_score":97.5,"report_count":7,"public_report_count":2,"verified_report_count":5,"quarantined_report_count":1,"rolled_back_report_count":0,"last_report_at":null,"last_rollback_at":null}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "")
+	client.HTTP = server.Client()
+	client.SetAPIKey(" updated-key ")
+
+	if got := client.GetAPIKey(); got != "updated-key" {
+		t.Fatalf("GetAPIKey() = %q, want %q", got, "updated-key")
+	}
+
+	resp, err := client.GetMe()
+	if err != nil {
+		t.Fatalf("GetMe: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("GetMe returned nil response")
 	}
 }
 
