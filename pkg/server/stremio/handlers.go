@@ -756,11 +756,19 @@ var streamSinkKey = streamSinkKeyType{}
 
 const streamSlotPrefix = "stream:"
 
-// MaxPreloadFailovers is the maximum number of internal slot failovers allowed when Stremio
-// is detected to be preloading the next episode while the previous episode is actively playing.
-// Stremio probes the next episode's streams in the background; we cap failovers so a run of
-// bad releases doesn't exhaust all candidates while the user is still watching the current one.
-const MaxPreloadFailovers = 5
+const (
+	// MaxPreloadFailovers is the maximum number of internal slot failovers allowed when Stremio
+	// is detected to be preloading the next episode while the previous episode is actively playing.
+	// Stremio probes the next episode's streams in the background; we cap failovers so a run of
+	// bad releases doesn't exhaust all candidates while the user is still watching the current one.
+	MaxPreloadFailovers = 5
+
+	// playbackStartupTimeout bounds probe/open work before the first playable response is ready.
+	// Slow archive-heavy startup should fail over rather than keep the player spinning indefinitely.
+	playbackStartupTimeout = 5 * time.Second
+)
+
+var ErrPlaybackStartupTimeout = errors.New("playback startup timeout")
 
 // prevEpisodeContentID returns the content ID for the preceding episode of the same series.
 // Series content IDs are formatted as "imdbID:season:episode", e.g. "tt0944947:2:2".
@@ -1945,6 +1953,35 @@ func isDataCorruptErr(err error) bool {
 	return false
 }
 
+func classifyPlaybackStartupErr(phase string, startupCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(startupCtx.Err(), context.DeadlineExceeded) {
+		return playbackStartupTimeoutErr(phase, err)
+	}
+	return err
+}
+
+func playbackStartupTimeoutErr(phase string, cause error) error {
+	if cause != nil {
+		return fmt.Errorf("%w during %s after %s: %v", ErrPlaybackStartupTimeout, phase, playbackStartupTimeout, cause)
+	}
+	return fmt.Errorf("%w during %s after %s", ErrPlaybackStartupTimeout, phase, playbackStartupTimeout)
+}
+
+func isPlayPrepareCancellation(err error) bool {
+	if err == nil || errors.Is(err, ErrPlaybackStartupTimeout) {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+type playbackSourceOpenResult struct {
+	stream io.ReadSeekCloser
+	err    error
+}
+
 // handlePlay: resolve session (by slot path or existing), optionally redirect if slot previously failed,
 // then loop: try play → on error/probe/seek failure switch to next fallback → serve content.
 func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth.Device) {
@@ -2059,9 +2096,12 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		preparedStream, prepareErr := s.preparePlaybackStream(mergedCtx, sess, requestedSessionID, sessionID, wantTimeOffset)
 		if prepareErr != nil {
 			mergedCancel()
-			if errors.Is(prepareErr, context.Canceled) || errors.Is(prepareErr, context.DeadlineExceeded) {
+			if isPlayPrepareCancellation(prepareErr) {
 				logger.Debug("play prepare canceled", "session", sessionID, "err", prepareErr)
 				return
+			}
+			if errors.Is(prepareErr, ErrPlaybackStartupTimeout) {
+				logger.Warn("Playback startup timed out", "session", sessionID, "err", prepareErr)
 			}
 			// Always mark slot as permanently failed when we abandon it, so future retries on the same URL
 			// get a redirect instead of a 404.
@@ -2353,7 +2393,10 @@ func (s *Server) preparePlaybackStream(ctx context.Context, sess *session.Sessio
 
 	needProbe := !haveSnapshot || !snapshot.HasStartupInfo || (needDurationProbe && !snapshot.StartupInfo.DurationKnown)
 	if needProbe {
-		spec, startupInfo, err := s.probePlaybackSource(ctx, sess, needDurationProbe)
+		probeCtx, cancel := context.WithTimeout(ctx, playbackStartupTimeout)
+		spec, startupInfo, err := s.probePlaybackSource(probeCtx, sess, needDurationProbe)
+		err = classifyPlaybackStartupErr("probe", probeCtx, err)
+		cancel()
 		if err != nil {
 			return preparedPlaybackStream{}, err
 		}
@@ -2366,7 +2409,7 @@ func (s *Server) preparePlaybackStream(ctx context.Context, sess *session.Sessio
 		return preparedPlaybackStream{}, fmt.Errorf("playback stream spec missing for session %s", sess.ID)
 	}
 
-	stream, err := s.openExpectedPlaybackSource(ctx, sess, preparedStream.Spec)
+	stream, err := s.openExpectedPlaybackSourceWithStartupTimeout(ctx, sess, preparedStream.Spec)
 	if err != nil {
 		sess.ResetPlaybackStream()
 		return preparedPlaybackStream{}, err
@@ -2376,6 +2419,53 @@ func (s *Server) preparePlaybackStream(ctx context.Context, sess *session.Sessio
 	preparedStream.Mode = "per_request"
 	sess.CachePlaybackStreamSnapshot(preparedStream.Spec, preparedStream.StartupInfo, preparedStream.HasStartupInfo)
 	return preparedStream, nil
+}
+
+func (s *Server) openExpectedPlaybackSourceWithStartupTimeout(ctx context.Context, sess *session.Session, spec session.PlaybackStreamSpec) (io.ReadSeekCloser, error) {
+	openCtx, cancel := context.WithCancel(ctx)
+	resultCh := make(chan playbackSourceOpenResult, 1)
+	done := make(chan struct{})
+	go func() {
+		stream, err := s.openExpectedPlaybackSource(openCtx, sess, spec)
+		select {
+		case resultCh <- playbackSourceOpenResult{stream: stream, err: err}:
+		case <-done:
+			if stream != nil {
+				_ = stream.Close()
+			}
+		}
+	}()
+
+	timer := time.NewTimer(playbackStartupTimeout)
+	defer timer.Stop()
+
+	cleanup := func() {
+		close(done)
+		cancel()
+		select {
+		case res := <-resultCh:
+			if res.stream != nil {
+				_ = res.stream.Close()
+			}
+		default:
+		}
+	}
+
+	select {
+	case res := <-resultCh:
+		close(done)
+		if res.err != nil {
+			cancel()
+			return nil, res.err
+		}
+		return res.stream, nil
+	case <-timer.C:
+		cleanup()
+		return nil, playbackStartupTimeoutErr("open", nil)
+	case <-ctx.Done():
+		cleanup()
+		return nil, ctx.Err()
+	}
 }
 
 func (s *Server) openExpectedPlaybackSource(ctx context.Context, sess *session.Session, spec session.PlaybackStreamSpec) (io.ReadSeekCloser, error) {
@@ -2586,15 +2676,23 @@ func (s *Server) deriveNextSlotID(ctx context.Context, currentID string, device 
 // switchToNextFallback derives the next fallback slot from the cached play list and returns its session.
 // Returns (nil, "", nil) when there is no next slot, or (nil, "", err) on a resolve error.
 func (s *Server) switchToNextFallback(ctx context.Context, sess *session.Session, device *auth.Device) (*session.Session, string, error) {
-	nextID, err := s.deriveNextSlotID(ctx, sess.ID, device)
-	if err != nil || nextID == "" {
-		return nil, "", err
+	currentID := sess.ID
+	for {
+		nextID, err := s.deriveNextSlotID(ctx, currentID, device)
+		if err != nil || nextID == "" {
+			return nil, "", err
+		}
+		nextSess, err := s.getOrResolveSession(ctx, nextID, device)
+		if err == nil {
+			return nextSess, nextID, nil
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", err
+		}
+		logger.Info("Skipping unresolved fallback slot", "from", currentID, "to", nextID, "err", err)
+		s.sessionManager.SetSlotFailedDuringPlayback(nextID)
+		currentID = nextID
 	}
-	nextSess, err := s.getOrResolveSession(ctx, nextID, device)
-	if err != nil {
-		return nil, "", err
-	}
-	return nextSess, nextID, nil
 }
 
 func (s *Server) getOrResolveSession(ctx context.Context, sessionID string, device *auth.Device) (*session.Session, error) {

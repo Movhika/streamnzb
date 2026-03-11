@@ -3,7 +3,9 @@ package availnzb
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,6 +21,8 @@ const (
 	apiKeyStateKey = "availnzb_api_key"
 	DefaultAppName = "StreamNZB"
 )
+
+var ErrRegisterKeyIPAlreadyHasKey = errors.New("availnzb register: ip already has a key")
 
 type KeyStore interface {
 	Get(key string, target interface{}) (bool, error)
@@ -127,6 +131,13 @@ type KeyCreateResponse struct {
 	Token          string `json:"token"`
 	RecoverySecret string `json:"recovery_secret"`
 	CreatedAt      string `json:"created_at"`
+}
+
+type apiErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+	Detail  string `json:"detail"`
+	Reason  string `json:"reason"`
 }
 
 func (k *KeyCreateResponse) UnmarshalJSON(data []byte) error {
@@ -318,6 +329,9 @@ func RegisterAndPersistAPIKey(store KeyStore, baseURL, appName string) (string, 
 
 	created, err := NewClient(baseURL, "").RegisterKey(appName)
 	if err != nil {
+		if errors.Is(err, ErrRegisterKeyIPAlreadyHasKey) {
+			logger.Warn("AvailNZB key registration refused because this IP already has a key; ask for help on Discord", "err", err)
+		}
 		return "", err
 	}
 	if created == nil || strings.TrimSpace(created.Token) == "" {
@@ -387,6 +401,58 @@ func LoadStoredRecoverySecret(store KeyStore) (string, error) {
 	return "", fmt.Errorf("availnzb key bootstrap: failed to read stored recovery secret: %w", err)
 }
 
+func decodeAPIErrorMessage(body []byte) string {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return ""
+	}
+
+	var wrapped apiErrorResponse
+	if err := json.Unmarshal(trimmed, &wrapped); err == nil {
+		parts := make([]string, 0, 4)
+		seen := make(map[string]struct{}, 4)
+		for _, candidate := range []string{wrapped.Error, wrapped.Message, wrapped.Detail, wrapped.Reason} {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "" {
+				continue
+			}
+			key := strings.ToLower(candidate)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			parts = append(parts, candidate)
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, ": ")
+		}
+	}
+
+	return strings.TrimSpace(string(trimmed))
+}
+
+func isRegisterKeyIPAlreadyHasKeyMessage(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "already has a key for your ip") || strings.Contains(normalized, "already has a key for this ip") {
+		return true
+	}
+	hasAlready := strings.Contains(normalized, "already") || strings.Contains(normalized, "existing") || strings.Contains(normalized, "exists")
+	hasIP := strings.Contains(normalized, " ip") || strings.HasPrefix(normalized, "ip ") || strings.Contains(normalized, "ip address")
+	hasKey := strings.Contains(normalized, "key")
+	return hasAlready && hasIP && hasKey
+}
+
+func registerKeyIPAlreadyHasKeyErr(message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return fmt.Errorf("%w; ask for help on Discord", ErrRegisterKeyIPAlreadyHasKey)
+	}
+	return fmt.Errorf("%w: %s; ask for help on Discord", ErrRegisterKeyIPAlreadyHasKey, message)
+}
+
 func (c *Client) RegisterKey(name string) (*KeyCreateResponse, error) {
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("availnzb register: no base URL configured")
@@ -417,6 +483,19 @@ func (c *Client) RegisterKey(name string) (*KeyCreateResponse, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			logger.Error("AvailNZB RegisterKey unexpected status and failed to read error body", "status", resp.StatusCode, "err", readErr)
+			return nil, fmt.Errorf("availnzb register: unexpected status code: %d", resp.StatusCode)
+		}
+		message := decodeAPIErrorMessage(body)
+		if isRegisterKeyIPAlreadyHasKeyMessage(message) {
+			return nil, registerKeyIPAlreadyHasKeyErr(message)
+		}
+		if message != "" {
+			logger.Error("AvailNZB RegisterKey unexpected status", "status", resp.StatusCode, "message", message)
+			return nil, fmt.Errorf("availnzb register: unexpected status code: %d: %s", resp.StatusCode, message)
+		}
 		logger.Error("AvailNZB RegisterKey unexpected status", "status", resp.StatusCode)
 		return nil, fmt.Errorf("availnzb register: unexpected status code: %d", resp.StatusCode)
 	}

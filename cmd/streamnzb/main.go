@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -241,6 +242,9 @@ func main() {
 		go func() {
 			registeredKey, err := availnzb.RegisterAndPersistAPIKey(stateMgr, availNZBUrl, availnzb.DefaultAppName)
 			if err != nil {
+				if errors.Is(err, availnzb.ErrRegisterKeyIPAlreadyHasKey) {
+					return
+				}
 				logger.Warn("AvailNZB background key registration failed", "err", err)
 				return
 			}

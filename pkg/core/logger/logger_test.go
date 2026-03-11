@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -76,5 +78,70 @@ func TestGlobalBroadcastHandlerRedactsUnderlyingOutputAndHistory(t *testing.T) {
 		if !strings.Contains(text, redactedValue) {
 			t.Fatalf("expected redacted output, got %q", text)
 		}
+	}
+}
+
+func TestInitTwiceKeepsCurrentLogFile(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	tempDir := t.TempDir()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir temp dir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	logFileMu.Lock()
+	oldLogFile := logFile
+	if oldLogFile != nil {
+		_ = oldLogFile.Close()
+	}
+	logFile = nil
+	logFileMu.Unlock()
+	defer func() {
+		logFileMu.Lock()
+		if logFile != nil {
+			_ = logFile.Close()
+		}
+		logFile = nil
+		logFileMu.Unlock()
+	}()
+
+	if err := os.WriteFile(GetCurrentLogPath(), []byte("old log\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	Init("INFO")
+	archived, err := filepath.Glob(filepath.Join(tempDir, "streamnzb-*.log"))
+	if err != nil {
+		t.Fatalf("Glob after first init: %v", err)
+	}
+	if len(archived) != 1 {
+		t.Fatalf("expected 1 archived log after first init, got %d", len(archived))
+	}
+
+	SetLevel("DEBUG")
+	archived, err = filepath.Glob(filepath.Join(tempDir, "streamnzb-*.log"))
+	if err != nil {
+		t.Fatalf("Glob after second init: %v", err)
+	}
+	if len(archived) != 1 {
+		t.Fatalf("expected second init to keep current log file, got %d archived logs", len(archived))
+	}
+
+	Info("still writing to current log")
+	content, err := os.ReadFile(GetCurrentLogPath())
+	if err != nil {
+		t.Fatalf("ReadFile current log: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "still writing to current log") {
+		t.Fatalf("expected current log file to contain new log entry, got %q", text)
+	}
+	if !strings.Contains(text, "Logger initialized") {
+		t.Fatalf("expected current log file to remain active after second init, got %q", text)
 	}
 }

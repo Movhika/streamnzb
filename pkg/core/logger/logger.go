@@ -216,16 +216,16 @@ func Init(levelStr string) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create log directory: %v\n", err)
 	} else {
-		if fi, err := os.Stat(currentPath); err == nil && fi.Mode().IsRegular() {
-			ts := fi.ModTime().Format("20060102-150405")
-			archivedName := fmt.Sprintf("streamnzb-%s.log", ts)
-			archivedPath := filepath.Join(dataDir, archivedName)
-			if renameErr := os.Rename(currentPath, archivedPath); renameErr != nil {
-				fmt.Fprintf(os.Stderr, "Failed to rotate log file %s -> %s: %v\n", currentPath, archivedPath, renameErr)
-			}
-		}
 		logFileMu.Lock()
 		if logFile == nil {
+			if fi, err := os.Stat(currentPath); err == nil && fi.Mode().IsRegular() {
+				ts := fi.ModTime().Format("20060102-150405")
+				archivedName := fmt.Sprintf("streamnzb-%s.log", ts)
+				archivedPath := filepath.Join(dataDir, archivedName)
+				if renameErr := os.Rename(currentPath, archivedPath); renameErr != nil {
+					fmt.Fprintf(os.Stderr, "Failed to rotate log file %s -> %s: %v\n", currentPath, archivedPath, renameErr)
+				}
+			}
 			var err error
 			logFile, err = os.OpenFile(currentPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 			if err != nil {

@@ -2,10 +2,12 @@ package availnzb
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,6 +243,56 @@ func TestRegisterKeyDecodesNumericID(t *testing.T) {
 	}
 	if got.ID != "456" {
 		t.Fatalf("ID = %q, want %q", got.ID, "456")
+	}
+}
+
+func TestRegisterKeyReturnsHelpfulErrorWhenIPAlreadyHasKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"message":"An AvailNZB key already exists for your IP address"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "")
+	client.HTTP = server.Client()
+
+	got, err := client.RegisterKey(DefaultAppName)
+	if err == nil {
+		t.Fatal("RegisterKey error = nil, want error")
+	}
+	if got != nil {
+		t.Fatalf("RegisterKey response = %+v, want nil", got)
+	}
+	if !errors.Is(err, ErrRegisterKeyIPAlreadyHasKey) {
+		t.Fatalf("RegisterKey error = %v, want ErrRegisterKeyIPAlreadyHasKey", err)
+	}
+	if !strings.Contains(err.Error(), "Discord") {
+		t.Fatalf("RegisterKey error = %q, want Discord guidance", err)
+	}
+}
+
+func TestRegisterAndPersistAPIKeyReturnsHelpfulErrorWhenIPAlreadyHasKey(t *testing.T) {
+	store := &stubKeyStore{raw: map[string][]byte{}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"This IP already has a key"}`))
+	}))
+	defer server.Close()
+
+	got, err := RegisterAndPersistAPIKey(store, server.URL, DefaultAppName)
+	if err == nil {
+		t.Fatal("RegisterAndPersistAPIKey error = nil, want error")
+	}
+	if got != "" {
+		t.Fatalf("RegisterAndPersistAPIKey token = %q, want empty", got)
+	}
+	if !errors.Is(err, ErrRegisterKeyIPAlreadyHasKey) {
+		t.Fatalf("RegisterAndPersistAPIKey error = %v, want ErrRegisterKeyIPAlreadyHasKey", err)
+	}
+	if store.setCalls != 0 {
+		t.Fatalf("setCalls = %d, want 0", store.setCalls)
 	}
 }
 
