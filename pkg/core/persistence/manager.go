@@ -62,14 +62,20 @@ func (m *StateManager) Get(key string, target interface{}) (bool, error) {
 	return true, nil
 }
 
+func (m *StateManager) withWriteLock(fn func(*sql.DB) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return fn(m.db)
+}
+
 func (m *StateManager) Set(key string, value interface{}) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	err = setKV(m.db, key, raw)
-	m.mu.Unlock()
+	err = m.withWriteLock(func(db *sql.DB) error {
+		return setKV(db, key, raw)
+	})
 	if err != nil {
 		return err
 	}
@@ -78,9 +84,9 @@ func (m *StateManager) Set(key string, value interface{}) error {
 }
 
 func (m *StateManager) Delete(key string) error {
-	m.mu.Lock()
-	err := deleteKV(m.db, key)
-	m.mu.Unlock()
+	err := m.withWriteLock(func(db *sql.DB) error {
+		return deleteKV(db, key)
+	})
 	if err != nil {
 		return err
 	}

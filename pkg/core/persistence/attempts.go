@@ -43,19 +43,22 @@ func (m *StateManager) RecordPreloadAttempt(p RecordAttemptParams) {
 		return
 	}
 	// INSERT only when no active (preload=1) row exists for this slot yet.
-	m.db.Exec(`INSERT INTO nzb_attempts (tried_at, content_type, content_id, content_title, release_title, release_url, release_size, success, failure_reason, slot_path, preload)
-		SELECT ?, ?, ?, ?, ?, ?, ?, 0, '', ?, 1
-		WHERE NOT EXISTS (SELECT 1 FROM nzb_attempts WHERE slot_path = ? AND preload = 1)`,
-		time.Now().UnixMilli(),
-		p.ContentType,
-		p.ContentID,
-		p.ContentTitle,
-		p.ReleaseTitle,
-		p.ReleaseURL,
-		p.ReleaseSize,
-		p.SlotPath,
-		p.SlotPath, // for the NOT EXISTS sub-query
-	)
+	_ = m.withWriteLock(func(db *sql.DB) error {
+		_, err := db.Exec(`INSERT INTO nzb_attempts (tried_at, content_type, content_id, content_title, release_title, release_url, release_size, success, failure_reason, slot_path, preload)
+			SELECT ?, ?, ?, ?, ?, ?, ?, 0, '', ?, 1
+			WHERE NOT EXISTS (SELECT 1 FROM nzb_attempts WHERE slot_path = ? AND preload = 1)`,
+			time.Now().UnixMilli(),
+			p.ContentType,
+			p.ContentID,
+			p.ContentTitle,
+			p.ReleaseTitle,
+			p.ReleaseURL,
+			p.ReleaseSize,
+			p.SlotPath,
+			p.SlotPath, // for the NOT EXISTS sub-query
+		)
+		return err
+	})
 }
 
 // RecordAttempt writes one NZB attempt row, or updates an existing preload row by slot_path. Safe to call with nil receiver (no-op).
@@ -67,31 +70,35 @@ func (m *StateManager) RecordAttempt(p RecordAttemptParams) {
 	if p.Success {
 		success = 1
 	}
-	if p.SlotPath != "" {
-		// Only update the currently-pending preload row (preload=1). Historical resolved rows
-		// for the same slot_path (previous plays) must not be mutated.
-		res, err := m.db.Exec(`UPDATE nzb_attempts SET preload = 0, success = ?, failure_reason = ? WHERE slot_path = ? AND preload = 1`,
-			success, p.FailureReason, p.SlotPath)
-		if err == nil {
-			affected, _ := res.RowsAffected()
-			if affected > 0 {
-				return
+	err := m.withWriteLock(func(db *sql.DB) error {
+		if p.SlotPath != "" {
+			// Only update the currently-pending preload row (preload=1). Historical resolved rows
+			// for the same slot_path (previous plays) must not be mutated.
+			res, err := db.Exec(`UPDATE nzb_attempts SET preload = 0, success = ?, failure_reason = ? WHERE slot_path = ? AND preload = 1`,
+				success, p.FailureReason, p.SlotPath)
+			if err == nil {
+				affected, _ := res.RowsAffected()
+				if affected > 0 {
+					return nil
+				}
 			}
 		}
-	}
-	_, err := m.db.Exec(`INSERT INTO nzb_attempts (tried_at, content_type, content_id, content_title, release_title, release_url, release_size, success, failure_reason, slot_path, preload)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-		time.Now().UnixMilli(),
-		p.ContentType,
-		p.ContentID,
-		p.ContentTitle,
-		p.ReleaseTitle,
-		p.ReleaseURL,
-		p.ReleaseSize,
-		success,
-		p.FailureReason,
-		p.SlotPath,
-	)
+
+		_, err := db.Exec(`INSERT INTO nzb_attempts (tried_at, content_type, content_id, content_title, release_title, release_url, release_size, success, failure_reason, slot_path, preload)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+			time.Now().UnixMilli(),
+			p.ContentType,
+			p.ContentID,
+			p.ContentTitle,
+			p.ReleaseTitle,
+			p.ReleaseURL,
+			p.ReleaseSize,
+			success,
+			p.FailureReason,
+			p.SlotPath,
+		)
+		return err
+	})
 	if err != nil {
 		// Best-effort; don't fail playback
 		return
