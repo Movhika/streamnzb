@@ -217,6 +217,83 @@ func TestGetOrDownloadNZBSelectsRequestedEpisode(t *testing.T) {
 	s.Close()
 }
 
+func TestCreateSessionKeepsBroadCandidatesWhenEpisodeMatchUnknown(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	nzbData := &nzb.NZB{Files: []nzb.File{
+		{Subject: "Altered.Carbon.Release.A.part02.rar", Segments: []nzb.Segment{{ID: "<a>", Bytes: 310}}},
+		{Subject: "Altered.Carbon.Release.B.part01.rar", Segments: []nzb.Segment{{ID: "<b>", Bytes: 420}}},
+		{Subject: "Altered.Carbon.Release.A.part01.rar", Segments: []nzb.Segment{{ID: "<c>", Bytes: 300}}},
+		{Subject: "Altered.Carbon.Release.B.part02.rar", Segments: []nzb.Segment{{ID: "<d>", Bytes: 410}}},
+	}}
+
+	s, err := m.CreateSession("sess-broad", nzbData, nil, &AvailReportMeta{Season: 2, Episode: 1})
+	if err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+	if len(s.Files) != 4 {
+		t.Fatalf("expected broad fallback candidate set, got %d files", len(s.Files))
+	}
+	var sawA, sawB bool
+	for _, file := range s.Files {
+		name := file.Name()
+		if strings.Contains(name, "Release.A") {
+			sawA = true
+		}
+		if strings.Contains(name, "Release.B") {
+			sawB = true
+		}
+	}
+	if !sawA || !sawB {
+		t.Fatalf("expected files from both fallback groups, sawA=%v sawB=%v", sawA, sawB)
+	}
+	s.Close()
+}
+
+func TestGetOrDownloadNZBKeepsBroadCandidatesWhenEpisodeMatchUnknown(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	data := marshalTestNZB(t, &nzb.NZB{Files: []nzb.File{
+		{Subject: "Altered.Carbon.Release.A.part02.rar", Segments: []nzb.Segment{{ID: "<a>", Bytes: 310}}},
+		{Subject: "Altered.Carbon.Release.B.part01.rar", Segments: []nzb.Segment{{ID: "<b>", Bytes: 420}}},
+		{Subject: "Altered.Carbon.Release.A.part01.rar", Segments: []nzb.Segment{{ID: "<c>", Bytes: 300}}},
+		{Subject: "Altered.Carbon.Release.B.part02.rar", Segments: []nzb.Segment{{ID: "<d>", Bytes: 410}}},
+	}})
+	idx := &fakeIndexer{data: data}
+	s, err := m.CreateDeferredSession("sess-broad-lazy", "https://example.invalid/get?nzb=1&apikey=test", nil, idx, &AvailReportMeta{Season: 2, Episode: 1}, "series", "tmdb:1:2:1")
+	if err != nil {
+		t.Fatalf("CreateDeferredSession returned error: %v", err)
+	}
+	if _, err := s.GetOrDownloadNZB(m); err != nil {
+		t.Fatalf("GetOrDownloadNZB returned error: %v", err)
+	}
+	if len(s.Files) != 4 {
+		t.Fatalf("expected broad fallback candidate set after lazy load, got %d files", len(s.Files))
+	}
+	var sawA, sawB bool
+	for _, file := range s.Files {
+		name := file.Name()
+		if strings.Contains(name, "Release.A") {
+			sawA = true
+		}
+		if strings.Contains(name, "Release.B") {
+			sawB = true
+		}
+	}
+	if !sawA || !sawB {
+		t.Fatalf("expected files from both fallback groups after lazy load, sawA=%v sawB=%v", sawA, sawB)
+	}
+	s.Close()
+}
+
 func TestGetOrDownloadNZBDownloadsKeylessURL(t *testing.T) {
 	logger.Init("ERROR")
 
@@ -506,6 +583,30 @@ func TestSessionCloseClosesPlaybackStream(t *testing.T) {
 	}
 	if s.playback != nil {
 		t.Fatal("expected playback state to be cleared on session close")
+	}
+}
+
+func TestSelectedPlaybackFileSurvivesResetPlaybackStream(t *testing.T) {
+	logger.Init("ERROR")
+
+	s := &Session{}
+	s.SetSelectedPlaybackFile("Altered.Carbon.S02E03.1080p.mkv")
+	spec := PlaybackStreamSpec{Key: "sess-1|video.mkv|100", Name: "video.mkv", Size: 100}
+
+	lease, _, err := s.AcquirePlaybackStream(spec, func() (io.ReadSeekCloser, error) {
+		return &fakePlaybackStream{}, nil
+	})
+	if err != nil {
+		t.Fatalf("AcquirePlaybackStream error: %v", err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("closing lease: %v", err)
+	}
+
+	s.ResetPlaybackStream()
+
+	if got := s.SelectedPlaybackFile(); got != "Altered.Carbon.S02E03.1080p.mkv" {
+		t.Fatalf("SelectedPlaybackFile() = %q, want %q", got, "Altered.Carbon.S02E03.1080p.mkv")
 	}
 }
 

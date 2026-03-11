@@ -22,6 +22,7 @@ type ArchiveBlueprint struct {
 	Parts        []VirtualPartDef
 	IsCompressed bool
 	AnyEncrypted bool
+	Target       EpisodeTarget
 }
 
 type VirtualPartDef struct {
@@ -207,7 +208,7 @@ func ScanArchive(files []UnpackableFile, password string, target EpisodeTarget) 
 		firstVols = firstVols[:maxFirstVolumesToScan]
 		logger.Debug("Limiting RAR first-volume scan to fail fast", "trying", len(firstVols), "skipped", tryingCount-len(firstVols))
 	}
-	logger.Debug("Scanning RAR first volumes", "count", len(firstVols), "total", len(rarFiles))
+	logger.Debug("Scanning RAR first volumes", "target", target, "count", len(firstVols), "total", len(rarFiles))
 
 	start := time.Now()
 	parts := scanVolumesParallel(firstVols, password)
@@ -350,7 +351,15 @@ func scanVolumesParallel(files []UnpackableFile, password string) []filePart {
 }
 
 func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile, password string, target EpisodeTarget) (*ArchiveBlueprint, error) {
-	bestName := selectMainFile(parts, target)
+	bestName, err := selectMainFile(parts, target)
+	if err != nil {
+		logger.Debug("RAR blueprint direct media selection failed for requested episode, trying nested archive", "target", target, "err", err)
+		if bp, nestedErr := tryNestedArchive(parts, password, target); nestedErr == nil {
+			return bp, nil
+		}
+		return nil, err
+	}
+	logger.Debug("RAR blueprint main file decision", "target", target, "selected", bestName, "parts", len(parts), "rar_files", len(allRarFiles))
 
 	if bestName != "" {
 		var mediaTotal, archiveTotal int64
@@ -371,10 +380,11 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile, password str
 	}
 
 	if bestName == "" {
+		logger.Debug("RAR blueprint found no direct media match, trying nested archive", "target", target, "parts", len(parts))
 		return tryNestedArchive(parts, password, target)
 	}
 
-	logger.Info("Selected main media", "name", bestName)
+	logger.Info("Selected main media", "target", target, "name", bestName)
 
 	mainParts := collectParts(parts, bestName)
 	sortByVolume(mainParts)
@@ -402,6 +412,7 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile, password str
 		TotalSize:    headerSize,
 		IsCompressed: compressed,
 		AnyEncrypted: anyEncrypted,
+		Target:       target,
 	}
 
 	var vOffset int64
@@ -428,7 +439,7 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile, password str
 	return bp, nil
 }
 
-func selectMainFile(parts []filePart, target EpisodeTarget) string {
+func selectMainFile(parts []filePart, target EpisodeTarget) (string, error) {
 	type mediaChoice struct {
 		size  int64
 		order int
@@ -450,8 +461,15 @@ func selectMainFile(parts []filePart, target EpisodeTarget) string {
 	for name, choice := range choices {
 		candidates = append(candidates, namedEpisodeCandidate{Name: name, Size: choice.size, Order: choice.order})
 	}
-	if best, ok := selectEpisodeCandidate(candidates, target); ok {
-		return best.Name
+	if len(candidates) == 0 {
+		logger.Debug("RAR main file selection found no media candidates", "target", target)
+		return "", nil
+	}
+	if best, ok, err := selectEpisodeCandidateOrError(candidates, target, "rar_main_media"); err != nil {
+		return "", err
+	} else if ok {
+		logger.Debug("RAR main file selected by episode match", "target", target, "name", best.Name, "size", best.Size, "order", best.Order, "candidates", len(candidates))
+		return best.Name, nil
 	}
 	var best namedEpisodeCandidate
 	found := false
@@ -461,7 +479,8 @@ func selectMainFile(parts []filePart, target EpisodeTarget) string {
 			found = true
 		}
 	}
-	return best.Name
+	logger.Debug("RAR main file selection fell back to largest candidate", "target", target, "name", best.Name, "size", best.Size, "order", best.Order, "candidates", len(candidates))
+	return best.Name, nil
 }
 
 func collectParts(parts []filePart, name string) []filePart {
@@ -654,9 +673,12 @@ func tryNestedArchive(parts []filePart, password string, target EpisodeTarget) (
 	}
 	bestSet := ""
 	maxSize := int64(0)
-	if best, ok := selectEpisodeCandidate(candidates, target); ok {
+	if best, ok, err := selectEpisodeCandidateOrError(candidates, target, "nested_archive_sets"); err != nil {
+		return nil, err
+	} else if ok {
 		bestSet = best.Name
 		maxSize = best.Size
+		logger.Debug("Nested archive set selected by episode match", "target", target, "set", bestSet, "size", maxSize, "candidates", len(candidates))
 	} else {
 		for _, candidate := range candidates {
 			if candidate.Size > maxSize {
@@ -664,6 +686,7 @@ func tryNestedArchive(parts []filePart, password string, target EpisodeTarget) (
 				bestSet = candidate.Name
 			}
 		}
+		logger.Debug("Nested archive set selection fell back to largest candidate", "target", target, "set", bestSet, "size", maxSize, "candidates", len(candidates))
 	}
 
 	nestedParts := sets[bestSet].parts

@@ -2515,6 +2515,13 @@ func newPlaybackStreamSpec(sessionID, name string, size int64) session.PlaybackS
 	}
 }
 
+func cacheReturnedPlaybackBlueprint(sess *session.Session, bp interface{}) {
+	if sess == nil || bp == nil {
+		return
+	}
+	sess.SetBlueprint(bp)
+}
+
 // openPlaybackSource opens a fresh reader for the currently selected playback source.
 // Callers decide whether that reader is used as a disposable probe stream or as the
 // request-local body stream for a single /play response.
@@ -2581,9 +2588,7 @@ func (s *Server) openPlaybackSource(ctx context.Context, sess *session.Session) 
 		target = unpack.EpisodeTarget{Season: sess.ContentIDs.Season, Episode: sess.ContentIDs.Episode}
 	}
 	stream, name, size, bp, err := unpack.GetMediaStreamForEpisode(ctx, unpackFiles, sess.Blueprint, password, target)
-	if bp != nil && sess.Blueprint == nil {
-		sess.SetBlueprint(bp)
-	}
+	cacheReturnedPlaybackBlueprint(sess, bp)
 	if err != nil {
 		logger.Error("Failed to open media stream", "id", sessionID, "err", err)
 		s.reportBadRelease(sess, err)
@@ -2592,6 +2597,7 @@ func (s *Server) openPlaybackSource(ctx context.Context, sess *session.Session) 
 		}
 		return nil, "", 0, err
 	}
+	sess.SetSelectedPlaybackFile(name)
 	return stream, name, size, nil
 }
 
@@ -2714,7 +2720,8 @@ func (s *Server) getOrResolveSession(ctx context.Context, sessionID string, devi
 func (s *Server) reportBadRelease(sess *session.Session, streamErr error) {
 	errMsg := streamErr.Error()
 	if !strings.Contains(errMsg, "compressed") && !strings.Contains(errMsg, "encrypted") &&
-		!strings.Contains(errMsg, "EOF") && !errors.Is(streamErr, unpack.ErrTooManyZeroFills) {
+		!strings.Contains(errMsg, "EOF") && !errors.Is(streamErr, unpack.ErrTooManyZeroFills) &&
+		!errors.Is(streamErr, unpack.ErrEpisodeTargetNotFound) {
 		return
 	}
 	if s.availReporter != nil {
@@ -2750,6 +2757,7 @@ func (s *Server) recordAttemptParams(sess *session.Session) persistence.RecordAt
 		ReleaseTitle: sess.ReportReleaseName(),
 		ReleaseURL:   sess.ReleaseURL(),
 		ReleaseSize:  sess.ReportSize(),
+		ServedFile:   sess.SelectedPlaybackFile(),
 		SlotPath:     sess.ID,
 	}
 }
@@ -2878,9 +2886,7 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		target = unpack.EpisodeTarget{Season: sess.ContentIDs.Season, Episode: sess.ContentIDs.Episode}
 	}
 	stream, name, size, bp, err := unpack.GetMediaStreamForEpisode(mergedCtx, unpackFiles, sess.Blueprint, password, target)
-	if bp != nil && sess.Blueprint == nil {
-		sess.SetBlueprint(bp)
-	}
+	cacheReturnedPlaybackBlueprint(sess, bp)
 	if err != nil {
 		logger.Error("Failed to open media stream", "err", err)
 		http.Error(w, "Failed to open media stream: "+err.Error(), http.StatusInternalServerError)

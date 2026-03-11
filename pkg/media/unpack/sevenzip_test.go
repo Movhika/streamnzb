@@ -141,3 +141,36 @@ func TestGetMediaStreamForEpisodeUsesCachedSevenZipBlueprintFiles(t *testing.T) 
 		t.Fatalf("expected mapped stream %q, got %q", "cdef", string(data))
 	}
 }
+
+func TestGetMediaStreamForEpisodeSkipsCachedSevenZipBlueprintForDifferentTarget(t *testing.T) {
+	oldLogger := logger.Log
+	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	defer func() {
+		logger.Log = oldLogger
+	}()
+
+	files := []UnpackableFile{
+		&memoryUnpackableFile{name: "Show.S01E01.mkv", data: []byte("ep1")},
+		&memoryUnpackableFile{name: "Show.S01E04.mkv", data: []byte("ep4")},
+	}
+	cachedBP := &SevenZipBlueprint{
+		MainFileName: "Show.S01E04.mkv",
+		TotalSize:    3,
+		FileOffset:   0,
+		Files:        []UnpackableFile{&memoryUnpackableFile{name: "pack.7z.001", data: []byte("ep4")}},
+		Target:       EpisodeTarget{Season: 1, Episode: 4},
+	}
+
+	stream, name, _, bp, err := GetMediaStreamForEpisode(context.Background(), files, cachedBP, "", EpisodeTarget{Season: 1, Episode: 1})
+	if err != nil {
+		t.Fatalf("GetMediaStreamForEpisode returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if name != "Show.S01E01.mkv" {
+		t.Fatalf("expected requested episode file, got %q", name)
+	}
+	if bp == cachedBP {
+		t.Fatal("expected cached 7z blueprint to be replaced")
+	}
+}

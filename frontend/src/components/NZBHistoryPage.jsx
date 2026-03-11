@@ -29,6 +29,7 @@ function buildBadMatchReport(attempt) {
 		['Content title', attempt.content_title || '—'],
 		['Content ID', attempt.content_id || '—'],
 		['Release title', attempt.release_title || '—'],
+		['Served file', attempt.served_file || '—'],
 		['Release size', formatSize(attempt.release_size)],
 		['Result', formatAttemptResult(attempt)],
 		['Failure reason', attempt.failure_reason || '—'],
@@ -154,6 +155,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                         <th className="text-left py-2 font-medium">Time</th>
                         <th className="text-left py-2 font-medium">Content</th>
                         <th className="text-left py-2 font-medium">Release</th>
+	                        <th className="text-left py-2 font-medium">Served file</th>
                         <th className="text-right py-2 font-medium">Size</th>
                         <th className="text-center py-2 font-medium">Result</th>
                         <th className="text-left py-2 font-medium">Reason</th>
@@ -172,6 +174,9 @@ export function NZBHistoryPage({ refreshTrigger }) {
                           <td className="py-2 max-w-[220px] truncate" title={a.release_title}>
                             {a.release_title}
                           </td>
+	                          <td className="py-2 max-w-[220px] truncate text-muted-foreground" title={a.served_file}>
+	                            {a.served_file || '—'}
+	                          </td>
                           <td className="py-2 text-right text-muted-foreground">
                             {formatSize(a.release_size)}
                           </td>

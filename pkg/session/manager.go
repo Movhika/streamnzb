@@ -59,15 +59,15 @@ type Session struct {
 	Files []*loader.File
 	File  *loader.File
 
-	Blueprint         interface{}
-	CreatedAt         time.Time
-	LastAccess        time.Time
-	ActivePlays       int32
+	Blueprint           interface{}
+	CreatedAt           time.Time
+	LastAccess          time.Time
+	ActivePlays         int32
 	PlaybackValidatedAt time.Time // when probe/prepare proved the file is playable; separate from playback end bookkeeping
-	PlaybackStartedAt time.Time // when ActivePlays went from 0 to >0; used to evict stuck sessions
-	PlaybackEndedAt   time.Time // when ActivePlays went to 0; used to evict session soon after stream stops
-	Clients           map[string]time.Time
-	mu                sync.Mutex
+	PlaybackStartedAt   time.Time // when ActivePlays went from 0 to >0; used to evict stuck sessions
+	PlaybackEndedAt     time.Time // when ActivePlays went to 0; used to evict session soon after stream stops
+	Clients             map[string]time.Time
+	mu                  sync.Mutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -77,8 +77,9 @@ type Session struct {
 	ContentIDs *AvailReportMeta
 
 	// ContentType and ContentID are the request context (e.g. "movie"/"series" and "tt123" or "tmdb:123:1:2") for NZB attempt history.
-	ContentType string
-	ContentID   string
+	ContentType          string
+	ContentID            string
+	selectedPlaybackFile string
 
 	downloadURL string
 	indexer     indexer.Indexer
@@ -207,6 +208,18 @@ func (s *Session) SetBlueprint(bp interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Blueprint = bp
+}
+
+func (s *Session) SetSelectedPlaybackFile(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.selectedPlaybackFile = name
+}
+
+func (s *Session) SelectedPlaybackFile() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.selectedPlaybackFile
 }
 
 func (s *Session) ensurePlaybackStateLocked() *playbackStreamState {
@@ -514,7 +527,7 @@ func selectSessionContentFiles(nzbData *nzb.NZB, contentIDs *AvailReportMeta) []
 		return nil
 	}
 	if contentIDs != nil && contentIDs.Season > 0 && contentIDs.Episode > 0 {
-		if files := nzbData.GetContentFilesForEpisode(contentIDs.Season, contentIDs.Episode); len(files) > 0 {
+		if files := nzbData.GetSessionContentFilesForEpisode(contentIDs.Season, contentIDs.Episode); len(files) > 0 {
 			return files
 		}
 	}
@@ -937,6 +950,7 @@ func (s *Session) Close() {
 		}
 		s.playback = nil
 	}
+	s.selectedPlaybackFile = ""
 	// Drop segment caches so memory is released immediately instead of waiting for GC.
 	n := 0
 	for _, f := range s.Files {

@@ -388,21 +388,36 @@ func SetLevel(levelStr string) {
 }
 
 func Trace(msg string, args ...any) {
+	if Log == nil {
+		return
+	}
 	Log.Log(context.TODO(), slog.LevelDebug-1, msg, args...)
 }
 
 func Debug(msg string, args ...any) {
+	if Log == nil {
+		return
+	}
 	Log.Debug(msg, args...)
 }
 
 func Info(msg string, args ...any) {
+	if Log == nil {
+		return
+	}
 	Log.Info(msg, args...)
 }
 
 func Warn(msg string, args ...any) {
+	if Log == nil {
+		return
+	}
 	Log.Warn(msg, args...)
 }
 
 func Error(msg string, args ...any) {
+	if Log == nil {
+		return
+	}
 	Log.Error(msg, args...)
 }

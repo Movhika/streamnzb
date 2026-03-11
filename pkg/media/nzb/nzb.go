@@ -185,6 +185,25 @@ func (n *NZB) GetContentFilesForEpisode(season, episode int) []*FileInfo {
 	return selectLargestContentFiles(infos)
 }
 
+func (n *NZB) GetSessionContentFilesForEpisode(season, episode int) []*FileInfo {
+	infos := n.GetFileInfo()
+	if contentFiles := selectEpisodeContentFiles(infos, season, episode); len(contentFiles) > 0 {
+		logger.Debug("Session episode content selection matched targeted NZB group",
+			"season", season,
+			"episode", episode,
+			"files", len(contentFiles),
+			"samples", sampleContentFilenames(contentFiles, 6))
+		return contentFiles
+	}
+	contentFiles := selectAllContentFiles(infos)
+	logger.Debug("Session episode content selection fell back to all content candidates",
+		"season", season,
+		"episode", episode,
+		"files", len(contentFiles),
+		"samples", sampleContentFilenames(contentFiles, 8))
+	return contentFiles
+}
+
 func selectEpisodeContentFiles(infos []*FileInfo, season, episode int) []*FileInfo {
 	if season <= 0 || episode <= 0 {
 		return nil
@@ -225,6 +244,14 @@ func selectEpisodeContentFiles(infos []*FileInfo, season, episode int) []*FileIn
 				choice.rank = rank
 			}
 		}
+		logger.Debug("NZB episode content group evaluated",
+			"season", season,
+			"episode", episode,
+			"pattern", pattern,
+			"files", len(files),
+			"rank", choice.rank,
+			"size", choice.size,
+			"samples", sampleContentFilenames(files, 3))
 		if choice.rank == 0 {
 			continue
 		}
@@ -237,9 +264,22 @@ func selectEpisodeContentFiles(infos []*FileInfo, season, episode int) []*FileIn
 	}
 
 	if !found {
+		logger.Debug("NZB episode selection found no matching content group",
+			"season", season,
+			"episode", episode,
+			"groups", len(groups))
 		return nil
 	}
-	return collectPatternContentFiles(infos, best.pattern)
+	contentFiles := collectPatternContentFiles(infos, best.pattern)
+	logger.Debug("NZB episode selection chose content group",
+		"season", season,
+		"episode", episode,
+		"pattern", best.pattern,
+		"rank", best.rank,
+		"size", best.size,
+		"files", len(contentFiles),
+		"samples", sampleContentFilenames(contentFiles, 4))
+	return contentFiles
 }
 
 func selectLargestContentFiles(infos []*FileInfo) []*FileInfo {
@@ -277,6 +317,18 @@ func selectLargestContentFiles(infos []*FileInfo) []*FileInfo {
 	return contentFiles
 }
 
+func selectAllContentFiles(infos []*FileInfo) []*FileInfo {
+	contentFiles := make([]*FileInfo, 0, len(infos))
+	for _, info := range infos {
+		if !isContentCandidate(info) {
+			continue
+		}
+		contentFiles = append(contentFiles, info)
+	}
+	sortContentFiles(contentFiles)
+	return contentFiles
+}
+
 func collectPatternContentFiles(infos []*FileInfo, pattern string) []*FileInfo {
 	if pattern == "" {
 		return nil
@@ -306,9 +358,49 @@ func episodeMatchRank(filename string, season, episode int) int {
 	}
 	parsed := searchparser.ParseReleaseTitle(filename)
 	if parsed == nil {
+		logger.Debug("NZB episode filename parse returned nil",
+			"filename", filename,
+			"season", season,
+			"episode", episode)
 		return 0
 	}
-	return parsed.EpisodeMatchRank(season, episode)
+	rank := parsed.EpisodeMatchRank(season, episode)
+	logger.Debug("NZB episode filename rank evaluated",
+		"filename", filename,
+		"requested_season", season,
+		"requested_episode", episode,
+		"rank", rank,
+		"parsed_season", parsed.Season,
+		"parsed_episode", parsed.Episode,
+		"parsed_seasons", parsed.Seasons,
+		"parsed_episodes", parsed.Episodes,
+		"complete", parsed.Complete,
+		"episode_code", parsed.EpisodeCode)
+	return rank
+}
+
+func sampleContentFilenames(files []*FileInfo, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	samples := make([]string, 0, min(limit, len(files)))
+	for _, info := range files {
+		if info == nil {
+			continue
+		}
+		samples = append(samples, info.Filename)
+		if len(samples) >= limit {
+			break
+		}
+	}
+	return samples
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func sortContentFiles(files []*FileInfo) {

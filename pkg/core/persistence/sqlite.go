@@ -32,13 +32,14 @@ const (
 		release_title TEXT NOT NULL,
 		release_url TEXT,
 		release_size INTEGER,
+		served_file TEXT,
 		success INTEGER NOT NULL,
 		failure_reason TEXT,
 		slot_path TEXT,
 		preload INTEGER NOT NULL DEFAULT 0
 	);`
 
-	nzbAttemptsIndexTried = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_tried_at ON nzb_attempts(tried_at DESC);`
+	nzbAttemptsIndexTried   = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_tried_at ON nzb_attempts(tried_at DESC);`
 	nzbAttemptsIndexContent = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_content ON nzb_attempts(content_type, content_id);`
 )
 
@@ -66,7 +67,10 @@ func initSchema(db *sql.DB) error {
 			return fmt.Errorf("schema: %w", err)
 		}
 	}
-	return migrateNzbAttemptsPreload(db)
+	if err := migrateNzbAttemptsPreload(db); err != nil {
+		return err
+	}
+	return migrateNzbAttemptsServedFile(db)
 }
 
 // migrateNzbAttemptsPreload adds preload column for existing DBs (no-op if already present).
@@ -74,6 +78,14 @@ func migrateNzbAttemptsPreload(db *sql.DB) error {
 	_, err := db.Exec(`ALTER TABLE nzb_attempts ADD COLUMN preload INTEGER NOT NULL DEFAULT 0`)
 	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("migrate nzb_attempts.preload: %w", err)
+	}
+	return nil
+}
+
+func migrateNzbAttemptsServedFile(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE nzb_attempts ADD COLUMN served_file TEXT`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate nzb_attempts.served_file: %w", err)
 	}
 	return nil
 }

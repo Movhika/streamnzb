@@ -104,3 +104,31 @@ func TestCompressionTypeForEpisodeUsesSelectedPackGroup(t *testing.T) {
 		t.Fatalf("expected direct compression for requested episode, got %q", ct)
 	}
 }
+
+func TestGetSessionContentFilesForEpisodeKeepsAllCandidatesWhenNoEpisodeMatchExists(t *testing.T) {
+	logger.Init("ERROR")
+
+	n := &NZB{Files: []File{
+		{Subject: "Altered.Carbon.Release.A.part02.rar", Segments: []Segment{{ID: "<a>", Bytes: 310}}},
+		{Subject: "Altered.Carbon.Release.B.part01.rar", Segments: []Segment{{ID: "<b>", Bytes: 420}}},
+		{Subject: "Altered.Carbon.Release.A.part01.rar", Segments: []Segment{{ID: "<c>", Bytes: 300}}},
+		{Subject: "Altered.Carbon.Release.B.part02.rar", Segments: []Segment{{ID: "<d>", Bytes: 410}}},
+	}}
+
+	files := n.GetSessionContentFilesForEpisode(2, 1)
+	if len(files) != 4 {
+		t.Fatalf("expected all content candidates, got %d", len(files))
+	}
+	var sawA, sawB bool
+	for _, file := range files {
+		if strings.Contains(file.Filename, "Release.A") {
+			sawA = true
+		}
+		if strings.Contains(file.Filename, "Release.B") {
+			sawB = true
+		}
+	}
+	if !sawA || !sawB {
+		t.Fatalf("expected files from both fallback groups, sawA=%v sawB=%v", sawA, sawB)
+	}
+}

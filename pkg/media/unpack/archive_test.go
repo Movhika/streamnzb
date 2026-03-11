@@ -1,0 +1,86 @@
+package unpack
+
+import (
+	"context"
+	"errors"
+	"io"
+	"testing"
+)
+
+func TestGetMediaStreamForEpisodeSkipsCachedDirectBlueprintForDifferentTarget(t *testing.T) {
+	discardTestLogger(t)
+
+	files := []UnpackableFile{
+		&memoryUnpackableFile{name: "Show.S01E01.mkv", data: []byte("ep1")},
+		&memoryUnpackableFile{name: "Show.S01E04.mkv", data: []byte("ep4")},
+	}
+	cachedBP := &DirectBlueprint{FileName: "Show.S01E04.mkv", FileIndex: 1, Target: EpisodeTarget{Season: 1, Episode: 4}}
+
+	stream, name, _, bp, err := GetMediaStreamForEpisode(context.Background(), files, cachedBP, "", EpisodeTarget{Season: 1, Episode: 1})
+	if err != nil {
+		t.Fatalf("GetMediaStreamForEpisode returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if name != "Show.S01E01.mkv" {
+		t.Fatalf("expected requested episode file, got %q", name)
+	}
+	if bp == cachedBP {
+		t.Fatal("expected cached direct blueprint to be replaced")
+	}
+	data, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("failed to read stream: %v", err)
+	}
+	if string(data) != "ep1" {
+		t.Fatalf("expected episode 1 stream data, got %q", string(data))
+	}
+}
+
+func TestGetMediaStreamForEpisodeSkipsCachedFailureForDifferentTarget(t *testing.T) {
+	discardTestLogger(t)
+
+	files := []UnpackableFile{
+		&memoryUnpackableFile{name: "Show.S01E01.mkv", data: []byte("ep1")},
+	}
+	cachedBP := &FailedBlueprint{Err: io.EOF, Target: EpisodeTarget{Season: 1, Episode: 4}}
+
+	stream, name, _, bp, err := GetMediaStreamForEpisode(context.Background(), files, cachedBP, "", EpisodeTarget{Season: 1, Episode: 1})
+	if err != nil {
+		t.Fatalf("GetMediaStreamForEpisode returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if name != "Show.S01E01.mkv" {
+		t.Fatalf("expected requested episode file, got %q", name)
+	}
+	if bp == cachedBP {
+		t.Fatal("expected cached failed blueprint to be replaced")
+	}
+}
+
+func TestGetMediaStreamForEpisodeFailsWhenRequestedEpisodeMissingFromDirectFiles(t *testing.T) {
+	discardTestLogger(t)
+
+	files := []UnpackableFile{
+		&memoryUnpackableFile{name: "Show.S01E04.mkv", data: []byte("ep4")},
+		&memoryUnpackableFile{name: "Show.S01E06.mkv", data: []byte("ep6")},
+	}
+
+	stream, name, _, _, err := GetMediaStreamForEpisode(context.Background(), files, nil, "", EpisodeTarget{Season: 1, Episode: 1})
+	if err == nil {
+		if stream != nil {
+			stream.Close()
+		}
+		t.Fatal("expected missing-episode error")
+	}
+	if !errors.Is(err, ErrEpisodeTargetNotFound) {
+		t.Fatalf("expected ErrEpisodeTargetNotFound, got %v", err)
+	}
+	if name != "" {
+		t.Fatalf("expected no selected file, got %q", name)
+	}
+	if stream != nil {
+		t.Fatal("expected no stream on missing episode")
+	}
+}

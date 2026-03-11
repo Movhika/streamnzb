@@ -20,6 +20,7 @@ type SevenZipBlueprint struct {
 	FileOffset   int64
 	Files        []UnpackableFile
 	Encrypted    bool
+	Target       EpisodeTarget
 }
 
 func CreateSevenZipBlueprint(files []UnpackableFile, firstVolName string, password string, target EpisodeTarget) (*SevenZipBlueprint, error) {
@@ -74,7 +75,9 @@ func CreateSevenZipBlueprint(files []UnpackableFile, firstVolName string, passwo
 			bestSize = int64(fi.Size)
 		}
 	}
-	if best, ok := selectEpisodeCandidate(candidates, target); ok {
+	if best, ok, err := selectEpisodeCandidateOrError(candidates, target, "sevenzip_media"); err != nil {
+		return nil, err
+	} else if ok {
 		bestIdx = best.Index
 	}
 
@@ -89,6 +92,7 @@ func CreateSevenZipBlueprint(files []UnpackableFile, firstVolName string, passwo
 		FileOffset:   fi.Offset,
 		Files:        archiveFiles,
 		Encrypted:    fi.Encrypted,
+		Target:       target,
 	}
 	logger.Debug("Created 7z blueprint", "name", bp.MainFileName, "offset", bp.FileOffset, "size", bp.TotalSize, "encrypted", bp.Encrypted)
 

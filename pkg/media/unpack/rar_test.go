@@ -1,6 +1,8 @@
 package unpack
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -80,5 +82,40 @@ func TestAggregateRemainingVolumesFromStartFallsBackToSegmentDetectionWithoutPro
 	}
 	if got := parts[1].packedSize; got != 300 {
 		t.Fatalf("expected fallback packed size 300, got %d", got)
+	}
+}
+
+func TestGetMediaStreamForEpisodeSkipsCachedArchiveBlueprintForDifferentTarget(t *testing.T) {
+	discardTestLogger(t)
+
+	files := []UnpackableFile{
+		&memoryUnpackableFile{name: "Show.S01E01.mkv", data: []byte("ep1")},
+		&memoryUnpackableFile{name: "Show.S01E04.mkv", data: []byte("ep4")},
+	}
+	cachedBP := &ArchiveBlueprint{MainFileName: "Show.S01E04.mkv", Target: EpisodeTarget{Season: 1, Episode: 4}}
+
+	stream, name, _, bp, err := GetMediaStreamForEpisode(context.Background(), files, cachedBP, "", EpisodeTarget{Season: 1, Episode: 1})
+	if err != nil {
+		t.Fatalf("GetMediaStreamForEpisode returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if name != "Show.S01E01.mkv" {
+		t.Fatalf("expected requested episode file, got %q", name)
+	}
+	if bp == cachedBP {
+		t.Fatal("expected cached archive blueprint to be replaced")
+	}
+}
+
+func TestTryNestedArchiveFailsWhenRequestedEpisodeMissing(t *testing.T) {
+	discardTestLogger(t)
+
+	_, err := tryNestedArchive([]filePart{
+		{name: "Show.S01E04.rar", packedSize: 100},
+		{name: "Show.S01E04.r00", packedSize: 100},
+	}, "", EpisodeTarget{Season: 1, Episode: 1})
+	if !errors.Is(err, ErrEpisodeTargetNotFound) {
+		t.Fatalf("expected ErrEpisodeTargetNotFound, got %v", err)
 	}
 }

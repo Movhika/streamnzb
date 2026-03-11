@@ -95,3 +95,30 @@ func TestRecordAttemptUsesSharedWriteLock(t *testing.T) {
 		t.Fatal("expected resolved attempt to be marked successful")
 	}
 }
+
+func TestRecordAttemptPersistsServedFile(t *testing.T) {
+	mgr := newTestStateManager(t)
+	mgr.RecordPreloadAttempt(RecordAttemptParams{SlotPath: "slot-pack", ReleaseTitle: "Season pack"})
+
+	wantServedFile := "Altered.Carbon.S02E03.1080p.mkv"
+	mgr.RecordAttempt(RecordAttemptParams{
+		SlotPath:     "slot-pack",
+		ReleaseTitle: "Season pack",
+		ServedFile:   wantServedFile,
+		Success:      true,
+	})
+
+	list, err := mgr.ListAttempts(ListAttemptsOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAttempts: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected one resolved attempt, got %d", len(list))
+	}
+	if got := list[0].ServedFile; got != wantServedFile {
+		t.Fatalf("ServedFile = %q, want %q", got, wantServedFile)
+	}
+	if list[0].Preload {
+		t.Fatal("expected preload row to be resolved")
+	}
+}

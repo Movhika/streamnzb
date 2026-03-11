@@ -1,8 +1,10 @@
 package unpack
 
 import (
+	"fmt"
 	"path/filepath"
 
+	"streamnzb/pkg/core/logger"
 	searchparser "streamnzb/pkg/search/parser"
 )
 
@@ -42,22 +44,67 @@ func selectEpisodeCandidate(candidates []namedEpisodeCandidate, target EpisodeTa
 			found = true
 		}
 	}
+	if found {
+		logger.Debug("Unpack episode candidate selected",
+			"target", target,
+			"name", best.Name,
+			"rank", bestRank,
+			"size", best.Size,
+			"order", best.Order,
+			"candidates", len(candidates))
+	} else {
+		logger.Debug("Unpack episode candidate selection found no match",
+			"target", target,
+			"candidates", len(candidates))
+	}
 	return best, found
+}
+
+func selectEpisodeCandidateOrError(candidates []namedEpisodeCandidate, target EpisodeTarget, scope string) (namedEpisodeCandidate, bool, error) {
+	if best, ok := selectEpisodeCandidate(candidates, target); ok {
+		return best, true, nil
+	}
+	if !target.Valid() || len(candidates) == 0 {
+		return namedEpisodeCandidate{}, false, nil
+	}
+	err := fmt.Errorf("%w: season=%d episode=%d scope=%s candidates=%d", ErrEpisodeTargetNotFound, target.Season, target.Episode, scope, len(candidates))
+	logger.Warn("Requested episode not found in candidate set",
+		"target", target,
+		"scope", scope,
+		"candidates", len(candidates),
+		"err", err)
+	return namedEpisodeCandidate{}, false, err
 }
 
 func episodeNameMatchRank(name string, target EpisodeTarget) int {
 	if !target.Valid() {
 		return 0
 	}
-	parsed := searchparser.ParseReleaseTitle(filepath.Base(name))
+	baseName := filepath.Base(name)
+	parsed := searchparser.ParseReleaseTitle(baseName)
 	if parsed == nil {
+		logger.Debug("Unpack episode candidate parse returned nil",
+			"target", target,
+			"name", baseName)
 		return 0
 	}
-	return parsed.EpisodeMatchRank(target.Season, target.Episode)
+	rank := parsed.EpisodeMatchRank(target.Season, target.Episode)
+	logger.Debug("Unpack episode candidate rank evaluated",
+		"target", target,
+		"name", baseName,
+		"rank", rank,
+		"parsed_season", parsed.Season,
+		"parsed_episode", parsed.Episode,
+		"parsed_seasons", parsed.Seasons,
+		"parsed_episodes", parsed.Episodes,
+		"complete", parsed.Complete,
+		"episode_code", parsed.EpisodeCode)
+	return rank
 }
 
-func selectDirectFileIndex(files []UnpackableFile, target EpisodeTarget) int {
+func selectDirectFileIndex(files []UnpackableFile, target EpisodeTarget) (int, error) {
 	firstVideoIdx := -1
+	firstVideoName := ""
 	candidates := make([]namedEpisodeCandidate, 0, len(files))
 	for i, f := range files {
 		name := ExtractFilename(f.Name())
@@ -66,11 +113,31 @@ func selectDirectFileIndex(files []UnpackableFile, target EpisodeTarget) int {
 		}
 		if firstVideoIdx == -1 {
 			firstVideoIdx = i
+			firstVideoName = name
 		}
 		candidates = append(candidates, namedEpisodeCandidate{Name: name, Size: f.Size(), Index: i, Order: len(candidates)})
 	}
-	if best, ok := selectEpisodeCandidate(candidates, target); ok {
-		return best.Index
+	if best, ok, err := selectEpisodeCandidateOrError(candidates, target, "direct_media"); err != nil {
+		return -1, err
+	} else if ok {
+		logger.Debug("Direct file selection matched requested episode",
+			"target", target,
+			"name", best.Name,
+			"index", best.Index,
+			"size", best.Size,
+			"candidates", len(candidates))
+		return best.Index, nil
 	}
-	return firstVideoIdx
+	if firstVideoIdx >= 0 {
+		logger.Debug("Direct file selection fell back to first video",
+			"target", target,
+			"name", firstVideoName,
+			"index", firstVideoIdx,
+			"candidates", len(candidates))
+	} else {
+		logger.Debug("Direct file selection found no video candidates",
+			"target", target,
+			"files", len(files))
+	}
+	return firstVideoIdx, nil
 }
