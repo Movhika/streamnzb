@@ -757,49 +757,12 @@ var streamSinkKey = streamSinkKeyType{}
 const streamSlotPrefix = "stream:"
 
 const (
-	// MaxPreloadFailovers is the maximum number of internal slot failovers allowed when Stremio
-	// is detected to be preloading the next episode while the previous episode is actively playing.
-	// Stremio probes the next episode's streams in the background; we cap failovers so a run of
-	// bad releases doesn't exhaust all candidates while the user is still watching the current one.
-	MaxPreloadFailovers = 5
-
 	// playbackStartupTimeout bounds probe/open work before the first playable response is ready.
 	// Slow archive-heavy startup should fail over rather than keep the player spinning indefinitely.
 	playbackStartupTimeout = 5 * time.Second
 )
 
 var ErrPlaybackStartupTimeout = errors.New("playback startup timeout")
-
-// prevEpisodeContentID returns the content ID for the preceding episode of the same series.
-// Series content IDs are formatted as "imdbID:season:episode", e.g. "tt0944947:2:2".
-// Returns "" when not applicable (movie, episode 1, or unrecognised format).
-func prevEpisodeContentID(contentID string) string {
-	parts := strings.Split(contentID, ":")
-	if len(parts) < 3 {
-		return ""
-	}
-	episode, err := strconv.Atoi(parts[len(parts)-1])
-	if err != nil || episode <= 1 {
-		return ""
-	}
-	prevParts := make([]string, len(parts))
-	copy(prevParts, parts)
-	prevParts[len(prevParts)-1] = strconv.Itoa(episode - 1)
-	return strings.Join(prevParts, ":")
-}
-
-// isStremioPreload returns true when this play request appears to be Stremio background-preloading
-// the next episode: contentType is "series" and the preceding episode is actively being served.
-func (s *Server) isStremioPreload(contentType, contentID string) bool {
-	if contentType != "series" {
-		return false
-	}
-	prevID := prevEpisodeContentID(contentID)
-	if prevID == "" {
-		return false
-	}
-	return s.sessionManager.HasActiveSessionForContentID(contentType, prevID)
-}
 
 type StreamSlotKey struct {
 	StreamID    string
@@ -2032,15 +1995,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		return
 	}
 
-	// Detect if this request is Stremio preloading the next episode while the current one is actively
-	// playing. In preload mode we cap internal failovers so a run of bad releases doesn't burn through
-	// all candidates for content the user hasn't started watching yet.
-	_, preloadContentType, preloadContentID, _, _ := parseStreamSlotID(sessionID)
-	isPreload := s.isStremioPreload(preloadContentType, preloadContentID)
-	if isPreload {
-		logger.Debug("Detected Stremio next-episode preload, limiting failovers", "session", sessionID, "max_failovers", MaxPreloadFailovers)
-	}
-	failoverCount := 0
 	tSec, hasTimeOffset := seek.ParseTSeconds(r.URL.Query().Get("t"))
 	wantTimeOffset := r.Header.Get("Range") == "" && hasTimeOffset
 	var startupInfo seek.StreamStartInfo
@@ -2053,14 +2007,8 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	for {
 		// Skip slots we've already marked as failed; use cache so we never try them.
 		if s.sessionManager.GetSlotFailedDuringPlayback(sessionID) {
-			if isPreload && failoverCount >= MaxPreloadFailovers {
-				logger.Info("Preload failover limit reached, stopping preload", "session", sessionID, "failovers", failoverCount)
-				forceDisconnect(w, s.baseURL)
-				return
-			}
 			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
 				logger.Info("Skipping known-failed slot, trying next fallback", "from", sessionID, "to", nextID)
-				failoverCount++
 				sess, sessionID = nextSess, nextID
 				continue
 			}
@@ -2119,14 +2067,8 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 				}(sessionID, sess.Done())
 			}
 			s.sessionManager.DeleteSession(sessionID)
-			if isPreload && failoverCount >= MaxPreloadFailovers {
-				logger.Info("Preload failover limit reached, stopping preload", "session", sessionID, "failovers", failoverCount)
-				forceDisconnect(w, s.baseURL)
-				return
-			}
 			if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, device); nextID != "" && switchErr == nil {
 				logger.Info("Trying next fallback slot (internal)", "from", sessionID, "to", nextID, "err", prepareErr)
-				failoverCount++
 				sess, sessionID = nextSess, nextID
 				continue
 			}
