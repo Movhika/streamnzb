@@ -80,7 +80,7 @@ func TestSessionCloseClearsHeavyReferences(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	file := loader.NewFile(ctx, &nzb.File{Subject: "test.mkv"}, nil, nil, nil, nil)
+	file := loader.NewFile(ctx, &nzb.File{Subject: "test.mkv"}, nil, nil, nil)
 	s := &Session{
 		ID:          "sess-1",
 		NZB:         &nzb.NZB{Files: []nzb.File{{Subject: "video.mkv", Segments: []nzb.Segment{{ID: "<a>", Bytes: 10}}}}},

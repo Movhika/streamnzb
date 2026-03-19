@@ -140,7 +140,7 @@ func TestDownloadSegmentDeduplicatesConcurrentCalls(t *testing.T) {
 	}()
 
 	fetcher := newDedupBlockingSegmentFetcher([]byte("abc"), nil)
-	f := NewFile(context.Background(), testNZBFileWithSegments(3), nil, nil, fetcher, nil)
+	f := NewFile(context.Background(), testNZBFileWithSegments(3), nil, nil, fetcher)
 
 	results := make(chan []byte, 2)
 	errs := make(chan error, 2)
@@ -185,7 +185,7 @@ func TestConcurrentDownloadFailureCountsOnce(t *testing.T) {
 	}()
 
 	fetcher := newDedupBlockingSegmentFetcher(nil, errors.New("boom"))
-	f := NewFile(context.Background(), testNZBFileWithSegments(3, 4), nil, nil, fetcher, nil)
+	f := NewFile(context.Background(), testNZBFileWithSegments(3, 4), nil, nil, fetcher)
 
 	results := make(chan []byte, 2)
 	errs := make(chan error, 2)
@@ -233,7 +233,7 @@ func TestDownloadSegmentLeaderCancellationDoesNotCancelFollower(t *testing.T) {
 	}()
 
 	fetcher := newDedupBlockingSegmentFetcher([]byte("abc"), nil)
-	f := NewFile(context.Background(), testNZBFileWithSegments(3), nil, nil, fetcher, nil)
+	f := NewFile(context.Background(), testNZBFileWithSegments(3), nil, nil, fetcher)
 
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	defer cancelLeader()
@@ -296,7 +296,7 @@ func TestDownloadSegmentReusesWaiterlessInflightRequest(t *testing.T) {
 	}()
 
 	fetcher := newDedupBlockingSegmentFetcher([]byte("fresh"), nil)
-	f := NewFile(context.Background(), testNZBFileWithSegments(5), nil, nil, fetcher, nil)
+	f := NewFile(context.Background(), testNZBFileWithSegments(5), nil, nil, fetcher)
 
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	defer cancelLeader()
@@ -390,7 +390,7 @@ func TestEnsureSegmentMapUsesActualLastSegmentSize(t *testing.T) {
 	}()
 
 	fetcher := &varyingSizeSegmentFetcher{sizes: []int64{8, 8, 5}}
-	f := NewFile(context.Background(), testNZBFileWithSegments(10, 10, 10), nil, nil, fetcher, nil)
+	f := NewFile(context.Background(), testNZBFileWithSegments(10, 10, 10), nil, nil, fetcher)
 
 	if err := f.EnsureSegmentMap(); err != nil {
 		t.Fatalf("EnsureSegmentMap returned error: %v", err)
@@ -433,7 +433,7 @@ func TestEnsureSegmentMapEstimatorStillUsesActualLastSegmentSize(t *testing.T) {
 	estimator := NewSegmentSizeEstimator()
 	estimator.Set(10, 8)
 	fetcher := &varyingSizeSegmentFetcher{sizes: []int64{8, 8, 5}}
-	f := NewFile(context.Background(), testNZBFileWithSegments(10, 10, 10), nil, estimator, fetcher, nil)
+	f := NewFile(context.Background(), testNZBFileWithSegments(10, 10, 10), nil, estimator, fetcher)
 
 	if err := f.EnsureSegmentMap(); err != nil {
 		t.Fatalf("EnsureSegmentMap returned error: %v", err)

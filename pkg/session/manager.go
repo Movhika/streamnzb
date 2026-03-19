@@ -190,7 +190,6 @@ type Manager struct {
 	pools                    []*nntp.ClientPool
 	usenetPool               *pool.Pool
 	estimator                *loader.SegmentSizeEstimator
-	cacheBudget              *pool.SegmentCacheBudget // optional global segment cache byte limit
 	ttl                      time.Duration
 	maxPlaybackDuration      time.Duration
 	mu                       sync.RWMutex
@@ -433,13 +432,12 @@ func (l *playbackLease) Close() error {
 	return nil
 }
 
-func NewManager(pools []*nntp.ClientPool, usenetPool *pool.Pool, ttl time.Duration, cacheBudget *pool.SegmentCacheBudget) *Manager {
+func NewManager(pools []*nntp.ClientPool, usenetPool *pool.Pool, ttl time.Duration) *Manager {
 	m := &Manager{
 		sessions:            make(map[string]*Session),
 		pools:               pools,
 		usenetPool:          usenetPool,
 		estimator:           loader.NewSegmentSizeEstimator(),
-		cacheBudget:         cacheBudget,
 		ttl:                 ttl,
 		maxPlaybackDuration: MaxPlaybackDuration,
 		stopCh:              make(chan struct{}),
@@ -488,11 +486,10 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release
 	pools := m.pools
 	usenetPool := m.usenetPool
 	estimator := m.estimator
-	cacheBudget := m.cacheBudget
 	m.mu.RUnlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	loaderFiles := buildLoaderFiles(ctx, sessionID, contentFiles, pools, usenetPool, estimator, cacheBudget)
+	loaderFiles := buildLoaderFiles(ctx, sessionID, contentFiles, pools, usenetPool, estimator)
 
 	session := &Session{
 		ID:         sessionID,
@@ -534,14 +531,14 @@ func selectSessionContentFiles(nzbData *nzb.NZB, contentIDs *AvailReportMeta) []
 	return nzbData.GetContentFiles()
 }
 
-func buildLoaderFiles(ctx context.Context, ownerID string, contentFiles []*nzb.FileInfo, pools []*nntp.ClientPool, usenetPool loader.SegmentFetcher, estimator *loader.SegmentSizeEstimator, cacheBudget *pool.SegmentCacheBudget) []*loader.File {
+func buildLoaderFiles(ctx context.Context, ownerID string, contentFiles []*nzb.FileInfo, pools []*nntp.ClientPool, usenetPool loader.SegmentFetcher, estimator *loader.SegmentSizeEstimator) []*loader.File {
 	loaderFiles := make([]*loader.File, 0, len(contentFiles))
 	for _, info := range contentFiles {
 		var lf *loader.File
 		if usenetPool != nil {
-			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool, cacheBudget)
+			lf = loader.NewFile(ctx, info.File, nil, estimator, usenetPool)
 		} else {
-			lf = loader.NewFile(ctx, info.File, pools, estimator, nil, cacheBudget)
+			lf = loader.NewFile(ctx, info.File, pools, estimator, nil)
 		}
 		lf.SetOwnerSessionID(ownerID)
 		loaderFiles = append(loaderFiles, lf)
@@ -642,10 +639,9 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	pools := manager.pools
 	usenetPool := manager.usenetPool
 	estimator := manager.estimator
-	cacheBudget := manager.cacheBudget
 	manager.mu.RUnlock()
 
-	loaderFiles := buildLoaderFiles(ctx, s.ID, contentFiles, pools, usenetPool, estimator, cacheBudget)
+	loaderFiles := buildLoaderFiles(ctx, s.ID, contentFiles, pools, usenetPool, estimator)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -951,19 +947,7 @@ func (s *Session) Close() {
 		s.playback = nil
 	}
 	s.selectedPlaybackFile = ""
-	// Drop segment caches so memory is released immediately instead of waiting for GC.
-	n := 0
-	for _, f := range s.Files {
-		if f != nil {
-			f.ClearSegmentCache()
-			n++
-		}
-	}
-	if s.File != nil && len(s.Files) == 0 {
-		s.File.ClearSegmentCache()
-		n++
-	}
-	logger.Debug("session Close cleared segment caches", "id", s.ID, "files_cleared", n)
+
 	// Release heavyweight references so a closed session cannot pin NZB / unpack /
 	// loader graphs or deferred-download state after it has been removed.
 	s.Files = nil
@@ -975,7 +959,7 @@ func (s *Session) Close() {
 	s.Clients = nil
 	s.downloadURL = ""
 	s.indexer = nil
-	logger.Trace("session Close released references", "id", s.ID, "files_cleared", n)
+	logger.Trace("session Close released references", "id", s.ID)
 }
 
 func (m *Manager) cleanupLoop() {

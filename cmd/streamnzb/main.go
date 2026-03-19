@@ -200,7 +200,7 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to build components: %w", err))
 	}
 
-	sessionManager := session.NewManager(comp.StreamingPools, comp.UsenetPool, 30*time.Minute, comp.SegmentCacheBudget)
+	sessionManager := session.NewManager(comp.StreamingPools, comp.UsenetPool, 30*time.Minute)
 	logger.Info("Session manager initialized", "ttl", 30*time.Minute)
 
 	saveConfig := func() error { return cfg.Save() }

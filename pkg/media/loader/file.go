@@ -45,10 +45,6 @@ func decodeAndCloseBody(body io.ReadCloser, decodeFn func(io.Reader) (*decode.Fr
 
 const MaxZeroFills = 10
 
-// MaxCachedSegments is the maximum number of segments to keep in segCache per file.
-// SegmentReader evicts before current and caps ahead (maxPrefetchAhead); this is a hard ceiling.
-const MaxCachedSegments = 24
-
 // isArticleNotFound reports whether err indicates the article is missing (430 No Such Article).
 // Used to fail fast on the first segment instead of zero-filling through many segments.
 func isArticleNotFound(err error) bool {
@@ -83,13 +79,8 @@ type File struct {
 	ownerID   string
 	mu        sync.Mutex
 
-	segCache   map[int][]byte
-	segCacheMu sync.RWMutex
-
 	downloadMu        sync.Mutex
 	inflightDownloads map[int]*inflightSegmentDownload
-
-	cacheBudget *pool.SegmentCacheBudget // optional global byte limit
 
 	zeroFillMu    sync.Mutex
 	zeroFillCount int
@@ -113,7 +104,7 @@ func (e *zeroFillEligibleError) Error() string { return e.cause.Error() }
 
 func (e *zeroFillEligibleError) Unwrap() error { return e.cause }
 
-func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstimator, fetcher SegmentFetcher, cacheBudget *pool.SegmentCacheBudget) *File {
+func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstimator, fetcher SegmentFetcher) *File {
 	segments := make([]*Segment, len(f.Segments))
 	var offset int64
 	for i, s := range f.Segments {
@@ -132,9 +123,7 @@ func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimat
 		segments:          segments,
 		totalSize:         offset,
 		ctx:               ctx,
-		segCache:          make(map[int][]byte),
 		inflightDownloads: make(map[int]*inflightSegmentDownload),
-		cacheBudget:       cacheBudget,
 	}
 }
 
@@ -178,17 +167,6 @@ func (f *File) CheckFirstSegmentExists(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	return statter.StatSegment(ctx, msgID, f.nzbFile.Groups)
-}
-
-func (f *File) TotalConnections() int {
-	if f.fetcher != nil {
-		return 20
-	}
-	total := 0
-	for _, p := range f.pools {
-		total += p.MaxConn()
-	}
-	return total
 }
 
 func (f *File) SegmentMapDetected() bool {
@@ -306,158 +284,25 @@ func (f *File) FindSegmentIndex(offset int64) int {
 	return -1
 }
 
-func (f *File) GetCachedSegment(index int) ([]byte, bool) {
-	f.segCacheMu.RLock()
-	data, ok := f.segCache[index]
-	f.segCacheMu.RUnlock()
-	return data, ok
-}
-
-func (f *File) releaseSegmentBytes(data []byte) {
-	if len(data) > 0 && f.cacheBudget != nil {
-		f.cacheBudget.Release(int64(len(data)))
-	}
-}
-
-func (f *File) PutCachedSegment(index int, data []byte) {
-	size := int64(len(data))
-	f.segCacheMu.Lock()
-	// If overwriting an existing segment, release its size so the budget is accurate.
-	if old, exists := f.segCache[index]; exists {
-		f.releaseSegmentBytes(old)
-		logger.Trace("loader PutCachedSegment overwrite", "file", f.Name(), "index", index, "size", len(data))
-	}
-	// If using a global byte budget, reserve space. Evict oldest in this file until Reserve succeeds; if we can't, don't cache.
-	if f.cacheBudget != nil && size > 0 {
-		reserved := false
-		for !reserved {
-			reserved = f.cacheBudget.Reserve(size)
-			if reserved {
-				break
-			}
-			minIdx := -1
-			for idx := range f.segCache {
-				if minIdx == -1 || idx < minIdx {
-					minIdx = idx
-				}
-			}
-			if minIdx == -1 {
-				// Budget full and nothing to evict in this file — don't cache this segment so we stay under cap.
-				f.segCacheMu.Unlock()
-				logger.Trace("loader PutCachedSegment skip over budget", "file", f.Name(), "index", index, "size", len(data))
-				return
-			}
-			old := f.segCache[minIdx]
-			delete(f.segCache, minIdx)
-			f.cacheBudget.Release(int64(len(old)))
-		}
-	}
-	// Evict oldest (smallest index) when at segment count cap.
-	for len(f.segCache) >= MaxCachedSegments {
-		minIdx := -1
-		for idx := range f.segCache {
-			if minIdx == -1 || idx < minIdx {
-				minIdx = idx
-			}
-		}
-		if minIdx == -1 {
-			break
-		}
-		old := f.segCache[minIdx]
-		delete(f.segCache, minIdx)
-		f.releaseSegmentBytes(old)
-		logger.Trace("loader PutCachedSegment evict for count", "file", f.Name(), "evicted_index", minIdx)
-	}
-	f.segCache[index] = data
-	cachedCount := len(f.segCache)
-	f.segCacheMu.Unlock()
-	logger.Trace("loader PutCachedSegment", "file", f.Name(), "index", index, "size", len(data), "cached_count", cachedCount)
-}
-
-func (f *File) EvictCachedSegmentsBefore(minIndex int) {
-	f.segCacheMu.Lock()
-	for idx, data := range f.segCache {
-		if idx < minIndex {
-			delete(f.segCache, idx)
-			f.releaseSegmentBytes(data)
-		}
-	}
-	f.segCacheMu.Unlock()
-}
-
-// EvictCachedSegmentsAfter drops segments with index > maxIndex so the "ahead" window is bounded.
-func (f *File) EvictCachedSegmentsAfter(maxIndex int) {
-	f.segCacheMu.Lock()
-	for idx, data := range f.segCache {
-		if idx > maxIndex {
-			delete(f.segCache, idx)
-			f.releaseSegmentBytes(data)
-		}
-	}
-	f.segCacheMu.Unlock()
-}
-
-// ClearSegmentCache drops all cached segment data so memory can be released when the session ends.
-func (f *File) ClearSegmentCache() {
-	f.segCacheMu.Lock()
-	n := len(f.segCache)
-	for _, data := range f.segCache {
-		f.releaseSegmentBytes(data)
-	}
-	f.segCache = make(map[int][]byte)
-	f.segCacheMu.Unlock()
-	logger.Debug("loader ClearSegmentCache", "file", f.Name(), "segments_cleared", n)
-}
-
-func (f *File) PrewarmSegment(index int) {
-	if index < 0 || index >= len(f.segments) {
-		return
-	}
-	if _, ok := f.GetCachedSegment(index); ok {
-		return
-	}
-	go f.DownloadSegment(f.ctx, index)
-}
-
-func (f *File) StartDownloadSegment(ctx context.Context, index int) <-chan struct{} {
-	done := make(chan struct{})
-	if _, ok := f.GetCachedSegment(index); ok {
-		close(done)
-		return done
-	}
-	go func() {
-		_, _ = f.DownloadSegment(ctx, index)
-		close(done)
-	}()
-	return done
-}
-
-// DownloadSegment fetches segment index, returning cached data if available.
+// DownloadSegment fetches segment index on demand.
 // On all-provider failure, it zero-fills the segment and counts it toward IsFailed().
-// Use PrefetchSegment for background prefetch goroutines.
 func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
-	if data, ok := f.GetCachedSegment(index); ok {
-		return data, nil
-	}
 	return f.doDownloadSegment(ctx, index, true)
 }
 
-// PrefetchSegment fetches segment index without counting failures toward IsFailed().
-// Background prefetch goroutines use this so transient provider errors do not poison the
-// zero-fill counter and prematurely mark the file as failed before the player reads it.
-// On all-provider failure the error is returned and nothing is cached (the blocking read
-// path via DownloadSegment will retry and count the failure if it also exhausts all providers).
-func (f *File) PrefetchSegment(ctx context.Context, index int) ([]byte, error) {
-	if data, ok := f.GetCachedSegment(index); ok {
-		return data, nil
+// ReadAheadSegment downloads a segment in the background without counting failures
+// toward IsFailed(). Used by SegmentReader to warm the pool cache ahead of the read
+// pointer so subsequent Read calls don't block on network I/O.
+func (f *File) ReadAheadSegment(ctx context.Context, index int) {
+	if index < 0 || index >= len(f.segments) {
+		return
 	}
-	return f.doDownloadSegment(ctx, index, false)
+	go func() {
+		_, _ = f.doDownloadSegment(ctx, index, false)
+	}()
 }
 
 func (f *File) doDownloadSegment(ctx context.Context, index int, countFailures bool) ([]byte, error) {
-	if data, ok := f.GetCachedSegment(index); ok {
-		return data, nil
-	}
 
 	// Callers wait on a shared in-flight fetch keyed by segment index, but they do
 	// not own the underlying request lifecycle. That shared fetch runs on the file
@@ -571,7 +416,6 @@ func (f *File) finalizeSegmentDownload(index int, data []byte, err error, countF
 	}
 	zeroData := make([]byte, size)
 	logger.Trace("Segment download failed, zero-filling", "index", index, "count", count+1, "max", MaxZeroFills, "err", eligible.cause)
-	f.PutCachedSegment(index, zeroData)
 	return zeroData, nil
 }
 
@@ -705,7 +549,6 @@ func (f *File) doDownloadSegmentViaPools(ctx context.Context, index int) ([]byte
 			if !shouldPersistDownloadedSegment(downloadCtx) {
 				return nil, downloadCtx.Err()
 			}
-			f.PutCachedSegment(index, res.frame.Data)
 			return res.frame.Data, nil
 		}
 	}
@@ -774,14 +617,14 @@ func (f *File) OpenStreamCtx(ctx context.Context) (io.ReadSeekCloser, error) {
 	if err := f.EnsureSegmentMap(); err != nil {
 		return nil, err
 	}
-	return NewSegmentReaderWithOptions(ctx, f, 0, SegmentReaderOptions{EnablePrefetch: true}), nil
+	return NewSegmentReader(ctx, f, 0), nil
 }
 
 func (f *File) OpenReaderAt(ctx context.Context, offset int64) (io.ReadCloser, error) {
 	if err := f.EnsureSegmentMap(); err != nil {
 		return nil, err
 	}
-	return NewSegmentReaderWithOptions(ctx, f, offset, SegmentReaderOptions{EnablePrefetch: false}), nil
+	return NewSegmentReader(ctx, f, offset), nil
 }
 
 // MaxSegmentSizeEstimatorEntries caps the number of size entries to prevent unbounded growth.
