@@ -38,7 +38,6 @@ import (
 	"streamnzb/pkg/services/metadata/tmdb"
 	"streamnzb/pkg/services/metadata/tvdb"
 	"streamnzb/pkg/session"
-	"streamnzb/pkg/stream"
 	"streamnzb/pkg/usenet/validation"
 )
 
@@ -63,7 +62,6 @@ type Server struct {
 	tmdbClient                *tmdb.Client
 	tvdbClient                *tvdb.Client
 	deviceManager             *auth.DeviceManager
-	streamManager             *stream.Manager
 	playListCache             sync.Map
 	rawSearchCache            sync.Map
 	recordedSuccessSessionIDs sync.Map // session ID -> struct{}; record actual playback success only once per stream
@@ -91,7 +89,6 @@ type ServerOptions struct {
 	TMDBClient           *tmdb.Client
 	TVDBClient           *tvdb.Client
 	DeviceManager        *auth.DeviceManager
-	StreamManager        *stream.Manager
 	Version              string
 	AttemptRecorder      *persistence.StateManager
 }
@@ -134,7 +131,6 @@ func NewServer(opts *ServerOptions) (*Server, error) {
 		tmdbClient:           opts.TMDBClient,
 		tvdbClient:           opts.TVDBClient,
 		deviceManager:        opts.DeviceManager,
-		streamManager:        opts.StreamManager,
 		attemptRecorder:      opts.AttemptRecorder,
 	}
 
@@ -317,20 +313,13 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 
 	logger.Trace("stream request start", "type", contentType, "id", id)
 	baseURL := s.baseURLWithToken(device)
-	streamsList := s.streamConfigsForDevice(device)
-	var streams []Stream
-	for _, str := range streamsList {
-		key := StreamSlotKey{StreamID: str.ID, ContentType: contentType, ID: id}
-		slotStreams, list, err := s.buildStreamsForKey(ctx, key, str, device, baseURL)
-		if err != nil {
-			logger.Error("Error building play list", "streamId", str.ID, "err", err)
-			continue
-		}
-		if list == nil {
-			continue
-		}
-		streams = append(streams, slotStreams...)
-		logger.Debug("Stream rows", "streamId", str.ID, "name", str.Name, "candidates", len(list.Candidates), "showAllStream", str.ShowAllStream)
+	key := StreamSlotKey{StreamID: defaultStreamID, ContentType: contentType, ID: id}
+	streams, list, err := s.buildStreamsForKey(ctx, key, device, baseURL)
+	if err != nil {
+		logger.Error("Error building play list", "err", err)
+	}
+	if list != nil {
+		logger.Debug("Stream rows", "candidates", len(list.Candidates))
 	}
 	if streams == nil {
 		streams = []Stream{}
@@ -422,7 +411,7 @@ func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, dev
 			if sid, contentType, id, _, ok := parseStreamSlotID(entry); ok {
 				sk := StreamSlotKey{StreamID: sid, ContentType: contentType, ID: id}
 				if sk.StreamID == "" {
-					sk.StreamID = s.getDefaultStreamID()
+					sk.StreamID = defaultStreamID
 				}
 				streamKey = sk.CacheKey()
 				break
@@ -581,7 +570,7 @@ func buildStreamsFromPlayList(list *orderedPlayListResult, key StreamSlotKey, st
 
 // buildStreamsForKey runs the shared pipeline: build play list → optional AIO filter → device order → clear next bound → build Stream[].
 // Returns (nil, nil, nil) when there are no candidates; (nil, nil, err) on error.
-func (s *Server) buildStreamsForKey(ctx context.Context, key StreamSlotKey, str *stream.Stream, device *auth.Device, baseURL string) ([]Stream, *orderedPlayListResult, error) {
+func (s *Server) buildStreamsForKey(ctx context.Context, key StreamSlotKey, device *auth.Device, baseURL string) ([]Stream, *orderedPlayListResult, error) {
 	isAIOStreams := s.sessionManager.IsAIOStreamsDevice(deviceToken(device))
 	list, err := s.buildOrderedPlayList(ctx, key, isAIOStreams)
 	if err != nil {
@@ -601,24 +590,22 @@ func (s *Server) buildStreamsForKey(ctx context.Context, key StreamSlotKey, str 
 	}
 	// Create deferred sessions for each slot path we will expose, so handlePlay can serve without hitting indexers.
 	s.ensureDeferredSessionsForPlayList(list, key, device)
-	showAll := str.ShowAllStream || isAIOStreams
-	return buildStreamsFromPlayList(list, key, str.Name, baseURL, showAll), list, nil
+	streamName := "StreamNZB"
+	showAll := isAIOStreams
+	return buildStreamsFromPlayList(list, key, streamName, baseURL, showAll), list, nil
 }
+
+const defaultStreamID = "default"
 
 func (s *Server) GetStreams(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
 	const streamRequestTimeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, streamRequestTimeout)
 	defer cancel()
 	baseURL := s.baseURLWithToken(device)
-	streamsList := s.streamConfigsForDevice(device)
-	var streams []Stream
-	for _, str := range streamsList {
-		key := StreamSlotKey{StreamID: str.ID, ContentType: contentType, ID: id}
-		slotStreams, _, err := s.buildStreamsForKey(ctx, key, str, device, baseURL)
-		if err != nil || slotStreams == nil {
-			continue
-		}
-		streams = append(streams, slotStreams...)
+	key := StreamSlotKey{StreamID: defaultStreamID, ContentType: contentType, ID: id}
+	streams, _, err := s.buildStreamsForKey(ctx, key, device, baseURL)
+	if err != nil {
+		return nil, err
 	}
 	if sink := getStreamSinkFromContext(ctx); sink != nil {
 		for _, st := range streams {
@@ -660,94 +647,6 @@ func addAPIKeyToDownloadURL(downloadURL string, indexers []config.IndexerConfig)
 		}
 	}
 	return downloadURL
-}
-
-func (s *Server) getGlobalStream() *stream.Stream {
-	s.mu.RLock()
-	sm := s.streamManager
-	s.mu.RUnlock()
-	if sm == nil {
-		return nil
-	}
-	return sm.GetGlobal()
-}
-
-func (s *Server) getDefaultStreamID() string {
-	if str := s.getGlobalStream(); str != nil && str.ID != "" {
-		return str.ID
-	}
-	return stream.GlobalStreamID
-}
-
-// streamConfigsForDevice returns the ordered list of streams to use for a request.
-// If device is non-nil and has StreamIDs set, only streams in that list are returned
-// (preserving the device's order). Admin/nil device always gets all streams.
-func (s *Server) streamConfigsForDevice(device *auth.Device) []*stream.Stream {
-	s.mu.RLock()
-	sm := s.streamManager
-	s.mu.RUnlock()
-	if sm == nil {
-		if g := s.getGlobalStream(); g != nil {
-			return []*stream.Stream{g}
-		}
-		return nil
-	}
-	list := sm.List()
-	if len(list) == 0 {
-		if g := s.getGlobalStream(); g != nil {
-			return []*stream.Stream{g}
-		}
-	}
-
-	// Filter by device's allowed stream IDs when set.
-	if device != nil && len(device.StreamIDs) > 0 {
-		allowed := make(map[string]int, len(device.StreamIDs))
-		for i, id := range device.StreamIDs {
-			allowed[id] = i
-		}
-		filtered := make([]*stream.Stream, 0, len(device.StreamIDs))
-		byID := make(map[string]*stream.Stream, len(list))
-		for _, s := range list {
-			if s != nil {
-				byID[s.ID] = s
-			}
-		}
-		for _, id := range device.StreamIDs {
-			if st, ok := byID[id]; ok {
-				filtered = append(filtered, st)
-			}
-		}
-		return filtered
-	}
-
-	sort.Slice(list, func(i, j int) bool {
-		a, b := list[i], list[j]
-		if a == nil || b == nil {
-			return a != nil
-		}
-		ai, bj := a.ID == stream.GlobalStreamID, b.ID == stream.GlobalStreamID
-		if ai != bj {
-			return ai
-		}
-		if ai {
-			return true
-		}
-		return a.ID < b.ID
-	})
-	return list
-}
-
-// streamConfigsForStreamRequest returns all streams (used by admin/search views).
-func (s *Server) streamConfigsForStreamRequest() []*stream.Stream {
-	return s.streamConfigsForDevice(nil)
-}
-
-func (s *Server) triageCandidates(str *stream.Stream, releases []*release.Release) []triage.Candidate {
-	if str == nil {
-		return s.triageService.Filter(releases)
-	}
-	ts := triage.NewService(&str.Filters, str.Sorting)
-	return ts.Filter(releases)
 }
 
 type streamSinkKeyType struct{}
@@ -919,7 +818,7 @@ func filterPlayListToAvailableForAIOStreams(list *orderedPlayListResult) *ordere
 // When isAIOStreams is true we skip triage/sort and do title dedup only (for AIOStreams client).
 func (s *Server) buildOrderedPlayList(ctx context.Context, key StreamSlotKey, isAIOStreams bool) (*orderedPlayListResult, error) {
 	if key.StreamID == "" {
-		key.StreamID = s.getDefaultStreamID()
+		key.StreamID = defaultStreamID
 	}
 	cacheKey := key.CacheKey()
 	if isAIOStreams {
@@ -944,18 +843,7 @@ func (s *Server) buildOrderedPlayListUncached(ctx context.Context, key StreamSlo
 	if err != nil || raw == nil {
 		return nil, err
 	}
-	streamId := key.StreamID
-	if streamId == "" {
-		streamId = s.getDefaultStreamID()
-	}
-	var str *stream.Stream
-	if s.streamManager != nil {
-		str, _ = s.streamManager.Get(streamId)
-	}
-	if str == nil {
-		str = s.getGlobalStream()
-	}
-	return s.buildOrderedPlayListFromRaw(raw, str, isAIOStreams)
+	return s.buildOrderedPlayListFromRaw(raw, isAIOStreams)
 }
 
 func (s *Server) getOrBuildRawSearchResult(ctx context.Context, contentType, id string) (*rawSearchResult, error) {
@@ -975,8 +863,7 @@ func (s *Server) getOrBuildRawSearchResult(ctx context.Context, contentType, id 
 }
 
 func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id string) (*rawSearchResult, error) {
-	str := s.getGlobalStream()
-	params, err := s.buildSearchParams(contentType, id, str)
+	params, err := s.buildSearchParams(contentType, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1117,78 +1004,39 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		unified = append(unified, releaseWithAvail{rel: r, avail: "Unknown"})
 	}
 
-	streams := s.streamConfigsForStreamRequest()
-	releaseScores := make(map[string]map[string]struct {
+	// Triage all releases with the single default stream.
+	releasesOnly := make([]*release.Release, 0, len(unified))
+	for _, u := range unified {
+		releasesOnly = append(releasesOnly, u.rel)
+	}
+	candidates := s.triageService.Filter(releasesOnly)
+	releaseScores := make(map[string]struct {
 		Fits  bool
 		Score int
-	})
-	for _, str := range streams {
-		if str == nil {
+	}, len(candidates))
+	for _, c := range candidates {
+		if c.Release == nil {
 			continue
 		}
-		releasesOnly := make([]*release.Release, 0, len(unified))
-		for _, u := range unified {
-			releasesOnly = append(releasesOnly, u.rel)
-		}
-		candidates := s.triageCandidates(str, releasesOnly)
-		for _, c := range candidates {
-			if c.Release == nil {
-				continue
-			}
-			key := release.Key(c.Release)
-			if releaseScores[key] == nil {
-				releaseScores[key] = make(map[string]struct {
-					Fits  bool
-					Score int
-				})
-			}
-			releaseScores[key][str.ID] = struct {
-				Fits  bool
-				Score int
-			}{Fits: true, Score: c.Score}
-		}
-
-		for _, u := range unified {
-			key := release.Key(u.rel)
-			if releaseScores[key] == nil {
-				releaseScores[key] = make(map[string]struct {
-					Fits  bool
-					Score int
-				})
-			}
-			if _, ok := releaseScores[key][str.ID]; !ok {
-				releaseScores[key][str.ID] = struct {
-					Fits  bool
-					Score int
-				}{Fits: false, Score: 0}
-			}
-		}
+		releaseScores[release.Key(c.Release)] = struct {
+			Fits  bool
+			Score int
+		}{Fits: true, Score: c.Score}
 	}
 
-	streamInfos := make([]SearchStreamInfo, 0, len(streams))
-	for _, str := range streams {
-		if str != nil {
-			streamInfos = append(streamInfos, SearchStreamInfo{ID: str.ID, Name: str.Name})
-		}
-	}
+	streamInfos := []SearchStreamInfo{{ID: defaultStreamID, Name: "StreamNZB"}}
 
 	releasesOut := make([]SearchReleaseTag, 0, len(unified))
 	for _, u := range unified {
 		r := u.rel
 		key := release.Key(r)
-		tags := make([]SearchStreamTag, 0, len(streams))
-		for _, str := range streams {
-			if str == nil {
-				continue
-			}
-			ts := releaseScores[key][str.ID]
-			tags = append(tags, SearchStreamTag{
-				StreamID:   str.ID,
-				StreamName: str.Name,
-				Fits:       ts.Fits,
-				Score:      ts.Score,
-			})
-		}
+		ts := releaseScores[key]
+		tags := []SearchStreamTag{{
+			StreamID:   defaultStreamID,
+			StreamName: "StreamNZB",
+			Fits:       ts.Fits,
+			Score:      ts.Score,
+		}}
 		idxName := r.Indexer
 		if idxName == "" && r.SourceIndexer != nil {
 			if idx, ok := r.SourceIndexer.(indexer.Indexer); ok {
@@ -1209,31 +1057,15 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		})
 	}
 
-	if len(streamInfos) > 0 && len(releasesOut) > 0 {
-		firstStreamID := streamInfos[0].ID
-		sort.Slice(releasesOut, func(i, j int) bool {
-			si := 0
-			sj := 0
-			for _, t := range releasesOut[i].StreamTags {
-				if t.StreamID == firstStreamID {
-					si = t.Score
-					break
-				}
-			}
-			for _, t := range releasesOut[j].StreamTags {
-				if t.StreamID == firstStreamID {
-					sj = t.Score
-					break
-				}
-			}
-			if si != sj {
-				return si > sj
-			}
-
-			availOrder := map[string]int{"Available": 2, "Unknown": 1, "Unavailable": 0}
-			return (availOrder[releasesOut[i].Availability] - availOrder[releasesOut[j].Availability]) > 0
-		})
-	}
+	sort.Slice(releasesOut, func(i, j int) bool {
+		si := releaseScores[release.Key(unified[i].rel)].Score
+		sj := releaseScores[release.Key(unified[j].rel)].Score
+		if si != sj {
+			return si > sj
+		}
+		availOrder := map[string]int{"Available": 2, "Unknown": 1, "Unavailable": 0}
+		return availOrder[releasesOut[i].Availability] > availOrder[releasesOut[j].Availability]
+	})
 
 	return &SearchReleasesResponse{Streams: streamInfos, Releases: releasesOut}, nil
 }
@@ -1297,7 +1129,7 @@ func releasesToCandidates(releases []*release.Release) []triage.Candidate {
 	return out
 }
 
-func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.Stream, isAIOStreams bool) (*orderedPlayListResult, error) {
+func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, isAIOStreams bool) (*orderedPlayListResult, error) {
 	populateAvailable(raw)
 
 	unavailableDetailsURLs := make(map[string]bool)
@@ -1317,7 +1149,7 @@ func (s *Server) buildOrderedPlayListFromRaw(raw *rawSearchResult, str *stream.S
 	if isAIOStreams {
 		merged = releasesToCandidates(allReleases)
 	} else {
-		merged = s.triageCandidates(str, allReleases)
+		merged = s.triageService.Filter(allReleases)
 	}
 
 	seenURL := make(map[string]bool)
@@ -1463,7 +1295,7 @@ func buildSeriesQueriesWithOptions(showName, year string, includeYear bool) []st
 	return []string{showName}
 }
 
-func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (*SearchParams, error) {
+func (s *Server) buildSearchParams(contentType, id string) (*SearchParams, error) {
 	const searchLimit = 1000
 	params := &SearchParams{ContentType: contentType, ID: id}
 	req := indexer.SearchRequest{Limit: searchLimit}
@@ -1546,18 +1378,7 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 		indexerTypeByName := make(map[string]string, len(s.config.Indexers))
 		for i := range s.config.Indexers {
 			ic := &s.config.Indexers[i]
-			var override *config.IndexerSearchConfig
-			if str != nil && str.IndexerOverrides != nil {
-				if o, ok := str.IndexerOverrides[ic.Name]; ok {
-					override = &o
-				}
-				if override == nil {
-					if o, ok := str.IndexerOverrides[""]; ok {
-						override = &o
-					}
-				}
-			}
-			req.EffectiveByIndexer[ic.Name] = config.MergeIndexerSearch(ic, override, s.config)
+			req.EffectiveByIndexer[ic.Name] = config.MergeIndexerSearch(ic, nil, s.config)
 			indexerTypeByName[ic.Name] = ic.Type
 		}
 		req.PerIndexerQuery = make(map[string][]string)
@@ -1633,7 +1454,7 @@ func (s *Server) buildSearchParams(contentType, id string, str *stream.Stream) (
 	return params, nil
 }
 
-func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, str *stream.Stream, device *auth.Device) ([]Stream, []*release.Release, *availnzb.ReleasesResult) {
+func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, device *auth.Device) ([]Stream, []*release.Release, *availnzb.ReleasesResult) {
 	contentIDs := params.ContentIDs
 	availIndexers := params.AvailIndexers
 	if s.availClient == nil || s.availClient.BaseURL == "" || (contentIDs.ImdbID == "" && contentIDs.TvdbID == "") {
@@ -1658,7 +1479,7 @@ func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, str
 	if len(availReleases) == 0 {
 		return nil, nil, availResult
 	}
-	candidates := s.triageCandidates(str, availReleases)
+	candidates := s.triageService.Filter(availReleases)
 	logger.Debug("AvailNZB phase", "releases", len(availReleases), "after_triage", len(candidates))
 	var streams []Stream
 	seen := make(map[string]bool)
@@ -1695,12 +1516,11 @@ func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, str
 }
 
 func (s *Server) GetAvailNZBStreams(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
-	str := s.getGlobalStream()
-	params, err := s.buildSearchParams(contentType, id, str)
+	params, err := s.buildSearchParams(contentType, id)
 	if err != nil {
 		return nil, err
 	}
-	streams, _, _ := s.runAvailNZBPhase(ctx, params, str, device)
+	streams, _, _ := s.runAvailNZBPhase(ctx, params, device)
 	if streams == nil {
 		return []Stream{}, nil
 	}
@@ -1738,7 +1558,7 @@ func (s *Server) ensureDeferredSessionsForPlayList(list *orderedPlayListResult, 
 
 func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index int, device *auth.Device) (*session.Session, error) {
 	if key.StreamID == "" {
-		key.StreamID = s.getDefaultStreamID()
+		key.StreamID = defaultStreamID
 	}
 	isAIOStreams := s.sessionManager.IsAIOStreamsDevice(deviceToken(device))
 	list, err := s.buildOrderedPlayList(ctx, key, isAIOStreams)
@@ -1789,7 +1609,7 @@ func (s *Server) handleNextRelease(w http.ResponseWriter, r *http.Request, devic
 		return
 	}
 	if streamId == "" {
-		streamId = s.getDefaultStreamID()
+		streamId = defaultStreamID
 	}
 	key := StreamSlotKey{StreamID: streamId, ContentType: contentType, ID: id}
 
@@ -1827,7 +1647,7 @@ type nextReleaseCursor struct {
 // of the /next/ URL from prematurely advancing through the playlist.
 func (s *Server) advanceNextReleaseCursor(ctx context.Context, key StreamSlotKey, device *auth.Device) (string, error) {
 	if key.StreamID == "" {
-		key.StreamID = s.getDefaultStreamID()
+		key.StreamID = defaultStreamID
 	}
 	isAIOStreams := s.sessionManager.IsAIOStreamsDevice(deviceToken(device))
 	list, err := s.buildOrderedPlayList(ctx, key, isAIOStreams)
@@ -2965,7 +2785,6 @@ func (s *Server) Reload(opts *ServerOptions) {
 	s.tmdbClient = opts.TMDBClient
 	s.tvdbClient = opts.TVDBClient
 	s.deviceManager = opts.DeviceManager
-	s.streamManager = opts.StreamManager
 }
 
 type writeTimeoutResponseWriter struct {

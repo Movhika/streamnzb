@@ -88,9 +88,7 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 
 	const validationSampleSize = 5
 	validator := validation.NewChecker(base.UsenetPool, validationSampleSize, 6)
-	defaultFilters := config.DefaultFilterConfig()
-	defaultSorting := config.DefaultSortConfig()
-	triageSvc := triage.NewService(&defaultFilters, defaultSorting)
+	triageSvc := triage.NewService()
 	availClient := availnzb.NewClient(opts.AvailNZBURL, opts.AvailNZBAPIKey)
 	go func(client *availnzb.Client) {
 		if err := client.RefreshBackbones(); err != nil {
@@ -167,9 +165,7 @@ func (a *App) Reload(newCfg *config.Config) (*Components, bool, error) {
 	case ReloadConfigOnly:
 
 		logger.Info("Reload: config-only - no NNTP/indexer restart")
-		defaultFilters := config.DefaultFilterConfig()
-		defaultSorting := config.DefaultSortConfig()
-		triageSvc := triage.NewService(&defaultFilters, defaultSorting)
+		triageSvc := triage.NewService()
 		comp := *old
 		comp.Config = newCfg
 		comp.Triage = triageSvc

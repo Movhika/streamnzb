@@ -14,6 +14,10 @@ export async function apiFetch(path, options = {}) {
       data = await res.json()
     } catch (_) {}
   }
-  if (!res.ok) throw new Error((data && (data.error || data.message)) || res.statusText)
+  if (!res.ok) {
+    const err = new Error((data && (data.error || data.message)) || res.statusText)
+    if (data && data.errors) err.fieldErrors = data.errors
+    throw err
+  }
   return data
 }

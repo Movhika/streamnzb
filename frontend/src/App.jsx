@@ -6,10 +6,8 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/AppSidebar"
 import { SiteHeader } from "@/components/SiteHeader"
 import { DashboardPage } from "@/components/DashboardPage"
-import { SearchPage } from "@/components/SearchPage"
 import { LogsPage } from "@/components/LogsPage"
 import { NZBHistoryPage } from "@/components/NZBHistoryPage"
-import { StreamsPage } from "@/components/StreamsPage"
 import { ProfilePage } from "@/components/ProfilePage"
 import { AlertCircle, Loader2 } from "lucide-react"
 
@@ -283,7 +281,7 @@ function App() {
         .then((cfg) => { if (cfg) setConfig(cfg) })
         .catch((err) => {
           const msg = err.message || 'Save failed'
-          setSaveStatus({ type: 'error', msg, errors: null })
+          setSaveStatus({ type: 'error', msg, errors: err.fieldErrors || null })
           if (window.profileUsernameCallback) {
             window.profileUsernameCallback({ status: 'error', message: msg })
             delete window.profileUsernameCallback
@@ -371,17 +369,28 @@ function App() {
       return `${url}/manifest.json`;
   }
 
-  const handleInstallClick = (type) => {
-      const httpsLink = getHTTPSLink();
-      if (type === 'web') {
-          const encodedManifest = encodeURIComponent(httpsLink);
-          window.open(`https://web.stremio.com/#/addons?addon=${encodedManifest}`, '_blank');
-      } else if (type === 'copy') {
-          navigator.clipboard.writeText(httpsLink).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 2000);
-          });
+  const copyToClipboard = (text) => {
+      if (navigator.clipboard && window.isSecureContext) {
+          return navigator.clipboard.writeText(text)
       }
+      // Fallback for non-HTTPS contexts
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      try { document.execCommand('copy') } catch (_) {}
+      document.body.removeChild(textarea)
+      return Promise.resolve()
+  }
+
+  const handleInstallClick = () => {
+      const link = getHTTPSLink();
+      copyToClipboard(link).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+      });
   };
 
   if (!authChecked) {
@@ -423,8 +432,7 @@ function App() {
     </div>
   )
 
-  const settingsPages = ['general', 'indexers', 'providers', 'streams', 'devices']
-  const isSettingsPage = settingsPages.includes(activePage)
+  const isSettingsPage = activePage === 'settings'
 
   return (
     <SidebarProvider>
@@ -439,6 +447,7 @@ function App() {
         config={config}
         onInstallClick={handleInstallClick}
         copied={copied}
+        manifestUrl={config ? getHTTPSLink() : null}
       />
       <SidebarInset className="min-h-0">
         <SiteHeader activePage={activePage} />
@@ -454,14 +463,6 @@ function App() {
           {activePage === 'nzb-history' && (
             <NZBHistoryPage refreshTrigger={nzbAttemptsRefreshTrigger} />
           )}
-          {activePage === 'search' && (
-            <SearchPage
-              authToken={currentUser && currentUser !== 'legacy' ? authToken : null}
-              config={config}
-              sendCommand={sendCommand}
-              ws={ws}
-            />
-          )}
           {activePage === 'logs' && (
             <LogsPage logs={logs} />
           )}
@@ -476,12 +477,7 @@ function App() {
               />
             </div>
           )}
-          {activePage === 'streams' && (
-            <div className="pt-4 md:pt-5 pb-3 px-4 lg:px-5">
-              <StreamsPage />
-            </div>
-          )}
-          {isSettingsPage && activePage !== 'streams' && (
+          {isSettingsPage && (
             <div className="pt-4 md:pt-5 pb-3 px-4 lg:px-5">
               <Settings
                 initialConfig={config}
@@ -489,7 +485,6 @@ function App() {
                 saveStatus={saveStatus}
                 isSaving={isSaving}
                 adminToken={currentUser && currentUser !== 'legacy' ? authToken : null}
-                activePage={activePage}
                 indexerCaps={indexerCaps}
               />
             </div>

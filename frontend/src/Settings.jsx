@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -9,11 +9,26 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDes
 import { Switch } from "@/components/ui/switch"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Loader2, Info, AlertTriangle, Eye, EyeOff, Copy, Check } from "lucide-react"
+import { Loader2, Info, AlertTriangle, Eye, EyeOff, Copy, Check, Settings as SettingsIcon, Server, Globe, MonitorSmartphone } from "lucide-react"
 import { IndexerSettings } from "@/components/IndexerSettings"
 import { ProviderSettings } from "@/components/ProviderSettings"
 import DeviceManagement from "@/components/DeviceManagement"
 import { apiFetch } from './api'
+import { cn } from "@/lib/utils"
+
+const TABS = [
+  { id: 'general', label: 'General', icon: SettingsIcon },
+  { id: 'indexers', label: 'Indexers', icon: Server },
+  { id: 'providers', label: 'Providers', icon: Globe },
+  { id: 'devices', label: 'Devices', icon: MonitorSmartphone },
+]
+
+/** Map a dotted field name (e.g. "indexers.0.url") to a tab id. */
+function fieldToTab(fieldName) {
+  if (fieldName.startsWith('indexers')) return 'indexers'
+  if (fieldName.startsWith('providers')) return 'providers'
+  return 'general'
+}
 
 function EnvOverrideNote({ show }) {
   if (!show) return null
@@ -25,7 +40,8 @@ function EnvOverrideNote({ show }) {
   )
 }
 
-function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken, activePage, indexerCaps }) {
+function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken, indexerCaps }) {
+  const [activeTab, setActiveTab] = useState('general')
   const [loading, setLoading] = useState(!initialConfig)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [initialFormValues, setInitialFormValues] = useState(null)
@@ -161,10 +177,27 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   }
 
   useEffect(() => {
-    if (activePage === 'general') {
+    if (activeTab === 'general') {
       fetchAvailNZBStatus()
     }
-  }, [activePage])
+  }, [activeTab])
+
+  // Compute which tabs have validation errors from server
+  const tabsWithErrors = useMemo(() => {
+    const errs = saveStatus.errors
+    if (!errs) return new Set()
+    const tabs = new Set()
+    Object.keys(errs).forEach((key) => tabs.add(fieldToTab(key)))
+    return tabs
+  }, [saveStatus.errors])
+
+  // When errors arrive, switch to the first failing tab
+  useEffect(() => {
+    if (tabsWithErrors.size > 0 && !tabsWithErrors.has(activeTab)) {
+      const firstErrorTab = TABS.find((t) => tabsWithErrors.has(t.id))
+      if (firstErrorTab) setActiveTab(firstErrorTab.id)
+    }
+  }, [tabsWithErrors])
 
   const onSubmit = async (data) => {
     try {
@@ -234,10 +267,17 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         ? 'bg-chart-4'
         : 'bg-primary'
 
+  const errorCount = saveStatus.errors ? Object.keys(saveStatus.errors).length : 0
+  const saveFooterMsg = saveStatus.type === 'error' && errorCount > 0
+    ? `Validation failed — ${errorCount} field${errorCount > 1 ? 's' : ''} need${errorCount === 1 ? 's' : ''} attention`
+    : saveStatus.msg
+
   const saveFooter = (
     <div className="sticky bottom-0 z-10 -mx-4 mt-3 pb-4 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2 border-t bg-background px-4 pt-3 sm:px-0 sm:pt-4">
-      <div className={`flex items-center text-sm min-w-0 ${saveStatus.type === 'error' ? 'text-destructive' : saveStatus.type === 'success' ? 'text-primary' : 'text-muted-foreground'}`}>
-        {saveStatus.msg}
+      <div className={`flex items-center gap-1.5 text-sm min-w-0 ${saveStatus.type === 'error' ? 'text-destructive' : saveStatus.type === 'success' ? 'text-emerald-500' : 'text-muted-foreground'}`}>
+        {saveStatus.type === 'error' && errorCount > 0 && <AlertTriangle className="h-4 w-4 shrink-0" />}
+        {saveStatus.type === 'success' && <Check className="h-4 w-4 shrink-0" />}
+        {saveFooterMsg}
       </div>
       <div className="flex shrink-0 justify-end">
         <Button type="submit" variant="default" onClick={handleSubmit(onSubmit)} disabled={isSaving || formState.isSubmitting} className="w-full sm:w-auto">
@@ -251,7 +291,36 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   return (
     <Form {...form}>
       <form onSubmit={handleSubmit(onSubmit)}>
-        {activePage === 'general' && (
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 border-b border-border mb-6 -mt-1 overflow-x-auto">
+          {TABS.map((tab) => {
+            const Icon = tab.icon
+            const hasError = tabsWithErrors.has(tab.id)
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  'relative flex items-center gap-1.5 px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors',
+                  'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-t-md',
+                  activeTab === tab.id
+                    ? 'text-foreground after:absolute after:bottom-0 after:inset-x-0 after:h-0.5 after:bg-primary'
+                    : 'text-muted-foreground',
+                  hasError && 'text-destructive'
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {tab.label}
+                {hasError && (
+                  <span className="flex h-2 w-2 rounded-full bg-destructive" />
+                )}
+              </button>
+            )
+          })}
+        </div>
+
+        {activeTab === 'general' && (
           <>
             <div className="space-y-6">
             <Card>
@@ -484,7 +553,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           </>
         )}
 
-        {activePage === 'indexers' && (
+        {activeTab === 'indexers' && (
           <div className="space-y-4">
             {envOverrides.includes('indexers') && (
               <div className="rounded-lg border border-border bg-muted/50 p-3">
@@ -506,7 +575,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           </div>
         )}
 
-        {activePage === 'providers' && (
+        {activeTab === 'providers' && (
           <div className="space-y-4">
             {envOverrides.includes('providers') && (
               <div className="rounded-lg border border-border bg-muted/50 p-3">
@@ -526,7 +595,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           </div>
         )}
 
-        {activePage === 'devices' && (
+        {activeTab === 'devices' && (
           <div className="space-y-4">
             <DeviceManagement
               sendCommand={sendCommand}
@@ -535,7 +604,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
           </div>
         )}
 
-        {activePage !== 'devices' && saveFooter}
+        {activeTab !== 'devices' && saveFooter}
       </form>
     </Form>
   )

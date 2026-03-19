@@ -33,33 +33,6 @@ type Provider struct {
 	Enabled     *bool  `json:"enabled,omitempty"`
 }
 
-func DefaultFilterConfig() FilterConfig {
-	return FilterConfig{
-		QualityExcluded: []string{"CAM", "TeleSync", "TeleCine", "SCR"},
-		DubbedExcluded:  ptrBool(true),
-	}
-}
-
-func DefaultSortConfig() SortConfig {
-	return SortConfig{
-		PreferredResolution: []string{"4k", "1080p", "720p", "sd"},
-		PreferredQuality: []string{
-			"BluRay REMUX", "REMUX", "BluRay", "BRRip", "BDRip", "UHDRip", "HDRip",
-			"WEB-DL", "WEBRip", "WEB-DLRip", "WEB",
-			"HDTV", "HDTVRip", "PDTV", "TVRip", "SATRip",
-			"DVD", "DVDRip", "PPVRip", "R5", "XviD", "DivX",
-		},
-		PreferredAvailNZB: []string{"available"},
-		SortCriteriaOrder: []string{
-			"availnzb", "resolution", "quality", "codec", "visual_tag", "audio", "channels",
-			"bit_depth", "container", "languages", "group", "edition", "network", "region",
-			"three_d", "size", "keywords", "regex",
-		},
-		GrabWeight: 0.5,
-		AgeWeight:  1.0,
-	}
-}
-
 func ptrBool(b bool) *bool { return &b }
 
 func IsAggregatorIndexerType(indexerType string) bool {
@@ -154,8 +127,6 @@ type Config struct {
 
 	Devices map[string]*DeviceEntry `json:"devices,omitempty"`
 
-	Streams []*StreamEntry `json:"streams,omitempty"`
-
 	// MemoryLimitMB sets a soft limit on total Go heap (runtime/debug.SetMemoryLimit). 0 = no limit.
 	// When set, segment cache is automatically 80% of this limit.
 	// Use this to stop memory climbing; the runtime will GC more aggressively to stay under the limit.
@@ -177,17 +148,6 @@ type DeviceEntry struct {
 	Username         string                         `json:"username"`
 	Token            string                         `json:"token"`
 	IndexerOverrides map[string]IndexerSearchConfig `json:"indexer_overrides,omitempty"`
-	StreamIDs        []string                       `json:"stream_ids,omitempty"`
-}
-
-type StreamEntry struct {
-	ID                string                         `json:"id"`
-	Name              string                         `json:"name"`
-	Filters           FilterConfig                   `json:"filters"`
-	Sorting           SortConfig                     `json:"sorting"`
-	IndexerOverrides  map[string]IndexerSearchConfig `json:"indexer_overrides,omitempty"`
-	ShowAllStream     bool                           `json:"show_all_stream"`
-	PriorityGridAdded []string                       `json:"priority_grid_added,omitempty"`
 }
 
 func (c *Config) GetIncludeYearInSearch() bool { return true }

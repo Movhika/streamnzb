@@ -22,7 +22,6 @@ import (
 	"streamnzb/pkg/server/web"
 	"streamnzb/pkg/services/availnzb"
 	"streamnzb/pkg/session"
-	"streamnzb/pkg/stream"
 	"streamnzb/pkg/usenet/nntp/proxy"
 
 	"github.com/joho/godotenv"
@@ -146,36 +145,6 @@ func main() {
 				}
 			}
 		}
-		if len(cfg.Streams) == 0 {
-			var stateStreams []*stream.Stream
-			if found, _ := stateMgr.Get("streams", &stateStreams); found && len(stateStreams) > 0 {
-				cfg.Streams = make([]*config.StreamEntry, 0, len(stateStreams))
-				for _, s := range stateStreams {
-					if s == nil || s.ID == "" {
-						continue
-					}
-					ov := s.IndexerOverrides
-					if ov == nil {
-						ov = make(map[string]config.IndexerSearchConfig)
-					}
-					cfg.Streams = append(cfg.Streams, &config.StreamEntry{
-						ID:               s.ID,
-						Name:             s.Name,
-						Filters:          s.Filters,
-						Sorting:          s.Sorting,
-						IndexerOverrides: ov,
-						ShowAllStream:    s.ShowAllStream,
-					})
-				}
-				if err := cfg.Save(); err != nil {
-					logger.Warn("Failed to save config after streams migration", "err", err)
-				} else {
-					stateMgr.Delete("streams")
-					_ = stateMgr.Flush()
-					logger.Info("Migrated streams from state.json to config.json")
-				}
-			}
-		}
 	}
 
 	if cfg.AvailNZBMode != "disabled" {
@@ -208,11 +177,6 @@ func main() {
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize device manager: %v", err))
 	}
-	streamManager, err := stream.NewManagerFromConfig(cfg, saveConfig)
-	if err != nil {
-		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize stream manager: %v", err))
-	}
-
 	stremioServer, err := stremio.NewServer(&stremio.ServerOptions{
 		Config:               comp.Config,
 		BaseURL:              comp.Config.AddonBaseURL,
@@ -226,7 +190,6 @@ func main() {
 		TMDBClient:           comp.TMDBClient,
 		TVDBClient:           comp.TVDBClient,
 		DeviceManager:        deviceManager,
-		StreamManager:        streamManager,
 		Version:              Version,
 		AttemptRecorder:      stateMgr,
 	})
@@ -234,7 +197,7 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize Stremio server: %v", err))
 	}
 
-	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, streamManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
+	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
 	apiServer.SetIndexerCaps(comp.IndexerCaps)
 	apiServer.SetAttemptLister(stateMgr)
 	if cfg.AvailNZBMode != "disabled" && strings.TrimSpace(availNZBAPIKey) == "" && strings.TrimSpace(availNZBUrl) != "" {

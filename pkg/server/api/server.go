@@ -22,7 +22,6 @@ import (
 	"streamnzb/pkg/services/metadata/tmdb"
 	"streamnzb/pkg/services/metadata/tvdb"
 	"streamnzb/pkg/session"
-	"streamnzb/pkg/stream"
 	"streamnzb/pkg/usenet/nntp"
 	"streamnzb/pkg/usenet/nntp/proxy"
 	"streamnzb/pkg/usenet/validation"
@@ -39,7 +38,6 @@ type Server struct {
 	indexer        indexer.Indexer
 	indexerCaps    map[string]*indexer.Caps
 	deviceManager  *auth.DeviceManager
-	streamManager  *stream.Manager
 	app            *app.App
 
 	availNZBURL    string
@@ -61,11 +59,11 @@ type Client struct {
 	user *auth.Device
 }
 
-func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, streamManager *stream.Manager, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
-	return NewServerWithApp(cfg, pools, sessMgr, strmServer, indexer, deviceManager, streamManager, nil, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey)
+func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
+	return NewServerWithApp(cfg, pools, sessMgr, strmServer, indexer, deviceManager, nil, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey)
 }
 
-func NewServerWithApp(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, streamManager *stream.Manager, a *app.App, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
+func NewServerWithApp(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, a *app.App, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
 
 	var list []*nntp.ClientPool
 	for _, p := range pools {
@@ -80,7 +78,6 @@ func NewServerWithApp(cfg *config.Config, pools map[string]*nntp.ClientPool, ses
 		strmServer:     strmServer,
 		indexer:        indexer,
 		deviceManager:  deviceManager,
-		streamManager:  streamManager,
 		app:            a,
 		availNZBURL:    availNZBURL,
 		availNZBAPIKey: availNZBAPIKey,
@@ -229,7 +226,7 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 			TMDBClient:           comp.TMDBClient,
 			TVDBClient:           comp.TVDBClient,
 			DeviceManager:        s.deviceManager,
-			StreamManager:        s.streamManager,
+
 		})
 	}
 }
@@ -316,9 +313,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/streams", authMiddleware(http.HandlerFunc(s.handleStreams)))
 	mux.Handle("/api/streams/avail", authMiddleware(http.HandlerFunc(s.handleStreamsAvail)))
 	mux.Handle("/api/search/releases", authMiddleware(http.HandlerFunc(s.handleSearchReleases)))
-	mux.Handle("/api/stream/config", authMiddleware(http.HandlerFunc(s.handleStreamConfig)))
-	mux.Handle("/api/stream/configs/", authMiddleware(http.HandlerFunc(s.handleStreamConfigByID)))
-	mux.Handle("/api/stream/configs", authMiddleware(http.HandlerFunc(s.handleStreamConfigs)))
+
 	mux.Handle("/api/logs/download", authMiddleware(http.HandlerFunc(s.handleDownloadLogs)))
 	mux.Handle("/api/nzb-attempts", authMiddleware(http.HandlerFunc(s.handleNZBAttempts)))
 

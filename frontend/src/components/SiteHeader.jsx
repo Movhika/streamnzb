@@ -3,15 +3,10 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 
 const pageTitles = {
   dashboard: "Dashboard",
-  search: "Search",
   "nzb-history": "NZB History",
   logs: "Logs",
   profile: "Profile",
-  general: "General",
-  indexers: "Indexers",
-  providers: "Providers",
-  streams: "Streams",
-  devices: "Devices",
+  settings: "Settings",
 }
 
 export function SiteHeader({ activePage }) {

@@ -1,7 +1,6 @@
 import {
-  LayoutDashboard, Settings, Server, Globe, Radio,
-  MonitorSmartphone, LogOut, Tv, Clipboard, Check,
-  Sun, Moon, Monitor, Zap, FileText, Coffee, User, MoreVertical, Search, History
+  LayoutDashboard, Settings, LogOut, Clipboard, Check,
+  Sun, Moon, Monitor, Zap, FileText, Coffee, User, MoreVertical, History
 } from "lucide-react"
 import {
   Sidebar,
@@ -26,17 +25,9 @@ import { cn } from "@/lib/utils"
 
 const navMain = [
   { id: "dashboard", title: "Dashboard", icon: LayoutDashboard },
-  { id: "search", title: "Search", icon: Search },
   { id: "nzb-history", title: "NZB History", icon: History },
   { id: "logs", title: "Logs", icon: FileText },
-]
-
-const navSettings = [
-  { id: "general", title: "General", icon: Settings },
-  { id: "indexers", title: "Indexers", icon: Server },
-  { id: "providers", title: "Providers", icon: Globe },
-  { id: "streams", title: "Streams", icon: Radio },
-  { id: "devices", title: "Devices", icon: MonitorSmartphone },
+  { id: "settings", title: "Settings", icon: Settings },
 ]
 
 const DiscordIcon = (props) => (
@@ -56,6 +47,7 @@ export function AppSidebar({
   config,
   onInstallClick,
   copied,
+  manifestUrl,
   ...props
 }) {
   return (
@@ -100,24 +92,14 @@ export function AppSidebar({
                 </SidebarMenuItem>
               ))}
               <SidebarMenuItem>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <SidebarMenuButton tooltip="Install" disabled={!config}>
-                      <Tv />
-                      <span>Install</span>
-                    </SidebarMenuButton>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent side="right" align="end" className="w-48">
-                    <DropdownMenuItem onClick={() => onInstallClick('web')}>
-                      <Globe className="mr-2 h-4 w-4" />
-                      Stremio Web
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onInstallClick('copy')}>
-                      {copied ? <Check className="mr-2 h-4 w-4" /> : <Clipboard className="mr-2 h-4 w-4" />}
-                      {copied ? 'Copied!' : 'Copy Link'}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <SidebarMenuButton
+                  tooltip={copied ? 'Copied!' : 'Copy Manifest URL'}
+                  disabled={!config}
+                  onClick={() => onInstallClick()}
+                >
+                  {copied ? <Check /> : <Clipboard />}
+                  <span>{copied ? 'Copied!' : 'Install'}</span>
+                </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton
@@ -128,27 +110,6 @@ export function AppSidebar({
                   <span>Discord</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {/* Settings nav */}
-        <SidebarGroup>
-          <SidebarGroupLabel>Settings</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {navSettings.map((item) => (
-                <SidebarMenuItem key={item.id}>
-                  <SidebarMenuButton
-                    isActive={activePage === item.id}
-                    tooltip={item.title}
-                    onClick={() => onNavigate(item.id)}
-                  >
-                    <item.icon />
-                    <span>{item.title}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

@@ -277,9 +277,7 @@ func (s *Server) reloadConfigAsync(newCfg *config.Config) {
 			return
 		}
 		validator := validation.NewChecker(base.UsenetPool, 5, 6)
-		defaultFilters := config.DefaultFilterConfig()
-		defaultSorting := config.DefaultSortConfig()
-		triageService := triage.NewService(&defaultFilters, defaultSorting)
+		triageService := triage.NewService()
 		s.mu.RLock()
 		availNZBURL := s.availNZBURL
 		availNZBAPIKey := s.availNZBAPIKey
@@ -353,7 +351,6 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 
 	var deviceConfigs map[string]struct {
 		IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides"`
-		StreamIDs        []string                              `json:"stream_ids"`
 	}
 	if err := json.Unmarshal(payload, &deviceConfigs); err != nil {
 		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid device config data"}`)})
@@ -367,9 +364,6 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 		}
 		if err := s.deviceManager.UpdateDeviceIndexerOverrides(username, deviceConfig.IndexerOverrides); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to update indexer overrides for %s: %v", username, err))
-		}
-		if err := s.deviceManager.UpdateDeviceStreamIDs(username, deviceConfig.StreamIDs); err != nil {
-			errors = append(errors, fmt.Sprintf("Failed to update stream IDs for %s: %v", username, err))
 		}
 	}
 
@@ -401,7 +395,6 @@ func (s *Server) handleGetDevicesWS(client *Client) {
 			"username":          device.Username,
 			"token":             device.Token,
 			"indexer_overrides": device.IndexerOverrides,
-			"stream_ids":        device.StreamIDs,
 		})
 	}
 

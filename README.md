@@ -3,25 +3,23 @@
 [![Buy Me A Coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg)](https://buymeacoffee.com/gaisberg)
 [![Discord](https://img.shields.io/badge/discord-join-7289DA.svg?logo=discord&logoColor=white)](https://snzb.stream/discord)
 
-StreamNZB is a Stremio/Nuvio addon that streams from Usenet via your indexers. You see one row per **stream** (e.g. Global, 1080p)—each a named set of filters and sorting. No upfront NZB validation: we build an ordered list of releases from indexer + [AvailNZB](https://check.snzb.stream), try the first on play, and on failure report bad and fail over to the next. One app: addon, NNTP proxy, and indexer aggregation behind a single IP. No extra containers—just Usenet provider(s) and indexer(s).
+StreamNZB is a Usenet streaming provider for [AIOStreams](https://github.com/Viren070/AIOStreams). It searches your indexers, checks availability via [AvailNZB](https://check.snzb.stream), and streams releases on-the-fly from your Usenet providers. One binary — addon, NNTP proxy, and indexer aggregation behind a single IP. No extra containers, just your Usenet provider(s) and indexer(s).
 
 
 ## What it does
 
-- **Stremio & Nuvio addon** – Add the manifest URL in [Stremio](https://www.stremio.com) or [Nuvio](https://nuvioapp.space). Open a title and you get one row per **stream config** (e.g. “Global”, “1080p”). Each row shows “StreamNZB [availNZB]” when the top release is known good, or “X possible releases”. Play uses that stream’s ordered list; if playback fails we report to AvailNZB and try the next release.
-- **Streams** – In **Settings → Streams** you define multiple streams (name + filters + sorting). The **Global** stream is always first; others appear in stable order. Each stream gets its own play list for every title (same indexer/AvailNZB fetch, different filter/sort per stream). Optional “Next release” row per stream lets you advance through the list.
-- **Devices** – **Settings → Devices** creates tokens (one manifest URL per token) for auth. All devices see the same stream list; streams are not per-device.
-- **NNTP proxy** – Standard NNTP (default port 119) for SABnzbd or NZBGet. Same provider pool as the addon.
-- **AvailNZB** – Reuse others’ availability checks and report your own so the shared DB stays useful. Bad releases are skipped when building play lists; good/bad is reported on play.
-- **Single binary** – Docker image or native Windows/Linux/macOS. No other containers required.
+- **Usenet provider for AIOStreams** — StreamNZB acts as a Stremio-compatible addon. Add the manifest URL to [AIOStreams](https://github.com/Viren070/AIOStreams) and let AIOStreams handle filtering, sorting, and formatting. StreamNZB returns all available releases so AIOStreams can do the triage.
+- **NNTP proxy** — Standard NNTP (default port 119) for SABnzbd or NZBGet. Same provider pool as the addon.
+- **AvailNZB** — Community availability database. Bad releases are skipped; success/failure is reported on play so the shared DB stays current.
+- **Single binary** — Docker image or native Windows/Linux/macOS. No other containers required.
 
 
-## Release types we don’t support
+## Release types we don't support
 
 Streaming is done on-the-fly from archive segments. That only works when the inner file is stored uncompressed:
 
-- **Compressed RAR** – RAR must be STORE (no compression). Compressed RAR releases will not play.
-- **Compressed 7z** – Same idea: only uncompressed (copy/store) 7z content is streamable.
+- **Compressed RAR** — RAR must be STORE (no compression). Compressed RAR releases will not play.
+- **Compressed 7z** — Same idea: only uncompressed (copy/store) 7z content is streamable.
 
 
 ## Run it
@@ -43,30 +41,38 @@ services:
 
 Or run the binary from the [releases](https://github.com/Gaisberg/streamnzb/releases) page (Windows, Linux, macOS). See `.env.example` for config via environment variables.
 
-**First use:** Open `http://localhost:7000`. Default login is `admin` / `admin`; you’ll be asked to change the password. In **Settings** add at least one Usenet provider and one indexer. The default **Global** stream (Settings → Streams) is enough to start; you can add more streams (e.g. “1080p”, “4K”) with different filters and sorting. Create devices under **Settings → Devices** and use each device’s manifest URL in Stremio—all devices see the same stream list (Global first, then your other streams).
+**First use:**
+
+1. Open `http://localhost:7000`. Default login is `admin` / `admin`; you'll be asked to change the password.
+2. Go to **Settings → Providers** and add at least one Usenet provider (host, port, username, password, connections).
+3. Go to **Settings → Indexers** and add at least one Newznab-compatible indexer (URL + API key).
+4. Click **Save Changes** at the bottom — validation will highlight any fields that need attention.
+5. Click the **Install** button in the sidebar to copy your manifest URL.
+6. Add that manifest URL to [AIOStreams](https://github.com/Viren070/AIOStreams) as a StreamNZB preset (see below).
 
 
 ## Using with AIOStreams (recommended)
 
-[AIOStreams](https://github.com/Viren070/AIOStreams) is the preferred way to use StreamNZB. It consolidates multiple Stremio addons into a single super-addon with advanced filtering, sorting, and formatting—all configured in one place.
+[AIOStreams](https://github.com/Viren070/AIOStreams) is the recommended way to use StreamNZB. It consolidates multiple Stremio addons into a single super-addon with advanced filtering, sorting, and formatting — all configured in one place.
 
 **Setup:**
 
-1. Add StreamNZB preset in AIOStreams using your StreamNZB device manifest URL (e.g. `https://your-streamnzb-host:7000/<device-token>/manifest.json`).
-2. **No Usenet service required in AIOStreams**—StreamNZB handles all Usenet provider connections, NZB fetching, and streaming internally. Skip the AIOStreams Usenet service configuration entirely.
-3. Configure your filtering, sorting, and stream formatting rules in the AIOStreams UI. AIOStreams will aggregate StreamNZB results alongside any other addons you use and apply your rules uniformly.
+1. In the StreamNZB dashboard, click the **Install** button in the sidebar to copy your manifest URL.
+2. In AIOStreams, add the StreamNZB preset and paste your manifest URL (e.g. `https://your-host:7000/<token>/manifest.json`).
+3. **No Usenet service required in AIOStreams** — StreamNZB handles all Usenet provider connections, NZB fetching, and streaming internally. Skip the AIOStreams Usenet service configuration entirely.
+4. Configure your filtering, sorting, and stream formatting rules in the AIOStreams UI. AIOStreams will aggregate StreamNZB results alongside any other addons you use and apply your rules uniformly.
 
-StreamNZB automatically detects AIOStreams via its User-Agent and adjusts its behaviour: it returns all available releases so AIOStreams can handle triage, scoring, and failover ordering on its side.
+StreamNZB automatically detects AIOStreams via its User-Agent and returns all available releases so AIOStreams can handle triage, scoring, and failover ordering on its side.
 
 
 ## AvailNZB
 
-[AvailNZB](https://check.snzb.stream) is a community availability database. We don’t download or validate NZBs before showing results—we build an ordered play list from indexer search plus AvailNZB (skipping releases already reported bad), then try on play. StreamNZB reports success/failure so the shared DB stays current. Official builds can utilize the project’s AvailNZB instance, but you can change the mode in **Settings → AvailNZB**.
+[AvailNZB](https://check.snzb.stream) is a community availability database. StreamNZB doesn't download or validate NZBs before showing results — it builds an ordered play list from indexer search plus AvailNZB (skipping releases already reported bad), then tries on play. Success/failure is reported so the shared DB stays current. Official builds can utilize the project's AvailNZB instance; you can change the mode in **Settings → General → AvailNZB**.
 
 
 ## Troubleshooting
 
-If you’re stuck, please either open a [GitHub issue](https://github.com/Gaisberg/streamnzb/issues) or report it in the [Discord](https://snzb.stream/discord) `#help` channel (they sync via [GitThread](https://gitthreadsync.snzb.stream/)). Include downloaded logs from **Settings → Logs** when relevant, and include the copied bad match report from **NZB History** when the issue is about a wrong or poor release match. Sensitive data should be automatically redacted but please double-check before posting. 
+If you're stuck, please either open a [GitHub issue](https://github.com/Gaisberg/streamnzb/issues) or report it in the [Discord](https://snzb.stream/discord) `#help` channel (they sync via [GitThread](https://gitthreadsync.snzb.stream/)). Include downloaded logs when relevant, and include the copied bad match report from **NZB History** when the issue is about a wrong or poor release match. Sensitive data should be automatically redacted but please double-check before posting.
 
 
 ## Support
@@ -80,3 +86,4 @@ If StreamNZB is useful to you, you can support development here:
 
 - [javi11](https://github.com/javi11) for Go-based RAR and 7z streaming ([altmount](https://github.com/javi11/altmount)).
 - [Augment](https://www.augmentcode.com/) for helping with the project.
+

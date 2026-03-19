@@ -15,7 +15,6 @@ type Device struct {
 	Username         string                                `json:"username"`
 	Token            string                                `json:"token"`
 	IndexerOverrides map[string]config.IndexerSearchConfig `json:"indexer_overrides"`
-	StreamIDs        []string                              `json:"stream_ids,omitempty"`
 }
 
 type DeviceManager struct {
@@ -98,7 +97,6 @@ func (dm *DeviceManager) load() error {
 					Username:         e.Username,
 					Token:            e.Token,
 					IndexerOverrides: ov,
-					StreamIDs:        e.StreamIDs,
 				}
 			}
 		}
@@ -133,7 +131,6 @@ func (dm *DeviceManager) load() error {
 				Username:         d.Username,
 				Token:            d.Token,
 				IndexerOverrides: d.IndexerOverrides,
-				StreamIDs:        d.StreamIDs,
 			}
 			if dm.devices[k].IndexerOverrides == nil {
 				dm.devices[k].IndexerOverrides = make(map[string]config.IndexerSearchConfig)
@@ -162,7 +159,6 @@ func (dm *DeviceManager) saveLocked() error {
 				Username:         d.Username,
 				Token:            d.Token,
 				IndexerOverrides: ov,
-				StreamIDs:        d.StreamIDs,
 			}
 		}
 		if dm.saveFn != nil {
@@ -271,7 +267,6 @@ func (dm *DeviceManager) GetAllDevices() []Device {
 			Username:         device.Username,
 			Token:            device.Token,
 			IndexerOverrides: device.IndexerOverrides,
-			StreamIDs:        device.StreamIDs,
 		})
 	}
 
@@ -400,19 +395,4 @@ func (dm *DeviceManager) UpdateDeviceIndexerOverrides(username string, overrides
 	return nil
 }
 
-func (dm *DeviceManager) UpdateDeviceStreamIDs(username string, streamIDs []string) error {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
 
-	device, exists := dm.devices[username]
-	if !exists {
-		return fmt.Errorf("device not found")
-	}
-
-	device.StreamIDs = streamIDs
-
-	if err := dm.saveLocked(); err != nil {
-		return fmt.Errorf("failed to save device stream IDs: %w", err)
-	}
-	return nil
-}
