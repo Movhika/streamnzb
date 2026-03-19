@@ -44,16 +44,19 @@ Or run the binary from the [releases](https://github.com/Gaisberg/streamnzb/rele
 **First use:**
 
 1. Open `http://localhost:7000`. Default login is `admin` / `admin`; you'll be asked to change the password.
-2. Go to **Settings → Providers** and add at least one Usenet provider (host, port, username, password, connections).
-3. Go to **Settings → Indexers** and add at least one Newznab-compatible indexer (URL + API key).
-4. Click **Save Changes** at the bottom — validation will highlight any fields that need attention.
-5. Click the **Install** button in the sidebar to copy your manifest URL.
-6. Add that manifest URL to [AIOStreams](https://github.com/Viren070/AIOStreams) as a StreamNZB preset (see below).
+2. Go to **Settings → General** and set your base URL as an IP address or domain name AIOStreams can reach.
+  - If using tailscale use the IP address of the machine running streamnzb. e.g. `http://100.64.0.1:7000`
+  - If using a domain name make sure it is reachable from the machine running AIOStreams. e.g. `http://streamnzb.example.com:7000` or HTTPS `https://streamnzb.example.com`
+3. Go to **Settings → Providers** and add at least one Usenet provider (host, port, username, password, connections).
+4. Go to **Settings → Indexers** and add at least one Newznab-compatible indexer (URL + API key).
+5. Click **Save Changes** at the bottom — validation will highlight any fields that need attention.
+6. Click the **Install** button in the sidebar to copy your manifest URL.
+7. Add that manifest URL to [AIOStreams](https://github.com/Viren070/AIOStreams) as a StreamNZB preset (see below).
 
 
-## Using with AIOStreams (recommended)
+## Using with AIOStreams
 
-[AIOStreams](https://github.com/Viren070/AIOStreams) is the recommended way to use StreamNZB. It consolidates multiple Stremio addons into a single super-addon with advanced filtering, sorting, and formatting — all configured in one place.
+[AIOStreams](https://github.com/Viren070/AIOStreams) is THE way to use StreamNZB. It consolidates multiple Stremio addons into a single super-addon with advanced filtering, sorting, and formatting — all configured in one place.
 
 **Setup:**
 
