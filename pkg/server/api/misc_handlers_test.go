@@ -5,23 +5,37 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"testing"
 
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/core/paths"
 )
 
-func TestHandleDownloadLogsServesCurrentLogFile(t *testing.T) {
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
+// setTestDataDir points GetDataDir at a temp directory so tests don't
+// touch the real AppData folder on Windows.
+func setTestDataDir(t *testing.T) {
+	t.Helper()
 	tempDir := t.TempDir()
-	if err := os.Chdir(tempDir); err != nil {
-		t.Fatalf("Chdir temp dir: %v", err)
+	if runtime.GOOS == "windows" {
+		t.Setenv("LOCALAPPDATA", tempDir)
+	} else {
+		oldWD, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("Getwd: %v", err)
+		}
+		if err := os.Chdir(tempDir); err != nil {
+			t.Fatalf("Chdir temp dir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chdir(oldWD) })
 	}
-	defer func() {
-		_ = os.Chdir(oldWD)
-	}()
+	if err := os.MkdirAll(paths.GetDataDir(), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+}
+
+func TestHandleDownloadLogsServesCurrentLogFile(t *testing.T) {
+	setTestDataDir(t)
 
 	const content = "time=2026-03-08T00:00:00.000+00:00 level=INFO msg=\"hello\"\n"
 	if err := os.WriteFile(logger.GetCurrentLogPath(), []byte(content), 0644); err != nil {
@@ -54,17 +68,7 @@ func TestHandleDownloadLogsServesCurrentLogFile(t *testing.T) {
 }
 
 func TestHandleDownloadLogsReturnsNotFoundWhenMissing(t *testing.T) {
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	tempDir := t.TempDir()
-	if err := os.Chdir(tempDir); err != nil {
-		t.Fatalf("Chdir temp dir: %v", err)
-	}
-	defer func() {
-		_ = os.Chdir(oldWD)
-	}()
+	setTestDataDir(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/logs/download", nil)
 	rr := httptest.NewRecorder()

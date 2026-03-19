@@ -6,9 +6,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"streamnzb/pkg/core/paths"
 )
 
 func TestSanitizeStringRedactsSensitiveData(t *testing.T) {
@@ -82,17 +85,27 @@ func TestGlobalBroadcastHandlerRedactsUnderlyingOutputAndHistory(t *testing.T) {
 }
 
 func TestInitTwiceKeepsCurrentLogFile(t *testing.T) {
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
 	tempDir := t.TempDir()
-	if err := os.Chdir(tempDir); err != nil {
-		t.Fatalf("Chdir temp dir: %v", err)
+
+	// On Windows, GetDataDir uses LOCALAPPDATA; point it at tempDir so
+	// logs land there instead of the real AppData folder.
+	if runtime.GOOS == "windows" {
+		t.Setenv("LOCALAPPDATA", tempDir)
+	} else {
+		oldWD, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("Getwd: %v", err)
+		}
+		if err := os.Chdir(tempDir); err != nil {
+			t.Fatalf("Chdir temp dir: %v", err)
+		}
+		defer func() { _ = os.Chdir(oldWD) }()
 	}
-	defer func() {
-		_ = os.Chdir(oldWD)
-	}()
+
+	dataDir := paths.GetDataDir()
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	logFileMu.Lock()
 	oldLogFile := logFile
@@ -115,7 +128,7 @@ func TestInitTwiceKeepsCurrentLogFile(t *testing.T) {
 	}
 
 	Init("INFO")
-	archived, err := filepath.Glob(filepath.Join(tempDir, "streamnzb-*.log"))
+	archived, err := filepath.Glob(filepath.Join(dataDir, "streamnzb-*.log"))
 	if err != nil {
 		t.Fatalf("Glob after first init: %v", err)
 	}
@@ -124,7 +137,7 @@ func TestInitTwiceKeepsCurrentLogFile(t *testing.T) {
 	}
 
 	SetLevel("DEBUG")
-	archived, err = filepath.Glob(filepath.Join(tempDir, "streamnzb-*.log"))
+	archived, err = filepath.Glob(filepath.Join(dataDir, "streamnzb-*.log"))
 	if err != nil {
 		t.Fatalf("Glob after second init: %v", err)
 	}
