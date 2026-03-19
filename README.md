@@ -46,6 +46,19 @@ Or run the binary from the [releases](https://github.com/Gaisberg/streamnzb/rele
 **First use:** Open `http://localhost:7000`. Default login is `admin` / `admin`; you’ll be asked to change the password. In **Settings** add at least one Usenet provider and one indexer. The default **Global** stream (Settings → Streams) is enough to start; you can add more streams (e.g. “1080p”, “4K”) with different filters and sorting. Create devices under **Settings → Devices** and use each device’s manifest URL in Stremio—all devices see the same stream list (Global first, then your other streams).
 
 
+## Using with AIOStreams (recommended)
+
+[AIOStreams](https://github.com/Viren070/AIOStreams) is the preferred way to use StreamNZB. It consolidates multiple Stremio addons into a single super-addon with advanced filtering, sorting, and formatting—all configured in one place.
+
+**Setup:**
+
+1. Add StreamNZB preset in AIOStreams using your StreamNZB device manifest URL (e.g. `https://your-streamnzb-host:7000/<device-token>/manifest.json`).
+2. **No Usenet service required in AIOStreams**—StreamNZB handles all Usenet provider connections, NZB fetching, and streaming internally. Skip the AIOStreams Usenet service configuration entirely.
+3. Configure your filtering, sorting, and stream formatting rules in the AIOStreams UI. AIOStreams will aggregate StreamNZB results alongside any other addons you use and apply your rules uniformly.
+
+StreamNZB automatically detects AIOStreams via its User-Agent and adjusts its behaviour: it returns all available releases so AIOStreams can handle triage, scoring, and failover ordering on its side.
+
+
 ## AvailNZB
 
 [AvailNZB](https://check.snzb.stream) is a community availability database. We don’t download or validate NZBs before showing results—we build an ordered play list from indexer search plus AvailNZB (skipping releases already reported bad), then try on play. StreamNZB reports success/failure so the shared DB stays current. Official builds can utilize the project’s AvailNZB instance, but you can change the mode in **Settings → AvailNZB**.
