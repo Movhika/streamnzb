@@ -24,37 +24,42 @@ type SearchConfig interface {
 	GetSearchTitleNormalize() bool
 }
 
+// BuildFilterQuery resolves the expected title (and year for movies) from TMDB
+// metadata so that FilterResults can reject releases whose title doesn't match.
+// The returned string is empty when TMDB metadata is unavailable.
+func BuildFilterQuery(tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string) string {
+	if tmdbClient == nil {
+		return ""
+	}
+	if contentType == "movie" && contentIDs != nil {
+		if t, y, err := tmdbClient.GetMovieTitleAndYear(contentIDs.ImdbID, req.TMDBID); err == nil && t != "" {
+			if y != "" {
+				return t + " " + y
+			}
+			return t
+		}
+	} else if contentType == "series" && req.Season != "" && req.Episode != "" {
+		if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil && name != "" {
+			seasonNum, _ := strconv.Atoi(req.Season)
+			epNum, _ := strconv.Atoi(req.Episode)
+			if seasonNum > 0 || epNum > 0 {
+				return fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
+			}
+			return fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
+		}
+	}
+	return ""
+}
+
 func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string, cfg SearchConfig) ([]*release.Release, error) {
 	idReq := req
 	idReq.Query = ""
 	idReq.PerIndexerQuery = nil
 
 	var textReq *indexer.SearchRequest
-	var filterQuery string
+	filterQuery := BuildFilterQuery(tmdbClient, req, contentType, contentIDs, imdbForText, tmdbForText)
 
 	usePerIndexerQuery := len(req.PerIndexerQuery) > 0
-
-	if tmdbClient != nil {
-		if contentType == "movie" && contentIDs != nil {
-			if t, y, err := tmdbClient.GetMovieTitleAndYear(contentIDs.ImdbID, req.TMDBID); err == nil && t != "" {
-				if y != "" {
-					filterQuery = t + " " + y
-				} else {
-					filterQuery = t
-				}
-			}
-		} else if contentType == "series" && req.Season != "" && req.Episode != "" {
-			if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil && name != "" {
-				seasonNum, _ := strconv.Atoi(req.Season)
-				epNum, _ := strconv.Atoi(req.Episode)
-				if seasonNum > 0 || epNum > 0 {
-					filterQuery = fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
-				} else {
-					filterQuery = fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
-				}
-			}
-		}
-	}
 
 	if usePerIndexerQuery {
 		// Per-indexer text queries should be query-only. Keeping season/episode here

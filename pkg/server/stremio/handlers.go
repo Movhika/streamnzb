@@ -1031,6 +1031,15 @@ func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id strin
 		}
 	}
 
+	// Apply the same title filter to avail releases that RunIndexerSearches
+	// applies to indexer results. Without this, releases with incorrect IMDB
+	// metadata on the indexer side bypass the title check and can cause wrong
+	// content to be served (e.g. "Dying Of The Light" for "Interstellar").
+	filterQuery := search.BuildFilterQuery(s.tmdbClient, *req, contentType, contentIDs, imdbForText, tmdbForText)
+	if filterQuery != "" && len(availReleases) > 0 {
+		availReleases = search.FilterResults(availReleases, contentType, filterQuery, req.Season, req.Episode)
+	}
+
 	return &rawSearchResult{
 		Params:          params,
 		AvailReleases:   availReleases,
@@ -1640,6 +1649,11 @@ func (s *Server) runAvailNZBPhase(ctx context.Context, params *SearchParams, str
 			continue
 		}
 		availReleases = append(availReleases, rws.Release)
+	}
+	// Filter by title to reject releases with incorrect IMDB metadata.
+	filterQuery := search.BuildFilterQuery(s.tmdbClient, params.Req, params.ContentType, contentIDs, params.ImdbForText, params.TmdbForText)
+	if filterQuery != "" && len(availReleases) > 0 {
+		availReleases = search.FilterResults(availReleases, params.ContentType, filterQuery, params.Req.Season, params.Req.Episode)
 	}
 	if len(availReleases) == 0 {
 		return nil, nil, availResult

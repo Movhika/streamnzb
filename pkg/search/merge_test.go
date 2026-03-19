@@ -218,3 +218,26 @@ func TestFilterResultsMovieYearRange(t *testing.T) {
 		}
 	}
 }
+
+
+func TestFilterResultsMovieRejectsWrongIMDBMetadata(t *testing.T) {
+	logger.Init("ERROR")
+
+	// Simulate the bug: indexer returns "Dying Of The Light" for IMDB tt0816692 (Interstellar).
+	// FilterResults must reject it because the title doesn't match.
+	releases := []*release.Release{
+		{Title: "Dying.Of.The.Light.2015.NORDiC.1080p.BluRay.HEVC.x265.DTS-TWA"},
+		{Title: "Interstellar.2014.2160p.BluRay.REMUX.HEVC.DTS-HD.MA.5.1-FGT"},
+		{Title: "Interstellar.2014.1080p.BluRay.x264-SPARKS"},
+	}
+
+	filtered := FilterResults(releases, "movie", "Interstellar 2014", "", "")
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2 matches, got %d: %+v", len(filtered), filtered)
+	}
+	for _, rel := range filtered {
+		if rel.Title == releases[0].Title {
+			t.Fatalf("expected %q to be rejected, but it was kept", releases[0].Title)
+		}
+	}
+}

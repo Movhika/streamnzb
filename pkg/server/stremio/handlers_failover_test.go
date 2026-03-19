@@ -28,7 +28,7 @@ func TestSwitchToNextFallbackSkipsUnresolvableCandidate(t *testing.T) {
 	initFailoverTestLogger()
 	t.Parallel()
 
-	manager := session.NewManager(nil, nil, time.Minute, nil)
+	manager := session.NewManager(nil, nil, time.Minute)
 	t.Cleanup(manager.Shutdown)
 	server := &Server{config: &config.Config{}, sessionManager: manager}
 	key := StreamSlotKey{StreamID: "stream_test", ContentType: "movie", ID: "tt123"}
