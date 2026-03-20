@@ -1,6 +1,7 @@
 package nzb
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
@@ -60,8 +61,14 @@ type FileInfo struct {
 }
 
 func Parse(r io.Reader) (*NZB, error) {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	raw = bytes.ReplaceAll(raw, []byte{0x00}, nil)
+
 	var nzb NZB
-	decoder := xml.NewDecoder(r)
+	decoder := xml.NewDecoder(bytes.NewReader(raw))
 	decoder.CharsetReader = charset.NewReaderLabel
 	if err := decoder.Decode(&nzb); err != nil {
 		return nil, err

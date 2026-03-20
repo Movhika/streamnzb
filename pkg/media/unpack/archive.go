@@ -145,7 +145,7 @@ func GetMediaStreamForEpisode(ctx context.Context, files []UnpackableFile, cache
 		if strings.HasSuffix(name, ExtRar) || strings.Contains(name, ".part") || IsRarPart(name) || IsSplitArchivePart(name) {
 			continue
 		}
-		if strings.HasSuffix(name, ExtPar2) || strings.HasSuffix(name, ExtNzb) || strings.HasSuffix(name, ExtNfo) {
+		if strings.HasSuffix(name, ExtPar2) || strings.HasSuffix(name, ExtNzb) || strings.HasSuffix(name, ExtNfo) || strings.HasSuffix(name, ExtIso) {
 			continue
 		}
 		if largestFile == nil || f.Size() > largestFile.Size() {

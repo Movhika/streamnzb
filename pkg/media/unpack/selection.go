@@ -67,6 +67,17 @@ func selectEpisodeCandidateOrError(candidates []namedEpisodeCandidate, target Ep
 	if !target.Valid() || len(candidates) == 0 {
 		return namedEpisodeCandidate{}, false, nil
 	}
+	if len(candidates) == 1 {
+		baseName := filepath.Base(candidates[0].Name)
+		parsed := searchparser.ParseReleaseTitle(baseName)
+		if parsed == nil || (parsed.Season == 0 && parsed.Episode == 0 && len(parsed.Episodes) == 0) {
+			logger.Debug("Skipping episode title check for single-candidate release with unparseable filename",
+				"target", target,
+				"scope", scope,
+				"name", candidates[0].Name)
+			return namedEpisodeCandidate{}, false, nil
+		}
+	}
 	err := fmt.Errorf("%w: season=%d episode=%d scope=%s candidates=%d", ErrEpisodeTargetNotFound, target.Season, target.Episode, scope, len(candidates))
 	logger.Warn("Requested episode not found in candidate set",
 		"target", target,
