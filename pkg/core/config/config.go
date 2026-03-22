@@ -56,6 +56,8 @@ type IndexerSearchConfig struct {
 	TVCategories               *string `json:"tv_categories,omitempty"`
 	ExtraSearchTerms           *string `json:"extra_search_terms,omitempty"`
 	UseSeasonEpisodeParams     *bool   `json:"use_season_episode_params,omitempty"`
+	DisableIdSearch            *bool   `json:"disable_id_search,omitempty"`
+	DisableStringSearch        *bool   `json:"disable_string_search,omitempty"`
 }
 
 type IndexerConfig struct {
@@ -83,6 +85,8 @@ type IndexerConfig struct {
 	EnableSeriesPackSearch     *bool  `json:"enable_series_pack_search,omitempty"`
 	SearchTitleLanguage        string `json:"search_title_language,omitempty"`
 	SearchTitleNormalize       *bool  `json:"search_title_normalize,omitempty"`
+	DisableIdSearch            *bool  `json:"disable_id_search,omitempty"`
+	DisableStringSearch        *bool  `json:"disable_string_search,omitempty"`
 }
 
 func (ic IndexerConfig) EffectiveTimeoutSeconds() int {
@@ -261,6 +265,25 @@ func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global
 		useSE = *override.UseSeasonEpisodeParams
 	}
 	out.UseSeasonEpisodeParams = &useSE
+
+	disableID := false
+	if ic != nil && ic.DisableIdSearch != nil {
+		disableID = *ic.DisableIdSearch
+	}
+	if override != nil && override.DisableIdSearch != nil {
+		disableID = *override.DisableIdSearch
+	}
+	out.DisableIdSearch = &disableID
+
+	disableString := false
+	if ic != nil && ic.DisableStringSearch != nil {
+		disableString = *ic.DisableStringSearch
+	}
+	if override != nil && override.DisableStringSearch != nil {
+		disableString = *override.DisableStringSearch
+	}
+	out.DisableStringSearch = &disableString
+
 	return out
 }
 

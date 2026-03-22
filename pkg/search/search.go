@@ -112,16 +112,38 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 		}
 	}
 
+	// Check per-indexer overrides for disabling ID or string search.
+	skipIdSearch := false
+	skipStringSearch := false
+	if o := req.OptionalOverrides; o != nil {
+		if o.DisableIdSearch != nil && *o.DisableIdSearch {
+			skipIdSearch = true
+		}
+		if o.DisableStringSearch != nil && *o.DisableStringSearch {
+			skipStringSearch = true
+		}
+	}
+	// Don't allow both to be disabled — fall back to ID search.
+	if skipIdSearch && skipStringSearch {
+		skipIdSearch = false
+	}
+
+	if skipStringSearch {
+		textReq = nil
+	}
+
 	var idResp *indexer.SearchResponse
 	var idErr error
 	var textReleases []*release.Release
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		idResp, idErr = idx.Search(idReq)
-	}()
+	if !skipIdSearch {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			idResp, idErr = idx.Search(idReq)
+		}()
+	}
 
 	if textReq != nil {
 		wg.Add(1)
@@ -136,13 +158,20 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 
 	wg.Wait()
 
-	if idErr != nil {
+	if !skipIdSearch && idErr != nil {
 		return nil, fmt.Errorf("indexer search failed: %w", idErr)
 	}
-	indexer.NormalizeSearchResponse(idResp)
+	if idResp != nil {
+		indexer.NormalizeSearchResponse(idResp)
+	}
 
-	combined := make([]*release.Release, 0, len(idResp.Releases)+len(textReleases))
-	for _, rel := range idResp.Releases {
+	var idReleases []*release.Release
+	if idResp != nil {
+		idReleases = idResp.Releases
+	}
+
+	combined := make([]*release.Release, 0, len(idReleases)+len(textReleases))
+	for _, rel := range idReleases {
 		if rel != nil {
 			rel.QuerySource = "id"
 			combined = append(combined, rel)
@@ -157,7 +186,7 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 
 	merged := MergeAndDedupeSearchResults(combined)
 	if len(textReleases) > 0 {
-		logger.Debug("Indexer dual search", "id", len(idResp.Releases), "text", len(textReleases))
+		logger.Debug("Indexer dual search", "id", len(idReleases), "text", len(textReleases))
 	}
 
 	if filterQuery != "" {
