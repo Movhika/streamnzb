@@ -133,6 +133,14 @@ type KeyCreateResponse struct {
 	CreatedAt      string `json:"created_at"`
 }
 
+type RecoverKeyResponse struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Token     string `json:"token"`
+	IsActive  bool   `json:"is_active"`
+	RotatedAt string `json:"rotated_at"`
+}
+
 type apiErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
@@ -327,10 +335,12 @@ func RegisterAndPersistAPIKey(store KeyStore, baseURL, appName string) (string, 
 		appName = DefaultAppName
 	}
 
-	created, err := NewClient(baseURL, "").RegisterKey(appName)
+	client := NewClient(baseURL, "")
+	created, err := client.RegisterKey(appName)
 	if err != nil {
 		if errors.Is(err, ErrRegisterKeyIPAlreadyHasKey) {
-			logger.Warn("AvailNZB key registration refused because this IP already has a key; ask for help on Discord", "err", err)
+			logger.Info("AvailNZB key registration refused (IP already has key), attempting recovery")
+			return recoverAndPersistAPIKey(store, client)
 		}
 		return "", err
 	}
@@ -350,6 +360,28 @@ func RegisterAndPersistAPIKey(store KeyStore, baseURL, appName string) (string, 
 	}
 
 	logger.Info("Registered new AvailNZB API key", "name", state.Name, "id", state.ID)
+	return state.Token, nil
+}
+
+func recoverAndPersistAPIKey(store KeyStore, client *Client) (string, error) {
+	recovered, err := client.RecoverKey()
+	if err != nil {
+		return "", fmt.Errorf("availnzb recover: %w", err)
+	}
+	if recovered == nil || strings.TrimSpace(recovered.Token) == "" {
+		return "", fmt.Errorf("availnzb recover: empty token in response")
+	}
+
+	state := apiKeyState{
+		ID:    fmt.Sprintf("%d", recovered.ID),
+		Name:  strings.TrimSpace(recovered.Name),
+		Token: strings.TrimSpace(recovered.Token),
+	}
+	if err := store.Set(apiKeyStateKey, state); err != nil {
+		return "", fmt.Errorf("availnzb key bootstrap: failed to persist recovered API key: %w", err)
+	}
+
+	logger.Info("Recovered existing AvailNZB API key", "name", state.Name, "id", state.ID)
 	return state.Token, nil
 }
 
@@ -448,9 +480,9 @@ func isRegisterKeyIPAlreadyHasKeyMessage(message string) bool {
 func registerKeyIPAlreadyHasKeyErr(message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
-		return fmt.Errorf("%w; ask for help on Discord", ErrRegisterKeyIPAlreadyHasKey)
+		return ErrRegisterKeyIPAlreadyHasKey
 	}
-	return fmt.Errorf("%w: %s; ask for help on Discord", ErrRegisterKeyIPAlreadyHasKey, message)
+	return fmt.Errorf("%w: %s", ErrRegisterKeyIPAlreadyHasKey, message)
 }
 
 func (c *Client) RegisterKey(name string) (*KeyCreateResponse, error) {
@@ -507,6 +539,48 @@ func (c *Client) RegisterKey(name string) (*KeyCreateResponse, error) {
 	}
 
 	return &created, nil
+}
+
+func (c *Client) RecoverKey() (*RecoverKeyResponse, error) {
+	if c.BaseURL == "" {
+		return nil, fmt.Errorf("availnzb recover: no base URL configured")
+	}
+
+	logger.Debug("AvailNZB RecoverKey")
+
+	req, err := http.NewRequest("POST", c.BaseURL+apiPath+"/keys/recover", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		logger.Error("AvailNZB RecoverKey request failed", "err", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("availnzb recover: unexpected status code: %d", resp.StatusCode)
+		}
+		message := decodeAPIErrorMessage(body)
+		if message != "" {
+			logger.Error("AvailNZB RecoverKey unexpected status", "status", resp.StatusCode, "message", message)
+			return nil, fmt.Errorf("availnzb recover: unexpected status code: %d: %s", resp.StatusCode, message)
+		}
+		return nil, fmt.Errorf("availnzb recover: unexpected status code: %d", resp.StatusCode)
+	}
+
+	var recovered RecoverKeyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&recovered); err != nil {
+		logger.Error("AvailNZB RecoverKey decode failed", "err", err)
+		return nil, err
+	}
+
+	return &recovered, nil
 }
 
 func (c *Client) ReportAvailability(releaseURL string, providerURL string, status bool, meta ReportMeta) error {

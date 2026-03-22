@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -246,7 +245,7 @@ func TestRegisterKeyDecodesNumericID(t *testing.T) {
 	}
 }
 
-func TestRegisterKeyReturnsHelpfulErrorWhenIPAlreadyHasKey(t *testing.T) {
+func TestRegisterKeyReturnsErrorWhenIPAlreadyHasKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
@@ -267,32 +266,41 @@ func TestRegisterKeyReturnsHelpfulErrorWhenIPAlreadyHasKey(t *testing.T) {
 	if !errors.Is(err, ErrRegisterKeyIPAlreadyHasKey) {
 		t.Fatalf("RegisterKey error = %v, want ErrRegisterKeyIPAlreadyHasKey", err)
 	}
-	if !strings.Contains(err.Error(), "Discord") {
-		t.Fatalf("RegisterKey error = %q, want Discord guidance", err)
-	}
 }
 
-func TestRegisterAndPersistAPIKeyReturnsHelpfulErrorWhenIPAlreadyHasKey(t *testing.T) {
+func TestRegisterAndPersistRecoversKeyWhenIPAlreadyHasKey(t *testing.T) {
 	store := &stubKeyStore{raw: map[string][]byte{}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == apiPath+"/keys/recover" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":5,"name":"StreamNZB","token":"recovered-token","is_active":true,"rotated_at":"2026-03-15T10:05:00Z"}`))
+			return
+		}
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"error":"This IP already has a key"}`))
 	}))
 	defer server.Close()
 
 	got, err := RegisterAndPersistAPIKey(store, server.URL, DefaultAppName)
-	if err == nil {
-		t.Fatal("RegisterAndPersistAPIKey error = nil, want error")
+	if err != nil {
+		t.Fatalf("RegisterAndPersistAPIKey error = %v, want nil", err)
 	}
-	if got != "" {
-		t.Fatalf("RegisterAndPersistAPIKey token = %q, want empty", got)
+	if got != "recovered-token" {
+		t.Fatalf("RegisterAndPersistAPIKey token = %q, want %q", got, "recovered-token")
 	}
-	if !errors.Is(err, ErrRegisterKeyIPAlreadyHasKey) {
-		t.Fatalf("RegisterAndPersistAPIKey error = %v, want ErrRegisterKeyIPAlreadyHasKey", err)
+	if store.setCalls != 1 {
+		t.Fatalf("setCalls = %d, want 1", store.setCalls)
 	}
-	if store.setCalls != 0 {
-		t.Fatalf("setCalls = %d, want 0", store.setCalls)
+
+	var saved apiKeyState
+	if found, err := store.Get(apiKeyStateKey, &saved); err != nil {
+		t.Fatalf("Get persisted key: %v", err)
+	} else if !found {
+		t.Fatal("persisted key not found")
+	}
+	if saved.ID != "5" || saved.Token != "recovered-token" {
+		t.Fatalf("unexpected persisted state: %+v", saved)
 	}
 }
 
