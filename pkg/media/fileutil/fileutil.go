@@ -41,8 +41,7 @@ func ExtractFilename(subject string) string {
 var videoExtensions = map[string]bool{
 	".mkv": true, ".mp4": true, ".avi": true, ".m4v": true,
 	".mov": true, ".wmv": true, ".flv": true, ".webm": true,
-	".mpg": true, ".mpeg": true, ".m2ts": true, ".ts": true,
-	".vob": true,
+	".mpg": true, ".mpeg": true, ".vob": true,
 }
 
 func IsVideoExtension(ext string) bool {
