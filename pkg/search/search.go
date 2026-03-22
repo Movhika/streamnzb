@@ -109,38 +109,22 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 		}
 	}
 
-	// Check per-indexer overrides for disabling ID or string search.
-	skipIdSearch := false
-	skipStringSearch := false
-	if o := req.OptionalOverrides; o != nil {
-		if o.DisableIdSearch != nil && *o.DisableIdSearch {
-			skipIdSearch = true
-		}
-		if o.DisableStringSearch != nil && *o.DisableStringSearch {
-			skipStringSearch = true
-		}
-	}
-	// Don't allow both to be disabled — fall back to ID search.
-	if skipIdSearch && skipStringSearch {
-		skipIdSearch = false
-	}
-
-	if skipStringSearch {
-		textReq = nil
-	}
+	// NOTE: Per-indexer DisableIdSearch / DisableStringSearch flags are enforced
+	// inside the Aggregator.Search method, which skips individual indexers based
+	// on whether the request is ID-based or text-based. No filtering is needed here
+	// because RunIndexerSearches dispatches two separate Search calls (one ID, one text)
+	// and the aggregator handles the per-indexer opt-out.
 
 	var idResp *indexer.SearchResponse
 	var idErr error
 	var textReleases []*release.Release
 	var wg sync.WaitGroup
 
-	if !skipIdSearch {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			idResp, idErr = idx.Search(idReq)
-		}()
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		idResp, idErr = idx.Search(idReq)
+	}()
 
 	if textReq != nil {
 		wg.Add(1)
@@ -155,7 +139,7 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 
 	wg.Wait()
 
-	if !skipIdSearch && idErr != nil {
+	if idErr != nil {
 		return nil, fmt.Errorf("indexer search failed: %w", idErr)
 	}
 	if idResp != nil {

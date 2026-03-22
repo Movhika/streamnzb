@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/release"
 	"strings"
@@ -115,6 +116,32 @@ func (a *Aggregator) ResolveDownloadURL(ctx context.Context, directURL, title st
 	return "", fmt.Errorf("no matching release for title in search results")
 }
 
+// isIDOnlySearch returns true when the request is an ID-based search
+// (has IMDb/TVDB IDs and no text query).
+func isIDOnlySearch(req SearchRequest) bool {
+	return req.Query == "" && (req.IMDbID != "" || req.TVDBID != "")
+}
+
+// isTextSearch returns true when the request carries a text query.
+func isTextSearch(req SearchRequest) bool {
+	return req.Query != ""
+}
+
+// shouldSkipIndexer checks the per-indexer DisableIdSearch / DisableStringSearch
+// flags and returns true if this indexer should be skipped for the given request.
+func shouldSkipIndexer(req SearchRequest, overrides *config.IndexerSearchConfig) bool {
+	if overrides == nil {
+		return false
+	}
+	if isIDOnlySearch(req) && overrides.DisableIdSearch != nil && *overrides.DisableIdSearch {
+		return true
+	}
+	if isTextSearch(req) && overrides.DisableStringSearch != nil && *overrides.DisableStringSearch {
+		return true
+	}
+	return false
+}
+
 func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 	resultsChan := make(chan []Item, len(a.Indexers))
 	var wg sync.WaitGroup
@@ -122,6 +149,13 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 	for _, idx := range a.Indexers {
 		wg.Add(1)
 		queries := req.PerIndexerQuery[idx.Name()]
+
+		// Resolve per-indexer overrides once for skip checks.
+		var indexerOverrides *config.IndexerSearchConfig
+		if req.EffectiveByIndexer != nil {
+			indexerOverrides = req.EffectiveByIndexer[idx.Name()]
+		}
+
 		if req.PerIndexerQuery != nil && len(queries) == 0 {
 			wg.Done()
 			resultsChan <- []Item{}
@@ -129,7 +163,7 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 		}
 		if req.PerIndexerQuery != nil && len(queries) > 0 {
 
-			go func(indexer Indexer, queries []string) {
+			go func(indexer Indexer, queries []string, overrides *config.IndexerSearchConfig) {
 				defer wg.Done()
 				resultsByQuery := make([][]Item, len(queries))
 				var queryWG sync.WaitGroup
@@ -143,10 +177,13 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 						reqCopy := req
 						reqCopy.EffectiveByIndexer = nil
 						reqCopy.PerIndexerQuery = nil
-						if req.EffectiveByIndexer != nil {
-							reqCopy.OptionalOverrides = req.EffectiveByIndexer[indexer.Name()]
-						}
+						reqCopy.OptionalOverrides = overrides
 						reqCopy.Query = q
+						// Check disable flags for text queries.
+						if shouldSkipIndexer(reqCopy, overrides) {
+							logger.Debug("Skipping indexer for text search (disabled)", "indexer", indexer.Name(), "query", q)
+							return
+						}
 						resp, err := indexer.Search(reqCopy)
 						if err != nil {
 							logger.Warn("Indexer search failed", "indexer", indexer.Name(), "query", q, "err", err)
@@ -163,15 +200,22 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 					merged = append(merged, items...)
 				}
 				resultsChan <- merged
-			}(idx, append([]string(nil), queries...))
+			}(idx, append([]string(nil), queries...), indexerOverrides)
 			continue
 		}
 		reqCopy := req
 		reqCopy.EffectiveByIndexer = nil
 		reqCopy.PerIndexerQuery = nil
-		if req.EffectiveByIndexer != nil {
-			reqCopy.OptionalOverrides = req.EffectiveByIndexer[idx.Name()]
+		reqCopy.OptionalOverrides = indexerOverrides
+
+		// Check disable flags for ID-only searches.
+		if shouldSkipIndexer(reqCopy, indexerOverrides) {
+			wg.Done()
+			logger.Debug("Skipping indexer for search (disabled)", "indexer", idx.Name(), "isID", isIDOnlySearch(reqCopy), "isText", isTextSearch(reqCopy))
+			resultsChan <- []Item{}
+			continue
 		}
+
 		if req.Query != "" {
 			reqCopy.Query = req.Query
 		}
