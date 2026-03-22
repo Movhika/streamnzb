@@ -46,16 +46,13 @@ func IsAggregatorIndexerType(indexerType string) bool {
 
 type IndexerSearchConfig struct {
 	SearchResultLimit          int     `json:"search_result_limit,omitempty"`
-	IncludeYearInSearch        *bool   `json:"include_year_in_search,omitempty"`
 	EnableSeriesSeasonSearch   *bool   `json:"enable_series_season_search,omitempty"`
 	EnableSeriesCompleteSearch *bool   `json:"enable_series_complete_search,omitempty"`
 	EnableSeriesPackSearch     *bool   `json:"enable_series_pack_search,omitempty"`
 	SearchTitleLanguage        *string `json:"search_title_language,omitempty"`
-	SearchTitleNormalize       *bool   `json:"search_title_normalize,omitempty"`
 	MovieCategories            *string `json:"movie_categories,omitempty"`
 	TVCategories               *string `json:"tv_categories,omitempty"`
 	ExtraSearchTerms           *string `json:"extra_search_terms,omitempty"`
-	UseSeasonEpisodeParams     *bool   `json:"use_season_episode_params,omitempty"`
 	DisableIdSearch            *bool   `json:"disable_id_search,omitempty"`
 	DisableStringSearch        *bool   `json:"disable_string_search,omitempty"`
 }
@@ -77,14 +74,11 @@ type IndexerConfig struct {
 	MovieCategories            string `json:"movie_categories,omitempty"`
 	TVCategories               string `json:"tv_categories,omitempty"`
 	ExtraSearchTerms           string `json:"extra_search_terms,omitempty"`
-	UseSeasonEpisodeParams     *bool  `json:"use_season_episode_params,omitempty"`
 	SearchResultLimit          int    `json:"search_result_limit,omitempty"`
-	IncludeYearInSearch        *bool  `json:"include_year_in_search,omitempty"`
 	EnableSeriesSeasonSearch   *bool  `json:"enable_series_season_search,omitempty"`
 	EnableSeriesCompleteSearch *bool  `json:"enable_series_complete_search,omitempty"`
 	EnableSeriesPackSearch     *bool  `json:"enable_series_pack_search,omitempty"`
 	SearchTitleLanguage        string `json:"search_title_language,omitempty"`
-	SearchTitleNormalize       *bool  `json:"search_title_normalize,omitempty"`
 	DisableIdSearch            *bool  `json:"disable_id_search,omitempty"`
 	DisableStringSearch        *bool  `json:"disable_string_search,omitempty"`
 }
@@ -154,11 +148,8 @@ type DeviceEntry struct {
 	IndexerOverrides map[string]IndexerSearchConfig `json:"indexer_overrides,omitempty"`
 }
 
-func (c *Config) GetIncludeYearInSearch() bool { return true }
-
 func (c *Config) GetSearchTitleLanguage() string { return "" }
 
-func (c *Config) GetSearchTitleNormalize() bool { return false }
 
 func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global *Config) *IndexerSearchConfig {
 	out := &IndexerSearchConfig{}
@@ -170,14 +161,6 @@ func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global
 	if override != nil && override.SearchResultLimit > 0 {
 		out.SearchResultLimit = override.SearchResultLimit
 	}
-	val := true
-	if ic != nil && ic.IncludeYearInSearch != nil {
-		val = *ic.IncludeYearInSearch
-	}
-	if override != nil && override.IncludeYearInSearch != nil {
-		val = *override.IncludeYearInSearch
-	}
-	out.IncludeYearInSearch = &val
 	seriesSeasonSearch := true
 	if ic != nil && ic.EnableSeriesPackSearch != nil {
 		seriesSeasonSearch = *ic.EnableSeriesPackSearch
@@ -215,14 +198,7 @@ func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global
 		s = *override.SearchTitleLanguage
 	}
 	out.SearchTitleLanguage = &s
-	n := false
-	if ic != nil && ic.SearchTitleNormalize != nil {
-		n = *ic.SearchTitleNormalize
-	}
-	if override != nil && override.SearchTitleNormalize != nil {
-		n = *override.SearchTitleNormalize
-	}
-	out.SearchTitleNormalize = &n
+
 
 	mc := ""
 	if ic != nil {
@@ -256,15 +232,6 @@ func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global
 	if et != "" {
 		out.ExtraSearchTerms = &et
 	}
-
-	useSE := true
-	if ic != nil && ic.UseSeasonEpisodeParams != nil {
-		useSE = *ic.UseSeasonEpisodeParams
-	}
-	if override != nil && override.UseSeasonEpisodeParams != nil {
-		useSE = *override.UseSeasonEpisodeParams
-	}
-	out.UseSeasonEpisodeParams = &useSE
 
 	disableID := false
 	if ic != nil && ic.DisableIdSearch != nil {

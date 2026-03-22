@@ -412,12 +412,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		params.Set("cat", cat)
 	}
 
-	useSeasonEp := c.cfg.UseSeasonEpisodeParams
-	if o := req.OptionalOverrides; o != nil && o.UseSeasonEpisodeParams != nil {
-		useSeasonEp = o.UseSeasonEpisodeParams
-	}
-
-	if useTVSearchParams && (useSeasonEp == nil || *useSeasonEp) {
+	if useTVSearchParams {
 		if req.Season != "" {
 			params.Set("season", req.Season)
 		}

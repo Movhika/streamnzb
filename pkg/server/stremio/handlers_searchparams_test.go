@@ -43,7 +43,6 @@ func TestShouldIncludeMetadataYearInIndexerQuery(t *testing.T) {
 		{name: "newznab omits metadata year", indexerType: "newznab", includeYear: true, want: false},
 		{name: "aggregator omits metadata year", indexerType: "aggregator", includeYear: true, want: false},
 		{name: "blank type defaults to newznab behavior", indexerType: "", includeYear: true, want: false},
-		{name: "explicit opt out stays off", indexerType: "easynews", includeYear: false, want: false},
 	}
 
 	for _, tt := range tests {

@@ -1388,23 +1388,20 @@ func (s *Server) buildSearchParams(contentType, id string) (*SearchParams, error
 				type queryKey struct {
 					lang        string
 					includeYear bool
-					norm        bool
 				}
 				resolved := make(map[queryKey][]string)
 				for name, eff := range req.EffectiveByIndexer {
-					includeYear := eff.IncludeYearInSearch != nil && *eff.IncludeYearInSearch
-					includeYear = shouldIncludeMetadataYearInIndexerQuery(indexerTypeByName[name], includeYear)
+					includeYear := shouldIncludeMetadataYearInIndexerQuery(indexerTypeByName[name], true)
 					lang := ""
 					if eff.SearchTitleLanguage != nil {
 						lang = *eff.SearchTitleLanguage
 					}
-					norm := eff.SearchTitleNormalize != nil && *eff.SearchTitleNormalize
-					k := queryKey{lang: lang, includeYear: includeYear, norm: norm}
+					k := queryKey{lang: lang, includeYear: includeYear}
 					if queries, ok := resolved[k]; ok {
 						req.PerIndexerQuery[name] = queries
 						continue
 					}
-					primary, orig, err := s.tmdbClient.GetMovieTitlesForSearch(contentIDs.ImdbID, req.TMDBID, lang, includeYear, norm)
+					primary, orig, err := s.tmdbClient.GetMovieTitlesForSearch(contentIDs.ImdbID, req.TMDBID, lang, includeYear, false)
 					if err != nil {
 						logger.Debug("Per-indexer movie query failed", "indexer", name, "language", lang, "err", err)
 						continue
@@ -1425,9 +1422,8 @@ func (s *Server) buildSearchParams(contentType, id string) (*SearchParams, error
 					includeYear bool
 				}
 				resolved := make(map[queryKey][]string)
-				for name, eff := range req.EffectiveByIndexer {
-					includeYear := eff.IncludeYearInSearch != nil && *eff.IncludeYearInSearch
-					includeYear = shouldIncludeMetadataYearInIndexerQuery(indexerTypeByName[name], includeYear)
+				for name := range req.EffectiveByIndexer {
+					includeYear := shouldIncludeMetadataYearInIndexerQuery(indexerTypeByName[name], true)
 					k := queryKey{includeYear: includeYear}
 					if queries, ok := resolved[k]; ok {
 						req.PerIndexerQuery[name] = queries

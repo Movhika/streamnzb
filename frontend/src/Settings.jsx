@@ -113,9 +113,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
 	          timeout_seconds: Number(idx.timeout_seconds || 0),
           username: idx.username || '',
           password: idx.password || '',
-          use_season_episode_params: idx.use_season_episode_params,
-	          include_year_in_search: idx.include_year_in_search,
-          search_title_normalize: idx.search_title_normalize === true,
           disable_id_search: idx.disable_id_search === true,
           disable_string_search: idx.disable_string_search === true
         })) || []

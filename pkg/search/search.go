@@ -19,9 +19,7 @@ type TMDBResolver interface {
 }
 
 type SearchConfig interface {
-	GetIncludeYearInSearch() bool
 	GetSearchTitleLanguage() string
-	GetSearchTitleNormalize() bool
 }
 
 // BuildFilterQuery resolves the expected title (and year for movies) from TMDB
@@ -73,12 +71,11 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 		}
 	} else if tmdbClient != nil && cfg != nil {
 		var textQuery string
-		includeYear := cfg.GetIncludeYearInSearch()
+		includeYear := true
 		searchTitleLanguage := cfg.GetSearchTitleLanguage()
-		searchTitleNormalize := cfg.GetSearchTitleNormalize()
 		if contentType == "movie" {
-			if searchTitleLanguage != "" || searchTitleNormalize {
-				if q, err := tmdbClient.GetMovieTitleForSearch(contentIDs.ImdbID, req.TMDBID, searchTitleLanguage, includeYear, searchTitleNormalize); err == nil {
+			if searchTitleLanguage != "" {
+				if q, err := tmdbClient.GetMovieTitleForSearch(contentIDs.ImdbID, req.TMDBID, searchTitleLanguage, includeYear, false); err == nil {
 					textQuery = q
 				}
 			} else if includeYear {
