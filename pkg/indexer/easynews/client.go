@@ -1,9 +1,11 @@
 package easynews
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +16,9 @@ import (
 	"time"
 
 	"streamnzb/pkg/core/env"
+	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/media/nzb"
 )
 
 const (
@@ -160,15 +164,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, err
 	}
 
-	query := req.Query
-	if req.IMDbID != "" {
+	query := strings.TrimSpace(req.Query)
 
-		imdbID := strings.TrimPrefix(req.IMDbID, "tt")
-		query = fmt.Sprintf("%s %s", query, imdbID)
-	}
-	if req.TMDBID != "" {
-		query = fmt.Sprintf("%s %s", query, req.TMDBID)
-	}
+	logger.Debug("Easynews search query", "indexer", c.name, "query", query, "cat", req.Cat, "season", req.Season, "episode", req.Episode)
 
 	season := req.Season
 	episode := req.Episode
@@ -280,6 +278,7 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 	}
 
 	searchURL := fmt.Sprintf("%s/2.0/search/solr-search/?%s", easynewsBaseURL, params.Encode())
+	logger.Debug("Easynews search request", "indexer", c.name, "url", searchURL, "gps", params.Get("gps"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
 	defer cancel()
@@ -290,7 +289,6 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 	}
 
 	req.SetBasicAuth(c.username, c.password)
-	req.Header.Set("User-Agent", env.IndexerQueryHeader())
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("easynews search request failed: %w", err)
@@ -363,6 +361,11 @@ func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, er
 		return nil, fmt.Errorf("failed to read NZB data: %w", err)
 	}
 
+	// Easynews NZBs use hash-based subjects that lack real filenames/extensions.
+	// The media loader needs a recognisable video extension in the subject to
+	// classify a file as playable.  Inject the actual filename we already know.
+	nzbData = injectEasynewsSubject(nzbData, filename, ext)
+
 	return nzbData, nil
 }
 
@@ -389,9 +392,9 @@ func (c *Client) checkDownloadLimit() error {
 }
 
 type easynewsSearchResponse struct {
-	Data     []interface{} `json:"data"`
-	Total    int           `json:"total"`
-	ThumbURL string        `json:"thumbURL"`
+	Data    []interface{} `json:"data"`
+	Results int           `json:"results"`
+	ThumbURL string       `json:"thumbURL"`
 }
 
 type easynewsResult struct {
@@ -462,17 +465,18 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 				item.Duration = arr[14]
 			}
 		} else if obj, ok := entry.(map[string]interface{}); ok {
-
 			if hash, ok := obj["hash"].(string); ok {
 				item.Hash = hash
 			}
 			if subject, ok := obj["subject"].(string); ok {
 				item.Subject = subject
 			}
-			if filename, ok := obj["filename"].(string); ok {
-				item.Filename = filename
+			// API returns "fn" for filename, not "filename"
+			if fn, ok := obj["fn"].(string); ok {
+				item.Filename = fn
 			}
-			if ext, ok := obj["ext"].(string); ok {
+			// API returns "extension" for file extension, not "ext"
+			if ext, ok := obj["extension"].(string); ok {
 				item.Ext = ext
 			}
 			if size, ok := obj["size"].(float64); ok {
@@ -480,6 +484,17 @@ func (c *Client) filterAndMapResults(data easynewsSearchResponse, query, season,
 			}
 			if sig, ok := obj["sig"].(string); ok {
 				item.Sig = sig
+			}
+			if poster, ok := obj["poster"].(string); ok {
+				item.Poster = poster
+			}
+			// "runtime" is duration in seconds (numeric)
+			if rt, ok := obj["runtime"].(float64); ok {
+				item.Duration = rt
+			}
+			// "timestamp" is unix epoch; convert to date string
+			if ts, ok := obj["timestamp"].(float64); ok {
+				item.Posted = time.Unix(int64(ts), 0).Format("2006-01-02 15:04:05")
 			}
 		}
 
@@ -669,7 +684,43 @@ func buildNZBPayload(items []easynewsItem, name string) map[string]string {
 }
 
 func buildValueToken(item easynewsItem) string {
-	fnB64 := base64.URLEncoding.EncodeToString([]byte(item.Filename))
-	extB64 := base64.URLEncoding.EncodeToString([]byte(item.Ext))
+	fnB64 := base64.StdEncoding.EncodeToString([]byte(item.Filename))
+	fnB64 = strings.TrimRight(fnB64, "=")
+	extB64 := base64.StdEncoding.EncodeToString([]byte(item.Ext))
+	extB64 = strings.TrimRight(extB64, "=")
 	return fmt.Sprintf("%s|%s:%s", item.Hash, fnB64, extB64)
+}
+
+
+// injectEasynewsSubject rewrites file subjects in the NZB so the media loader
+// can detect the correct video extension. Easynews NZBs typically use opaque
+// hash strings as subjects which carry no filename information.
+func injectEasynewsSubject(data []byte, filename, ext string) []byte {
+	if filename == "" && ext == "" {
+		return data
+	}
+	subject := filename
+	if ext != "" && !strings.HasSuffix(strings.ToLower(subject), strings.ToLower(ext)) {
+		subject += ext
+	}
+	if subject == "" {
+		return data
+	}
+
+	parsed, err := nzb.Parse(bytes.NewReader(data))
+	if err != nil {
+		logger.Debug("injectEasynewsSubject: failed to parse NZB, returning raw data", "err", err)
+		return data
+	}
+
+	for i := range parsed.Files {
+		parsed.Files[i].Subject = subject
+	}
+
+	out, err := xml.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		logger.Debug("injectEasynewsSubject: failed to re-marshal NZB", "err", err)
+		return data
+	}
+	return append([]byte(xml.Header), out...)
 }

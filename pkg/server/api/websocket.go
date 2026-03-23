@@ -635,6 +635,19 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 			if indexerCfg.Enabled != nil && !*indexerCfg.Enabled {
 				return
 			}
+			if strings.EqualFold(indexerCfg.Type, "easynews") {
+				if indexerCfg.Username == "" {
+					mu.Lock()
+					errors[fmt.Sprintf("indexers.%d.username", index)] = "Username is required"
+					mu.Unlock()
+				}
+				if indexerCfg.Password == "" {
+					mu.Lock()
+					errors[fmt.Sprintf("indexers.%d.password", index)] = "Password is required"
+					mu.Unlock()
+				}
+				return
+			}
 			if indexerCfg.URL == "" {
 				mu.Lock()
 				errors[fmt.Sprintf("indexers.%d.url", index)] = "URL is required"

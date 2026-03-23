@@ -1272,18 +1272,6 @@ func buildSeriesQueries(showName string) []string {
 	return buildSeriesQueriesWithOptions(showName, "", false)
 }
 
-func shouldIncludeMetadataYearInIndexerQuery(indexerType string, includeYear bool) bool {
-	if !includeYear {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(indexerType)) {
-	case "easynews":
-		return true
-	default:
-		return false
-	}
-}
-
 func buildSeriesQueriesWithOptions(showName, year string, includeYear bool) []string {
 	showName = strings.TrimSpace(showName)
 	if includeYear && strings.TrimSpace(year) != "" {
@@ -1378,7 +1366,15 @@ func (s *Server) buildSearchParams(contentType, id string) (*SearchParams, error
 		indexerTypeByName := make(map[string]string, len(s.config.Indexers))
 		for i := range s.config.Indexers {
 			ic := &s.config.Indexers[i]
-			req.EffectiveByIndexer[ic.Name] = config.MergeIndexerSearch(ic, nil, s.config)
+			if ic.Enabled != nil && !*ic.Enabled {
+				continue
+			}
+			eff := config.MergeIndexerSearch(ic, nil, s.config)
+			if strings.EqualFold(ic.Type, "easynews") {
+				t := true
+				eff.DisableIdSearch = &t
+			}
+			req.EffectiveByIndexer[ic.Name] = eff
 			indexerTypeByName[ic.Name] = ic.Type
 		}
 		req.PerIndexerQuery = make(map[string][]string)
@@ -1391,17 +1387,16 @@ func (s *Server) buildSearchParams(contentType, id string) (*SearchParams, error
 				}
 				resolved := make(map[queryKey][]string)
 				for name, eff := range req.EffectiveByIndexer {
-					includeYear := shouldIncludeMetadataYearInIndexerQuery(indexerTypeByName[name], true)
 					lang := ""
 					if eff.SearchTitleLanguage != nil {
 						lang = *eff.SearchTitleLanguage
 					}
-					k := queryKey{lang: lang, includeYear: includeYear}
+					k := queryKey{lang: lang, includeYear: false}
 					if queries, ok := resolved[k]; ok {
 						req.PerIndexerQuery[name] = queries
 						continue
 					}
-					primary, orig, err := s.tmdbClient.GetMovieTitlesForSearch(contentIDs.ImdbID, req.TMDBID, lang, includeYear, false)
+					primary, orig, err := s.tmdbClient.GetMovieTitlesForSearch(contentIDs.ImdbID, req.TMDBID, lang, false, false)
 					if err != nil {
 						logger.Debug("Per-indexer movie query failed", "indexer", name, "language", lang, "err", err)
 						continue
@@ -1423,8 +1418,7 @@ func (s *Server) buildSearchParams(contentType, id string) (*SearchParams, error
 				}
 				resolved := make(map[queryKey][]string)
 				for name := range req.EffectiveByIndexer {
-					includeYear := shouldIncludeMetadataYearInIndexerQuery(indexerTypeByName[name], true)
-					k := queryKey{includeYear: includeYear}
+					k := queryKey{includeYear: false}
 					if queries, ok := resolved[k]; ok {
 						req.PerIndexerQuery[name] = queries
 						continue
@@ -1434,8 +1428,8 @@ func (s *Server) buildSearchParams(contentType, id string) (*SearchParams, error
 						logger.Debug("Per-indexer series query failed", "indexer", name, "err", err)
 						continue
 					}
-					queries := buildSeriesQueriesWithOptions(showName, year, includeYear)
-					logger.Debug("Per-indexer series query", "indexer", name, "include_year", includeYear, "queries", queries)
+					queries := buildSeriesQueriesWithOptions(showName, year, false)
+					logger.Debug("Per-indexer series query", "indexer", name, "queries", queries)
 					resolved[k] = queries
 					req.PerIndexerQuery[name] = queries
 				}
