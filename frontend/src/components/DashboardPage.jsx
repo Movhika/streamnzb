@@ -1,283 +1,226 @@
 import { useMemo } from 'react'
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart"
 import { ComposedChart, Area, XAxis, YAxis } from "recharts"
-import { Activity, Globe, X, MonitorPlay } from "lucide-react"
+import {
+  Zap, Router, Network, BarChart3,
+  PlayCircle, Cloud, Database, X, ShieldCheck, Settings,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 
+/* ─── constants ─── */
 const chartConfig = {
-  speed: {
-    label: "Speed",
-    color: "hsl(var(--primary))",
-  },
-  conns: {
-    label: "Connections",
-    color: "hsl(var(--primary))",
-  },
+  speed: { label: "Speed (Mbps)", color: "hsl(var(--primary))" },
+  conns: { label: "Connections", color: "hsl(var(--chart-2))" },
 }
 
-function formatDownloadedMb(mb) {
+/* ─── helpers ─── */
+function fmtMb(mb) {
   const n = Number(mb) || 0
-  if (n >= 1000) return { value: (n / 1000).toFixed(2), unit: 'GB' }
-  return { value: n.toFixed(1), unit: 'MB' }
+  return n >= 1000
+    ? { value: (n / 1000).toFixed(2), unit: "GB" }
+    : { value: n.toFixed(1), unit: "MB" }
 }
 
-// Build sets of enabled provider hosts and indexer names from config (match by host/name)
 function useEnabledSets(config) {
   return useMemo(() => {
     const providerHosts = new Set()
     const indexerNames = new Set()
     if (!config) return { providerHosts, indexerNames }
     ;(config.providers || []).forEach((p) => {
-      if (p.enabled !== false) providerHosts.add((p.host || '').toLowerCase())
+      if (p.enabled !== false) providerHosts.add((p.host || "").toLowerCase())
     })
     ;(config.indexers || []).forEach((i) => {
-      if (i.enabled !== false) indexerNames.add((i.name || '').trim())
+      if (i.enabled !== false) indexerNames.add((i.name || "").trim())
     })
     return { providerHosts, indexerNames }
   }, [config])
 }
 
-export function DashboardPage({ stats, chartData, sendCommand, config }) {
+/* ═══════════════════════════════════════════════════════
+   DashboardPage  –  Obsidian Engine design system
+   • Tonal depth via bg steps (surface → surface-container)
+   • Space Grotesk for metrics, Inter for labels
+   • No 1 px borders — color-shift only
+   ═══════════════════════════════════════════════════════ */
+export function DashboardPage({ stats, chartData, sendCommand, config, onNavigate }) {
   const { providerHosts, indexerNames } = useEnabledSets(config)
+  const dl = fmtMb(stats.total_downloaded_mb)
 
   return (
-    <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6 px-4 lg:px-6">
-      {/* KPI cards */}
+    <div className="flex flex-col gap-6 py-6 px-4 lg:px-6 max-w-[1600px] mx-auto w-full">
+
+      {/* ── KPI row ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader>
-            <CardDescription>Total Speed</CardDescription>
-            <CardTitle className="flex items-baseline gap-1.5 tabular-nums">
-              <span className="text-primary">{(stats.total_speed_mbps ?? 0).toFixed(1)}</span>
-              <span className="text-sm font-normal text-muted-foreground">Mbps</span>
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardDescription>Active Connections</CardDescription>
-            <CardTitle className="tabular-nums text-primary">{stats.active_sessions?.length ?? 0}</CardTitle>
-            <p className="text-xs text-muted-foreground">streaming</p>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardDescription>Pool Connections</CardDescription>
-            <CardTitle className="flex items-baseline gap-1.5 tabular-nums">
-              <span className="text-primary">{stats.active_connections}</span>
-              <span className="text-sm font-normal text-muted-foreground">/ {stats.total_connections}</span>
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardDescription>Downloaded Today</CardDescription>
-            <CardTitle className="flex items-baseline gap-1.5 tabular-nums">
-              {(() => {
-                const { value, unit } = formatDownloadedMb(stats.total_downloaded_mb)
-                return <><span className="text-primary">{value}</span><span className="text-sm font-normal text-muted-foreground">{unit}</span></>
-              })()}
-            </CardTitle>
-          </CardHeader>
-        </Card>
+        <KPI icon={Zap}       label="Total Speed"       value={(stats.total_speed_mbps ?? 0).toFixed(1)} unit="Mbps" />
+        <KPI icon={Router}    label="Active Connections" value={stats.active_sessions?.length ?? 0}       unit="Current" />
+        <KPI icon={Network}   label="Pool Connections"   value={`${stats.active_connections ?? 0}/${stats.total_connections ?? 0}`} unit="Capacity utilized" />
+        <KPI icon={BarChart3} label="Downloaded Today"   value={dl.value}                                 unit={dl.unit} />
       </div>
 
-      {/* Network chart */}
-      <Card className="overflow-hidden">
-        <CardHeader>
-          <CardTitle>Network activity</CardTitle>
-          <CardDescription>Speed (Mbps) and active connections over time</CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          <ChartContainer config={chartConfig} className="h-[200px] w-full">
-            <ComposedChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: 32 }}>
-              <defs>
-                <linearGradient id="chartSpeed" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.4} />
-                  <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="chartConns" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.25} />
-                  <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="time" tick={{ fontSize: 10 }} />
-              <YAxis yAxisId="left" tick={{ fontSize: 10 }} width={28} />
-              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false} width={28} />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <Area
-                yAxisId="left"
-                type="monotone"
-                dataKey="speed"
-                stroke="hsl(var(--primary))"
-                strokeWidth={2}
-                fill="url(#chartSpeed)"
-                dot={false}
-                isAnimationActive={false}
-                name="speed"
-              />
-              <Area
-                yAxisId="right"
-                type="monotone"
-                dataKey="conns"
-                stroke="hsl(var(--primary))"
-                strokeWidth={2}
-                strokeOpacity={0.7}
-                fill="url(#chartConns)"
-                dot={false}
-                isAnimationActive={false}
-                name="conns"
-              />
-            </ComposedChart>
-          </ChartContainer>
-        </CardContent>
-      </Card>
-
-      {/* Active sessions */}
-      {stats.active_sessions?.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Activity className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold">Active streams</h2>
+      {/* ── Network Activity ── */}
+      <section className="rounded-xl bg-[hsl(var(--card))] p-6">
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <h2 className="text-base font-headline font-semibold tracking-tight">Network Activity</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Real-time throughput analysis</p>
           </div>
-          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
-            {stats.active_sessions.map(sess => (
-              <Card key={sess.id} className="group relative min-w-0 pr-10">
-                <CardContent className="p-3">
-                  <div className="text-sm font-medium truncate pr-2 min-w-0" title={sess.title}>{sess.title}</div>
-                  <div className="text-xs text-muted-foreground truncate min-w-0">{sess.clients.join(', ')}</div>
-                </CardContent>
+          <div className="flex items-center gap-1.5 text-[11px] font-label font-medium">
+            <span className="px-2.5 py-1 rounded-md bg-[hsl(var(--secondary))] text-muted-foreground select-none">1H</span>
+            <span className="px-2.5 py-1 rounded-md bg-primary/15 text-primary select-none">Live</span>
+          </div>
+        </div>
+
+        <ChartContainer config={chartConfig} className="h-[220px] w-full">
+          <ComposedChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <defs>
+              <linearGradient id="gSpeed" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%"   stopColor="hsl(var(--primary))" stopOpacity={0.35} />
+                <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="gConns" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%"   stopColor="hsl(var(--chart-2))" stopOpacity={0.2} />
+                <stop offset="100%" stopColor="hsl(var(--chart-2))" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" tickLine={false} axisLine={false} />
+            <YAxis yAxisId="left"  tick={{ fontSize: 10 }} width={32} stroke="hsl(var(--muted-foreground))" tickLine={false} axisLine={false} />
+            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false} width={28} stroke="hsl(var(--muted-foreground))" tickLine={false} axisLine={false} />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            <Area yAxisId="left"  type="monotone" dataKey="speed" stroke="hsl(var(--primary))" strokeWidth={2} fill="url(#gSpeed)" dot={false} isAnimationActive={false} name="speed" />
+            <Area yAxisId="right" type="monotone" dataKey="conns" stroke="hsl(var(--chart-2))" strokeWidth={1.5} strokeDasharray="4 3" fill="url(#gConns)" dot={false} isAnimationActive={false} name="conns" />
+          </ComposedChart>
+        </ChartContainer>
+      </section>
+
+      {/* ── Active Streams ── */}
+      <section className="rounded-xl bg-[hsl(var(--card))] p-6">
+        <SectionHeader icon={PlayCircle} title="Active Streams" subtitle={`${stats.active_sessions?.length ?? 0} active`} />
+
+        {stats.active_sessions?.length > 0 ? (
+          <div className="space-y-2 mt-4">
+            {stats.active_sessions.map((sess) => (
+              <div key={sess.id} className="flex items-center gap-4 rounded-lg bg-[hsl(var(--background))]/60 px-4 py-3 group transition-colors hover:bg-[hsl(var(--background))]/80">
+                <PlayCircle className="h-5 w-5 shrink-0 text-primary/70" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{sess.title}</p>
+                  <p className="text-xs text-muted-foreground truncate mt-0.5">{sess.clients?.join(", ")}</p>
+                </div>
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
-                  onClick={() => sendCommand('close_session', { id: sess.id })}
+                  variant="ghost" size="icon"
+                  className="shrink-0 h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={() => sendCommand("close_session", { id: sess.id })}
                   title="End stream"
                 >
                   <X className="h-4 w-4" />
                 </Button>
-              </Card>
+              </div>
             ))}
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="py-10 text-center text-sm text-muted-foreground">No active streams right now.</p>
+        )}
+      </section>
 
-      {/* Providers & Indexers */}
+      {/* ── Providers & Indexers ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Providers */}
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Globe className="h-5 w-5 text-primary" />
-            <h2 className="text-lg font-semibold tracking-tight">Usenet Providers</h2>
-          </div>
-          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-            {stats.providers.map((p) => {
-              const loadPct = (p.active_conns / (p.max_conns || 1)) * 100
-              const isEnabled = providerHosts.has((p.host || '').toLowerCase())
+
+        {/* Usenet Providers */}
+        <section className="rounded-xl bg-[hsl(var(--card))] p-6">
+          <SectionHeader icon={Cloud} title="Usenet Providers" action={onNavigate && (
+            <button onClick={() => onNavigate('settings', 'providers')} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors font-label">
+              <Settings className="h-3.5 w-3.5" /> Manage
+            </button>
+          )} />
+          <div className="space-y-2 mt-4">
+            {stats.providers?.map((p) => {
+              const on = providerHosts.has((p.host || "").toLowerCase())
+              const dl = fmtMb(p.downloaded_mb ?? 0)
               return (
-                <Card
-                  key={p.name}
-                  className={cn(!isEnabled && "opacity-60 grayscale")}
-                >
-                  <CardHeader className="p-3 pb-1">
-                    <div className="flex items-center gap-2">
-                      <CardTitle className="text-sm font-bold truncate leading-tight" title={p.name}>{p.name}</CardTitle>
-                      <Badge variant="outline" className="text-[10px] py-0 h-4 ml-auto">{p.max_conns}</Badge>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground truncate" title={p.host}>{p.host}</p>
-                  </CardHeader>
-                  <CardContent className="p-3 pt-0">
-                    <div className="flex items-center justify-between mt-2">
-                      <div className="flex flex-col">
-                        <span className="text-[10px] uppercase text-muted-foreground font-medium">Load</span>
-                        <span className="text-sm font-bold">{loadPct.toFixed(0)}%</span>
-                      </div>
-                      <div className="flex flex-col text-right">
-                        <span className="text-[10px] uppercase text-muted-foreground font-medium">Speed</span>
-                        <span className="text-sm font-bold text-primary">{(p.current_speed_mbps ?? 0).toFixed(1)} <span className="text-[10px]">Mbps</span></span>
-                      </div>
-                    </div>
-                    <div className="w-full bg-muted h-1.5 rounded-full mt-2 overflow-hidden">
-                      <div className="bg-primary h-full transition-all duration-500 rounded-full" style={{ width: `${loadPct}%` }} />
-                    </div>
-                    <p className="text-[10px] text-muted-foreground mt-2">Downloaded: {(p.downloaded_mb ?? 0).toFixed(1)} MB</p>
-                  </CardContent>
-                </Card>
+                <div key={p.name} className={cn("flex items-center justify-between rounded-lg bg-[hsl(var(--background))]/60 px-4 py-3", !on && "opacity-40")}>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{p.name}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                      <span className="font-headline">{dl.value}</span> {dl.unit}
+                    </p>
+                  </div>
+                </div>
               )
             })}
+            {(!stats.providers || stats.providers.length === 0) && (
+              <p className="py-8 text-center text-sm text-muted-foreground">No providers configured.</p>
+            )}
           </div>
-        </div>
+        </section>
 
         {/* Indexers */}
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <MonitorPlay className="h-5 w-5 text-primary" />
-            <h2 className="text-lg font-semibold tracking-tight">Indexers</h2>
-          </div>
-          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+        <section className="rounded-xl bg-[hsl(var(--card))] p-6">
+          <SectionHeader icon={Database} title="Indexers" action={onNavigate && (
+            <button onClick={() => onNavigate('settings', 'indexers')} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors font-label">
+              <Settings className="h-3.5 w-3.5" /> Manage
+            </button>
+          )} />
+          <div className="space-y-2 mt-4">
             {stats.indexers?.map((idx) => {
-              const apiUsedPct = idx.api_hits_limit > 0 ? ((idx.api_hits_limit - idx.api_hits_remaining) / idx.api_hits_limit) * 100 : 0
-              const dlUsedPct = idx.downloads_limit > 0 ? ((idx.downloads_limit - idx.downloads_remaining) / idx.downloads_limit) * 100 : 0
-              const barColor = (pct) => pct >= 90 ? 'bg-destructive' : pct >= 75 ? 'bg-chart-4' : 'bg-primary'
-              const hasApiLimit = idx.api_hits_limit > 0
-              const hasDlLimit = idx.downloads_limit > 0
-              const isEnabled = indexerNames.has((idx.name || '').trim())
+              const on = indexerNames.has((idx.name || "").trim())
               return (
-                <Card
-                  key={idx.name}
-                  className={cn("relative overflow-hidden", !isEnabled && "opacity-60 grayscale")}
-                >
-                  <CardHeader className="p-4 pb-2">
-                    <CardTitle className="text-base font-semibold truncate leading-tight" title={idx.name}>{idx.name}</CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-4 pt-0">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">API hits</p>
-                        <p className="text-lg font-bold tabular-nums text-primary">{idx.api_hits_used}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {hasApiLimit ? `of ${idx.api_hits_limit} today` : 'Unlimited'}
-                        </p>
-                        {hasApiLimit && (
-                          <div className="w-full bg-muted h-2 rounded-full overflow-hidden mt-1">
-                            <div className={cn("h-full transition-all duration-500 rounded-full", barColor(apiUsedPct))} style={{ width: `${apiUsedPct}%` }} />
-                          </div>
-                        )}
-                        <p className="text-[11px] text-muted-foreground">All-time: {idx.api_hits_used_all_time ?? 0}</p>
-                      </div>
-                      <div className="space-y-1.5">
-                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Downloads</p>
-                        <p className="text-lg font-bold tabular-nums text-primary">{idx.downloads_used}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {hasDlLimit ? `of ${idx.downloads_limit} today` : 'Unlimited'}
-                        </p>
-                        {hasDlLimit && (
-                          <div className="w-full bg-muted h-2 rounded-full overflow-hidden mt-1">
-                            <div className={cn("h-full transition-all duration-500 rounded-full", barColor(dlUsedPct))} style={{ width: `${dlUsedPct}%` }} />
-                          </div>
-                        )}
-                        <p className="text-[11px] text-muted-foreground">All-time: {idx.downloads_used_all_time ?? 0}</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                <div key={idx.name} className={cn("flex items-center justify-between rounded-lg bg-[hsl(var(--background))]/60 px-4 py-3", !on && "opacity-40")}>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{idx.name}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      API: {idx.api_hits_used ?? 0}{idx.api_hits_limit > 0 ? `/${idx.api_hits_limit}` : ""}{" "}
+                      • DL: {idx.downloads_used ?? 0}{idx.downloads_limit > 0 ? `/${idx.downloads_limit}` : ""}
+                    </p>
+                  </div>
+                </div>
               )
             })}
             {(!stats.indexers || stats.indexers.length === 0) && (
-              <div className="col-span-full py-8 text-center rounded-lg border border-dashed text-muted-foreground text-sm">
-                No internal indexers configured.
-              </div>
+              <p className="py-8 text-center text-sm text-muted-foreground">No indexers configured.</p>
             )}
           </div>
+        </section>
+      </div>
+    </div>
+  )
+}
+
+/* ─── Sub-components ─── */
+
+function KPI({ icon: Icon, label, value, unit }) {
+  return (
+    <div className="rounded-xl bg-[hsl(var(--card))] p-5 flex flex-col gap-3">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Icon className="h-4 w-4" />
+        </div>
+        <span className="text-xs text-muted-foreground font-label">{label}</span>
+      </div>
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-3xl font-headline font-semibold tracking-tight">{value}</span>
+        {unit && <span className="text-xs text-muted-foreground font-label">{unit}</span>}
+      </div>
+    </div>
+  )
+}
+
+function SectionHeader({ icon: Icon, title, subtitle, action }) {
+  return (
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Icon className="h-4 w-4" />
+        </div>
+        <div>
+          <h2 className="text-base font-headline font-semibold tracking-tight">{title}</h2>
+          {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
         </div>
       </div>
+      {action}
     </div>
   )
 }

@@ -29,6 +29,14 @@ type Client struct {
 	pool     *ClientPool
 }
 
+func readGreeting(tp *textproto.Conn) error {
+	code, _, err := tp.ReadResponse(200)
+	if err != nil && code != 201 {
+		return err
+	}
+	return nil
+}
+
 func NewClient(address string, port int, ssl bool) (*Client, error) {
 	fullAddr := net.JoinHostPort(address, strconv.Itoa(port))
 	var conn net.Conn
@@ -48,8 +56,7 @@ func NewClient(address string, port int, ssl bool) (*Client, error) {
 	logger.Debug("nntp NewClient connection opened", "addr", fullAddr)
 	conn.SetDeadline(time.Now().Add(30 * time.Second))
 	tp := textproto.NewConn(conn)
-	_, _, err = tp.ReadResponse(200)
-	if err != nil {
+	if err = readGreeting(tp); err != nil {
 		tp.Close()
 		return nil, err
 	}
@@ -261,8 +268,7 @@ func (c *Client) Reconnect() error {
 	}
 
 	tp := textproto.NewConn(conn)
-	_, _, err = tp.ReadResponse(200)
-	if err != nil {
+	if err = readGreeting(tp); err != nil {
 		tp.Close()
 		return err
 	}

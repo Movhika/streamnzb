@@ -40,6 +40,7 @@ function App() {
   const [logs, setLogs] = useState([])
   const [copied, setCopied] = useState(false)
   const [activePage, setActivePage] = useState('dashboard')
+  const [initialSettingsTab, setInitialSettingsTab] = useState(null)
   const [indexerCaps, setIndexerCaps] = useState({})
   const [nzbAttemptsRefreshTrigger, setNzbAttemptsRefreshTrigger] = useState(0)
 
@@ -458,6 +459,10 @@ function App() {
               chartData={chartData}
               sendCommand={sendCommand}
               config={config}
+              onNavigate={(page, tab) => {
+                if (tab) setInitialSettingsTab(tab)
+                setActivePage(page)
+              }}
             />
           )}
           {activePage === 'nzb-history' && (
@@ -486,6 +491,8 @@ function App() {
                 isSaving={isSaving}
                 adminToken={currentUser && currentUser !== 'legacy' ? authToken : null}
                 indexerCaps={indexerCaps}
+                initialTab={initialSettingsTab}
+                onInitialTabConsumed={() => setInitialSettingsTab(null)}
               />
             </div>
           )}

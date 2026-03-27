@@ -9,6 +9,11 @@ export default {
     ],
     theme: {
     	extend: {
+    		fontFamily: {
+    			headline: ['Space Grotesk', 'sans-serif'],
+    			body: ['Inter', 'sans-serif'],
+    			label: ['Inter', 'sans-serif'],
+    		},
     		borderRadius: {
     			lg: 'var(--radius)',
     			md: 'calc(var(--radius) - 2px)',

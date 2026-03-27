@@ -75,7 +75,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 	}
 
 	for _, idxCfg := range cfg.Indexers {
-		if idxCfg.URL == "" {
+		if idxCfg.URL == "" && !strings.EqualFold(idxCfg.Type, "easynews") {
 			continue
 		}
 		if idxCfg.Enabled != nil && !*idxCfg.Enabled {

@@ -40,8 +40,15 @@ function EnvOverrideNote({ show }) {
   )
 }
 
-function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken, indexerCaps }) {
-  const [activeTab, setActiveTab] = useState('general')
+function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken, indexerCaps, initialTab, onInitialTabConsumed }) {
+  const [activeTab, setActiveTab] = useState(initialTab || 'general')
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab)
+      onInitialTabConsumed?.()
+    }
+  }, [initialTab, onInitialTabConsumed])
   const [loading, setLoading] = useState(!initialConfig)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [initialFormValues, setInitialFormValues] = useState(null)
