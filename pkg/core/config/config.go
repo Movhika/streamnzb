@@ -113,6 +113,7 @@ type Config struct {
 
 	ProxyPort     int    `json:"proxy_port"`
 	ProxyHost     string `json:"proxy_host"`
+	ProxyEnabled  bool   `json:"proxy_enabled"`
 	ProxyAuthUser string `json:"proxy_auth_user"`
 	ProxyAuthPass string `json:"proxy_auth_pass"`
 
@@ -278,6 +279,7 @@ func Load() (*Config, error) {
 		AdminUsername: "admin",
 		ProxyPort:     119,
 		ProxyHost:     "0.0.0.0",
+		ProxyEnabled:  true,
 		MemoryLimitMB: 512,
 		KeepLogFiles:  9,
 		LoadedPath:    configPath,
@@ -425,6 +427,9 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	if keySet(keys, env.KeyProxyHost) {
 		cfg.ProxyHost = o.ProxyHost
 	}
+	if keySet(keys, env.KeyProxyEnabled) {
+		cfg.ProxyEnabled = o.ProxyEnabled
+	}
 	if keySet(keys, env.KeyProxyAuthUser) {
 		cfg.ProxyAuthUser = o.ProxyAuthUser
 	}
@@ -506,6 +511,8 @@ func CopyEnvOverridesFrom(src, dst *Config) {
 			dst.ProxyPort = src.ProxyPort
 		case env.KeyProxyHost:
 			dst.ProxyHost = src.ProxyHost
+		case env.KeyProxyEnabled:
+			dst.ProxyEnabled = src.ProxyEnabled
 		case env.KeyProxyAuthUser:
 			dst.ProxyAuthUser = src.ProxyAuthUser
 		case env.KeyProxyAuthPass:

@@ -65,6 +65,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
       log_level: 'INFO',
       proxy_port: 119,
       proxy_host: '',
+      proxy_enabled: true,
       proxy_auth_user: '',
       proxy_auth_pass: '',
       movie_categories: '',
@@ -98,6 +99,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
         ...configForForm,
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
+        proxy_enabled: initialConfig.proxy_enabled !== false,
         movie_categories: initialConfig.movie_categories ?? '',
         tv_categories: initialConfig.tv_categories ?? '',
         extra_search_terms: initialConfig.extra_search_terms ?? '',
@@ -244,6 +246,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
   if (loading) return null
 
   const availNZBRecoverySecret = availNZBStatus?.recovery_secret || ''
+  const proxyEnabled = watch('proxy_enabled') !== false
   const availNZBStatusMessage = availNZBStatusError || availNZBStatus?.status_error || ''
 	const availNZBMode = watch('availnzb_mode') || ''
 	const availNZBModeDoesNotImproveScore = availNZBMode === 'status_only' || availNZBMode === 'disabled'
@@ -360,7 +363,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
               <CardHeader>
                 <CardTitle>NNTP Proxy Server</CardTitle>
                 <CardDescription>Allow other apps (SABnzbd, NZBGet) to use StreamNZB as a localized news server.</CardDescription>
-                {(envOverrides.includes('proxy_port') || envOverrides.includes('proxy_host') || envOverrides.includes('proxy_auth_user') || envOverrides.includes('proxy_auth_pass')) && (
+                {(envOverrides.includes('proxy_port') || envOverrides.includes('proxy_host') || envOverrides.includes('proxy_enabled') || envOverrides.includes('proxy_auth_user') || envOverrides.includes('proxy_auth_pass')) && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
                     <AlertTriangle className="h-3.5 w-3 shrink-0" />
                     Some settings overwritten by environment variables (NNTP_PROXY_*) on restart.
@@ -368,32 +371,45 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, adminToken
                 )}
               </CardHeader>
               <CardContent>
+              <div className="mb-4">
+                <FormField control={control} name="proxy_enabled" render={({ field }) => (
+                  <FormItem className="flex items-center justify-between rounded-lg border p-3">
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-sm font-medium">Enable NNTP Proxy</FormLabel>
+                      <FormDescription>Turn the local NNTP proxy server on or off.</FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch checked={field.value !== false} onCheckedChange={field.onChange} />
+                    </FormControl>
+                  </FormItem>
+                )} />
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField control={control} name="proxy_host" render={({ field }) => (
                   <FormItem className="space-y-2">
                     <FormLabel className="text-sm font-medium">Bind Host</FormLabel>
-                    <FormControl><Input placeholder="0.0.0.0" {...field} /></FormControl>
+                    <FormControl><Input placeholder="0.0.0.0" disabled={!proxyEnabled} {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />
                 <FormField control={control} name="proxy_port" render={({ field }) => (
                   <FormItem className="space-y-2">
                     <FormLabel className="text-sm font-medium">Port</FormLabel>
-                    <FormControl><Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
+                    <FormControl><Input type="number" disabled={!proxyEnabled} {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />
                 <FormField control={control} name="proxy_auth_user" render={({ field }) => (
                   <FormItem className="space-y-2">
                     <FormLabel className="text-sm font-medium">Proxy Username</FormLabel>
-                    <FormControl><Input {...field} /></FormControl>
+                    <FormControl><Input disabled={!proxyEnabled} {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />
                 <FormField control={control} name="proxy_auth_pass" render={({ field }) => (
                   <FormItem className="space-y-2">
                     <FormLabel className="text-sm font-medium">Proxy Password</FormLabel>
-                    <FormControl><PasswordInput {...field} /></FormControl>
+                    <FormControl><PasswordInput disabled={!proxyEnabled} {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />

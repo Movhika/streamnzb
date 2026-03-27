@@ -18,6 +18,7 @@ const (
 	TVDBAPIKey            = "TVDB_API_KEY"
 	NNTPProxyPort         = "NNTP_PROXY_PORT"
 	NNTPProxyHost         = "NNTP_PROXY_HOST"
+	NNTPProxyEnabled      = "NNTP_PROXY_ENABLED"
 	NNTPProxyAuthUser     = "NNTP_PROXY_AUTH_USER"
 	NNTPProxyAuthPass     = "NNTP_PROXY_AUTH_PASS"
 	TZVar                 = "TZ"
@@ -34,6 +35,7 @@ const (
 	KeyKeepLogFiles   = "keep_log_files"
 	KeyProxyPort      = "proxy_port"
 	KeyProxyHost      = "proxy_host"
+	KeyProxyEnabled   = "proxy_enabled"
 	KeyProxyAuthUser  = "proxy_auth_user"
 	KeyProxyAuthPass  = "proxy_auth_pass"
 	KeyProviders      = "providers"
@@ -104,6 +106,7 @@ type ConfigOverrides struct {
 	TVDBAPIKey        string
 	ProxyPort         int
 	ProxyHost         string
+	ProxyEnabled      bool
 	ProxyAuthUser     string
 	ProxyAuthPass     string
 	AdminUsername string
@@ -145,6 +148,10 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 	if v := os.Getenv(NNTPProxyHost); v != "" {
 		o.ProxyHost = v
 		keys = append(keys, KeyProxyHost)
+	}
+	if v := os.Getenv(NNTPProxyEnabled); v != "" {
+		o.ProxyEnabled = getEnvBool(NNTPProxyEnabled, true)
+		keys = append(keys, KeyProxyEnabled)
 	}
 	if v := os.Getenv(NNTPProxyAuthUser); v != "" {
 		o.ProxyAuthUser = v

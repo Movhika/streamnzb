@@ -177,12 +177,17 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 		s.sessionMgr.UpdatePools(s.streamingPools)
 		s.sessionMgr.UpdateUsenetPool(comp.UsenetPool)
 
-		logger.Info("Restarting NNTP Proxy...", "host", comp.Config.ProxyHost, "port", comp.Config.ProxyPort)
-		newProxy, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, comp.UsenetPool, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
-		if err != nil {
-			logger.Error("Failed to create new proxy during reload", "err", err)
+		if comp.Config.ProxyEnabled {
+			logger.Info("Restarting NNTP Proxy...", "host", comp.Config.ProxyHost, "port", comp.Config.ProxyPort)
+			newProxy, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, comp.UsenetPool, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
+			if err != nil {
+				logger.Error("Failed to create new proxy during reload", "err", err)
+			} else {
+				s.proxyServer = newProxy
+			}
 		} else {
-			s.proxyServer = newProxy
+			logger.Info("NNTP proxy disabled by config; not starting proxy server")
+			s.proxyServer = nil
 		}
 	}
 
