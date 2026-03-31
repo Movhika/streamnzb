@@ -1,4 +1,3 @@
-// Package api provides the HTTP API and WebSocket server for streamnzb.
 package api
 
 import (
@@ -109,7 +108,6 @@ func (s *Server) broadcastLogs() {
 	}
 }
 
-// BroadcastNZBAttemptsUpdate notifies all WebSocket clients that NZB attempts have changed so they can refetch.
 func (s *Server) BroadcastNZBAttemptsUpdate() {
 	msg := WSMessage{Type: "nzb_attempts_updated", Payload: json.RawMessage("null")}
 	s.clientsMu.Lock()
@@ -182,6 +180,10 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 	s.config = comp.Config
 	s.tmdbAPIKey = strings.TrimSpace(comp.Config.TMDBAPIKey)
 	s.tvdbAPIKey = strings.TrimSpace(comp.Config.TVDBAPIKey)
+	if s.app != nil {
+		s.tmdbAPIKey = s.app.EffectiveTMDBKey()
+		s.tvdbAPIKey = s.app.EffectiveTVDBKey()
+	}
 	if s.streamManager != nil {
 		s.streamManager.SetConfig(comp.Config, nil)
 	}

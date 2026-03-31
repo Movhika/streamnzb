@@ -438,7 +438,7 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1 max-w-[34rem] space-y-0.5">
                 <CardTitle>Metadata APIs</CardTitle>
-                <CardDescription>API keys for metadata enrichment used during search and matching.</CardDescription>
+                <CardDescription>Optional API keys for metadata enrichment during search and matching. Built-in defaults are available, but using your own keys is recommended.</CardDescription>
               </div>
               <div className="shrink-0">{renderSaveButton('metadata')}</div>
             </div>

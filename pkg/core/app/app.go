@@ -22,12 +22,14 @@ import (
 )
 
 type BuildOpts struct {
-	AvailNZBURL    string
-	AvailNZBAPIKey string
-	TMDBAPIKey     string
-	TVDBAPIKey     string
-	DataDir        string
-	SessionTTL     time.Duration
+	AvailNZBURL        string
+	AvailNZBAPIKey     string
+	TMDBAPIKey         string
+	TVDBAPIKey         string
+	FallbackTMDBAPIKey string
+	FallbackTVDBAPIKey string
+	DataDir            string
+	SessionTTL         time.Duration
 }
 
 type Components struct {
@@ -66,6 +68,32 @@ func resolveDataDir(override, loadedPath string) string {
 
 func New() *App {
 	return &App{}
+}
+
+func (a *App) effectiveTMDBKey() string {
+	if k := strings.TrimSpace(a.opts.TMDBAPIKey); k != "" {
+		return k
+	}
+	return strings.TrimSpace(a.opts.FallbackTMDBAPIKey)
+}
+
+func (a *App) effectiveTVDBKey() string {
+	if k := strings.TrimSpace(a.opts.TVDBAPIKey); k != "" {
+		return k
+	}
+	return strings.TrimSpace(a.opts.FallbackTVDBAPIKey)
+}
+
+func (a *App) EffectiveTMDBKey() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.effectiveTMDBKey()
+}
+
+func (a *App) EffectiveTVDBKey() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.effectiveTVDBKey()
 }
 
 func (a *App) Build(cfg *config.Config, opts BuildOpts) (*Components, error) {
@@ -109,8 +137,8 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 		}
 	}(availClient)
 	dataDir := resolveDataDir(opts.DataDir, cfg.LoadedPath)
-	tmdbClient := tmdb.NewClient(opts.TMDBAPIKey)
-	tvdbClient := tvdb.NewClient(opts.TVDBAPIKey, dataDir)
+	tmdbClient := tmdb.NewClient(a.effectiveTMDBKey())
+	tvdbClient := tvdb.NewClient(a.effectiveTVDBKey(), dataDir)
 
 	return &Components{
 		Config:               base.Config,
@@ -181,9 +209,9 @@ func (a *App) Reload(newCfg *config.Config) (*Components, bool, error) {
 		comp := *old
 		comp.Config = newCfg
 		comp.Triage = triageSvc
-		comp.TMDBClient = tmdb.NewClient(a.opts.TMDBAPIKey)
+		comp.TMDBClient = tmdb.NewClient(a.effectiveTMDBKey())
 		dataDir := resolveDataDir(a.opts.DataDir, newCfg.LoadedPath)
-		comp.TVDBClient = tvdb.NewClient(a.opts.TVDBAPIKey, dataDir)
+		comp.TVDBClient = tvdb.NewClient(a.effectiveTVDBKey(), dataDir)
 		a.components = &comp
 		return &comp, false, nil
 

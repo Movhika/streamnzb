@@ -76,19 +76,21 @@ func main() {
 	if availNZBAPIKey == "" {
 		availNZBAPIKey = AvailNZBAPIKey
 	}
-	tmdbKey := os.Getenv(env.TMDBAPIKey)
-	if tmdbKey == "" {
-		tmdbKey = strings.TrimSpace(cfg.TMDBAPIKey)
+	userTMDBKey := os.Getenv(env.TMDBAPIKey)
+	if userTMDBKey == "" {
+		userTMDBKey = strings.TrimSpace(cfg.TMDBAPIKey)
 	}
-	if tmdbKey == "" {
-		tmdbKey = TMDBKey
+	userTVDBKey := os.Getenv(env.TVDBAPIKey)
+	if userTVDBKey == "" {
+		userTVDBKey = strings.TrimSpace(cfg.TVDBAPIKey)
 	}
-	tvdbKey := os.Getenv(env.TVDBAPIKey)
-	if tvdbKey == "" {
-		tvdbKey = strings.TrimSpace(cfg.TVDBAPIKey)
+	effectiveTMDBKey := userTMDBKey
+	if effectiveTMDBKey == "" {
+		effectiveTMDBKey = TMDBKey
 	}
-	if tvdbKey == "" {
-		tvdbKey = TVDBKey
+	effectiveTVDBKey := userTVDBKey
+	if effectiveTVDBKey == "" {
+		effectiveTVDBKey = TVDBKey
 	}
 	env.SetRuntimeHeaders(cfg.IndexerQueryHeader, cfg.IndexerGrabHeader, cfg.ProviderHeader)
 
@@ -168,12 +170,14 @@ func main() {
 
 	application := app.New()
 	comp, err := application.Build(cfg, app.BuildOpts{
-		AvailNZBURL:    availNZBUrl,
-		AvailNZBAPIKey: availNZBAPIKey,
-		TMDBAPIKey:     tmdbKey,
-		TVDBAPIKey:     tvdbKey,
-		DataDir:        dataDir,
-		SessionTTL:     30 * time.Minute,
+		AvailNZBURL:        availNZBUrl,
+		AvailNZBAPIKey:     availNZBAPIKey,
+		TMDBAPIKey:         userTMDBKey,
+		TVDBAPIKey:         userTVDBKey,
+		FallbackTMDBAPIKey: TMDBKey,
+		FallbackTVDBAPIKey: TVDBKey,
+		DataDir:            dataDir,
+		SessionTTL:         30 * time.Minute,
 	})
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to build components: %w", err))
@@ -207,7 +211,7 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize Stremio server: %v", err))
 	}
 
-	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
+	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, application, availNZBUrl, availNZBAPIKey, effectiveTMDBKey, effectiveTVDBKey)
 	apiServer.SetIndexerCaps(comp.IndexerCaps)
 	apiServer.SetAttemptLister(stateMgr)
 	if cfg.AvailNZBMode != "disabled" && strings.TrimSpace(availNZBAPIKey) == "" && strings.TrimSpace(availNZBUrl) != "" {
