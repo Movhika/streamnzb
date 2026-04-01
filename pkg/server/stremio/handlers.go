@@ -1965,10 +1965,8 @@ func (s *Server) buildSearchParamsBase(contentType, id string, searchQuery *conf
 		Metadata:           &resolvedSearchMetadata{},
 	}
 	req := indexer.SearchRequest{Limit: searchLimit}
-	searchMode := ""
 	useSeasonEpisodeParams := true
 	if searchQuery != nil {
-		searchMode = strings.ToLower(strings.TrimSpace(searchQuery.SearchMode))
 		if searchQuery.UseSeasonEpisodeParams != nil {
 			useSeasonEpisodeParams = *searchQuery.UseSeasonEpisodeParams
 		}
@@ -1989,21 +1987,6 @@ func (s *Server) buildSearchParamsBase(contentType, id string, searchQuery *conf
 		}
 	} else if strings.HasPrefix(id, "tmdb:") {
 		searchID = strings.TrimPrefix(id, "tmdb:")
-	}
-	if searchMode == "id" {
-		req.ForceIDSearch = true
-		if contentType == "series" && req.Season != "" && req.Episode != "" && !useSeasonEpisodeParams {
-			if seasonNum, err1 := strconv.Atoi(req.Season); err1 == nil {
-				if episodeNum, err2 := strconv.Atoi(req.Episode); err2 == nil {
-					req.Query = fmt.Sprintf("S%02dE%02d", seasonNum, episodeNum)
-				}
-			}
-			if req.Query == "" {
-				req.Query = fmt.Sprintf("S%sE%s", req.Season, req.Episode)
-			}
-			req.Season = ""
-			req.Episode = ""
-		}
 	}
 	if strings.HasPrefix(searchID, "tt") {
 		req.IMDbID = searchID

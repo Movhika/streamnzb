@@ -80,8 +80,14 @@ func (m *StateManager) RecordAttempt(p RecordAttemptParams) {
 		if p.SlotPath != "" {
 			// Only update the currently-pending preload row (preload=1). Historical resolved rows
 			// for the same slot_path (previous plays) must not be mutated.
-			res, err := db.Exec(`UPDATE nzb_attempts SET preload = 0, success = ?, failure_reason = ?, served_file = ? WHERE slot_path = ? AND preload = 1`,
-				success, p.FailureReason, p.ServedFile, p.SlotPath)
+			res, err := db.Exec(`UPDATE nzb_attempts
+				SET preload = 0,
+					success = ?,
+					failure_reason = ?,
+					served_file = ?,
+					indexer_name = ?
+				WHERE slot_path = ? AND preload = 1`,
+				success, p.FailureReason, p.ServedFile, p.IndexerName, p.SlotPath)
 			if err == nil {
 				affected, _ := res.RowsAffected()
 				if affected > 0 {

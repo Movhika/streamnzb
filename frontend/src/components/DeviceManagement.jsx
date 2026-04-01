@@ -8,10 +8,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
-
-const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
 import { apiFetch } from "@/api"
 import { ArrowUpDown, Check, ChevronDown, ChevronUp, Clipboard, Copy, Globe, GripVertical, Loader2, Plus, RefreshCw, Search, Server, Settings, Trash2 } from "lucide-react"
+
+const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
 
 function mapDevicesByUsername(devices) {
   return (Array.isArray(devices) ? devices : []).reduce((acc, device) => {

@@ -6,10 +6,10 @@ import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
-
-const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
 import { apiFetch } from "@/api"
 import { Copy, Plus, Settings, Trash2 } from "lucide-react"
+
+const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
 
 const TITLE_LANGUAGE_OPTIONS = [
   { value: '', label: 'Original' },

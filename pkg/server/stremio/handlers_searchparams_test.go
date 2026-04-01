@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"streamnzb/pkg/auth"
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/services/metadata/tmdb"
@@ -102,6 +103,25 @@ func TestBuildSearchParamsFromBaseSeriesTextQueryModeKeepsSeasonEpisodeForLaterD
 	}
 }
 
+func TestBuildSearchParamsBaseNumericIDMapsToTMDBID(t *testing.T) {
+	srv := &Server{config: &config.Config{}}
+
+	params, err := srv.buildSearchParamsBase("series", "123456:1:1", nil)
+	if err != nil {
+		t.Fatalf("buildSearchParamsBase() error = %v", err)
+	}
+
+	if params.Req.TMDBID != "123456" {
+		t.Fatalf("expected numeric base ID to map to TMDB ID, got %q", params.Req.TMDBID)
+	}
+	if params.Req.IMDbID != "" {
+		t.Fatalf("expected IMDb ID to stay empty for numeric base ID, got %q", params.Req.IMDbID)
+	}
+	if params.ContentIDs.Season != 1 || params.ContentIDs.Episode != 1 {
+		t.Fatalf("expected content IDs to preserve season/episode, got season=%d episode=%d", params.ContentIDs.Season, params.ContentIDs.Episode)
+	}
+}
+
 func TestHasResolvedIdentifiers(t *testing.T) {
 	if hasResolvedIdentifiers(indexer.SearchRequest{}) {
 		t.Fatal("expected empty request to report no resolved identifiers")
@@ -151,6 +171,31 @@ func TestHasUsableResolvedMetadata(t *testing.T) {
 		},
 	}, "series") {
 		t.Fatal("expected resolved title to count as usable metadata")
+	}
+}
+
+func TestBuildRawSearchResultShortCircuitsWhenMetadataCannotBeResolved(t *testing.T) {
+	srv := &Server{
+		config: &config.Config{
+			SeriesSearchQueries: []config.SearchQueryConfig{
+				{Name: "TVQuery01", SearchMode: "id"},
+			},
+		},
+	}
+	stream := &auth.Stream{
+		Username:            "Stream04",
+		SeriesSearchQueries: []string{"TVQuery01"},
+	}
+
+	raw, err := srv.buildRawSearchResult(t.Context(), "tv", "stremevent_866", stream)
+	if err != nil {
+		t.Fatalf("buildRawSearchResult() error = %v", err)
+	}
+	if raw == nil {
+		t.Fatal("expected zero-result raw search result, got nil")
+	}
+	if len(raw.IndexerReleases) != 0 || len(raw.AvailReleases) != 0 {
+		t.Fatalf("expected no releases after metadata short-circuit, got indexer=%d avail=%d", len(raw.IndexerReleases), len(raw.AvailReleases))
 	}
 }
 
