@@ -891,6 +891,33 @@ func streamSearchQueryCacheKey(stream *auth.Stream, contentType string) string {
 	)
 }
 
+func hasResolvedIdentifiers(req indexer.SearchRequest) bool {
+	return strings.TrimSpace(req.IMDbID) != "" || strings.TrimSpace(req.TMDBID) != "" || strings.TrimSpace(req.TVDBID) != ""
+}
+
+func hasPreparedTextQueries(req indexer.SearchRequest) bool {
+	if strings.TrimSpace(req.Query) != "" || strings.TrimSpace(req.FilterQuery) != "" {
+		return true
+	}
+	for _, queries := range req.PerIndexerQuery {
+		for _, query := range queries {
+			if strings.TrimSpace(query) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func looksLikeTMDBID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	_, err := strconv.Atoi(value)
+	return err == nil
+}
+
 func applyStreamIndexerSelection(req *indexer.SearchRequest, stream *auth.Stream) {
 	if req == nil {
 		return
@@ -1063,17 +1090,13 @@ func filterPlayListToAvailableForAIOStreams(list *orderedPlayListResult) *ordere
 }
 
 // buildOrderedPlayList returns an ordered list of candidates for (stream, type, id).
-// Raw search is cached by (contentType, id); play list is cached by (key, isAIOStreams).
-// When isAIOStreams is true we skip triage/sort and do title dedup only (for AIOStreams client).
+// Raw search and play list are both cached by the stable stream slot key.
+// Relevant config changes clear these caches centrally after successful saves.
 func (s *Server) buildOrderedPlayList(ctx context.Context, key StreamSlotKey, isAIOStreams bool, stream *auth.Stream) (*orderedPlayListResult, error) {
 	if key.StreamID == "" {
 		key.StreamID = defaultStreamID
 	}
 	cacheKey := key.CacheKey()
-	if isAIOStreams {
-		cacheKey += "|noFilter"
-	}
-	cacheKey += "|queries=" + streamSearchQueryCacheKey(stream, key.ContentType)
 	if v, ok := s.playListCache.Load(cacheKey); ok {
 		if ent, _ := v.(*playListCacheEntry); ent != nil && time.Now().Before(ent.until) {
 			logger.Debug("Play list cache hit", "key", cacheKey)
@@ -1097,7 +1120,7 @@ func (s *Server) buildOrderedPlayListUncached(ctx context.Context, key StreamSlo
 }
 
 func (s *Server) getOrBuildRawSearchResult(ctx context.Context, contentType, id string, stream *auth.Stream) (*rawSearchResult, error) {
-	rawKey := contentType + ":" + id + "|queries=" + streamSearchQueryCacheKey(stream, contentType)
+	rawKey := streamID(stream) + ":" + contentType + ":" + id
 	if v, ok := s.rawSearchCache.Load(rawKey); ok {
 		if ent, _ := v.(*rawSearchCacheEntry); ent != nil && time.Now().Before(ent.until) {
 			logger.Debug("Raw search cache hit", "key", rawKey)
@@ -1140,6 +1163,25 @@ func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id strin
 		"year", metadataDisplayYear(params.Metadata, contentType),
 		"languages", metadataLanguageCount(params.Metadata, contentType),
 	)
+	if !hasUsableResolvedMetadata(params, contentType) {
+		logger.Debug("Skipping stream search because metadata could not be resolved",
+			"stream", func() string {
+				if stream != nil {
+					return stream.Username
+				}
+				return "legacy"
+			}(),
+			"type", contentType,
+			"id", id,
+		)
+		return &rawSearchResult{
+			Params:          params,
+			AvailReleases:   nil,
+			IndexerReleases: nil,
+			CachedAvailable: map[string]bool{},
+			AvailResult:     nil,
+		}, nil
+	}
 	contentIDs := params.ContentIDs
 	imdbForText := params.ImdbForText
 	tmdbForText := params.TmdbForText
@@ -1205,6 +1247,25 @@ func (s *Server) buildRawSearchResult(ctx context.Context, contentType, id strin
 		profileParams.Req.StreamLabel = streamLabel
 		profileParams.Req.RequestLabel = searchQuery.Name
 		applyStreamIndexerSelection(&profileParams.Req, stream)
+		searchMode := strings.ToLower(strings.TrimSpace(searchQuery.SearchMode))
+		if searchMode == "id" && !hasResolvedIdentifiers(profileParams.Req) {
+			logger.Debug("Skipping search request without resolved metadata identifiers",
+				"stream", streamLabel,
+				"request", searchQuery.Name,
+				"type", contentType,
+				"id", id,
+			)
+			continue
+		}
+		if searchMode != "id" && !hasPreparedTextQueries(profileParams.Req) {
+			logger.Debug("Skipping search request without prepared text queries",
+				"stream", streamLabel,
+				"request", searchQuery.Name,
+				"type", contentType,
+				"id", id,
+			)
+			continue
+		}
 		effectiveLimit := profileParams.Req.Limit
 		if searchQuery.SearchResultLimit > 0 {
 			effectiveLimit = searchQuery.SearchResultLimit
@@ -1728,6 +1789,16 @@ func metadataLanguageCount(metadata *resolvedSearchMetadata, contentType string)
 	return 0
 }
 
+func hasUsableResolvedMetadata(params *SearchParams, contentType string) bool {
+	if params == nil {
+		return false
+	}
+	if hasResolvedIdentifiers(params.Req) {
+		return true
+	}
+	return strings.TrimSpace(metadataDisplayTitle(params.Metadata, contentType)) != ""
+}
+
 func localizedMovieTitleForLanguage(translations *tmdb.MovieTranslationsResponse, language string) string {
 	if translations == nil || language == "" {
 		return ""
@@ -1930,11 +2001,13 @@ func (s *Server) buildSearchParamsBase(contentType, id string, searchQuery *conf
 			if req.Query == "" {
 				req.Query = fmt.Sprintf("S%sE%s", req.Season, req.Episode)
 			}
+			req.Season = ""
+			req.Episode = ""
 		}
 	}
 	if strings.HasPrefix(searchID, "tt") {
 		req.IMDbID = searchID
-	} else {
+	} else if looksLikeTMDBID(searchID) {
 		req.TMDBID = searchID
 	}
 	imdbForText := req.IMDbID
@@ -2083,6 +2156,8 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 			if req.Query == "" {
 				req.Query = fmt.Sprintf("S%sE%s", req.Season, req.Episode)
 			}
+			req.Season = ""
+			req.Episode = ""
 		}
 	}
 
@@ -2116,7 +2191,7 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 					if eff.SearchTitleLanguage != nil {
 						lang = *eff.SearchTitleLanguage
 					}
-					cacheKey := fmt.Sprintf("%s|%t|%t", lang, includeYear, useSeasonEpisodeParams)
+					cacheKey := fmt.Sprintf("%s|%t", lang, includeYear)
 					if queries, ok := params.MovieTitleQueries[cacheKey]; ok {
 						req.PerIndexerQuery[name] = queries
 						continue
@@ -3276,6 +3351,7 @@ func (s *Server) recordAttemptParams(sess *session.Session) persistence.RecordAt
 		ContentType:  contentType,
 		ContentID:    contentID,
 		ContentTitle: "",
+		IndexerName:  sess.ReleaseIndexer(),
 		ReleaseTitle: sess.ReportReleaseName(),
 		ReleaseURL:   sess.ReleaseURL(),
 		ReleaseSize:  sess.ReportSize(),

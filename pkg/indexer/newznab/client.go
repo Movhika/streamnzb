@@ -34,6 +34,7 @@ type Client struct {
 	downloadUsed      int
 	downloadRemaining int
 	usageManager      *indexer.UsageManager
+	requestLimiter    *indexer.RequestLimiter
 	mu                sync.RWMutex
 }
 
@@ -144,6 +145,7 @@ func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
 		downloadUsed:      0,
 		downloadRemaining: cfg.DownloadsDay,
 		usageManager:      um,
+		requestLimiter:    indexer.NewRequestLimiter(cfg.RateLimitRPS),
 	}
 
 	if um != nil {
@@ -236,6 +238,9 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 }
 
 func (c *Client) Ping() error {
+	if err := c.requestLimiter.Wait(context.Background()); err != nil {
+		return err
+	}
 	apiURL := fmt.Sprintf("%s%s?t=caps&apikey=%s", c.baseURL, c.apiPath, c.apiKey)
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
@@ -255,6 +260,9 @@ func (c *Client) Ping() error {
 }
 
 func (c *Client) GetCaps() (*indexer.Caps, error) {
+	if err := c.requestLimiter.Wait(context.Background()); err != nil {
+		return nil, err
+	}
 	apiURL := fmt.Sprintf("%s%s?t=caps", c.baseURL, c.apiPath)
 	if c.apiKey != "" {
 		apiURL += "&apikey=" + url.QueryEscape(c.apiKey)
@@ -324,6 +332,9 @@ func (c *Client) checkNewznabError(bodyBytes []byte) error {
 
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
 	if err := c.checkAPILimit(); err != nil {
+		return nil, err
+	}
+	if err := c.requestLimiter.Wait(context.Background()); err != nil {
 		return nil, err
 	}
 
@@ -517,6 +528,9 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := c.requestLimiter.Wait(ctx); err != nil {
+		return nil, err
 	}
 	nzbURL = c.normalizeDownloadURL(nzbURL)
 

@@ -34,13 +34,19 @@ function shouldUseManualAvailNZBKeyOverride(values) {
   return Boolean(String(values?.availnzb_api_key || '').trim())
 }
 
-function EnvOverrideNote({ show }) {
+function EnvOverrideIndicator({ show, message = 'Overwritten by environment variable on restart.' }) {
   if (!show) return null
   return (
-    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-      <AlertTriangle className="h-3.5 w-3 shrink-0" />
-      Overwritten by environment variable on restart.
-    </p>
+    <TooltipProvider delayDuration={100}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" className="inline-flex items-center text-amber-600 hover:text-amber-700 align-middle" aria-label={message}>
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" align="start">{message}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
@@ -243,7 +249,7 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
                   <FormField control={control} name="log_level" render={({ field }) => (
                     <FormItem className="rounded-none border-0 p-3">
                       <div className="flex items-center justify-between gap-4">
-                        <FormLabel className="text-sm font-medium">Log Level</FormLabel>
+                        <FormLabel className="text-sm font-medium flex items-center gap-1.5">Log Level <EnvOverrideIndicator show={envOverrides.includes('log_level')} /></FormLabel>
                         <FormControl>
                           <select className={fieldClassName('log_level', 'flex h-9 w-40 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2')} {...field}>
                             <option value="DEBUG">DEBUG</option>
@@ -255,18 +261,16 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
                       </div>
                       <FormDescription className="mt-3">Controls how verbose StreamNZB logging should be.</FormDescription>
                       <FormMessage />
-                      <EnvOverrideNote show={envOverrides.includes('log_level')} />
                     </FormItem>
                   )} />
                   <FormField control={control} name="keep_log_files" render={({ field }) => (
                     <FormItem className="relative rounded-none border-0 p-3">
                       <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
                       <div className="flex items-center justify-between gap-4">
-                        <FormLabel className="text-sm font-medium">Keep log files</FormLabel>
+                        <FormLabel className="text-sm font-medium flex items-center gap-1.5">Keep log files <EnvOverrideIndicator show={envOverrides.includes('keep_log_files')} /></FormLabel>
                         <FormControl><Input type="number" min={1} max={50} className={fieldClassName('keep_log_files', 'h-9 w-28')} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; field.onChange(v === '' ? 9 : Math.min(50, Math.max(1, Number(v) || 9))) }} /></FormControl>
                       </div>
                       <FormDescription className="mt-3">Number of log files to keep. Oldest rotated logs are purged on restart.</FormDescription>
-                      <EnvOverrideNote show={envOverrides.includes('keep_log_files')} />
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -330,7 +334,7 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
                     <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
                       <div className="min-w-0 xl:flex-1">
                         <div className="flex items-center gap-2">
-                          <FormLabel className="min-w-0 text-sm font-medium">AvailNZB API Key</FormLabel>
+                          <FormLabel className="min-w-0 text-sm font-medium flex items-center gap-1.5">AvailNZB API Key <EnvOverrideIndicator show={envOverrides.includes('availnzb_api_key')} /></FormLabel>
                           <TooltipProvider delayDuration={100}>
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -370,7 +374,6 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
                     </div>
                     <FormDescription className="mt-3">StreamNZB can manage this key automatically. Use a manual override only if you want to force a specific AvailNZB API key.</FormDescription>
                     <FormMessage />
-                    <EnvOverrideNote show={envOverrides.includes('availnzb_api_key')} />
                   </FormItem>
                 )} />
                 <FormField control={control} name="availnzb_mode" render={({ field }) => (
@@ -448,24 +451,22 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
               <FormField control={control} name="tmdb_api_key" render={({ field }) => (
                 <FormItem className="rounded-none border-0 p-3">
                   <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                    <FormLabel className="min-w-0 text-sm font-medium xl:flex-1">TMDB Read Access Token</FormLabel>
+                    <FormLabel className="min-w-0 text-sm font-medium xl:flex-1 flex items-center gap-1.5">TMDB Read Access Token <EnvOverrideIndicator show={envOverrides.includes('tmdb_api_key')} /></FormLabel>
                     <FormControl><div className="w-full xl:max-w-3xl"><PasswordInput className={fieldClassName('tmdb_api_key', 'h-9 w-full font-mono text-xs')} {...field} value={field.value || ''} /></div></FormControl>
                   </div>
                   <FormDescription className="mt-3">Used for localized titles, year enrichment, and text-based movie/show name resolution. Without it, text-search metadata is limited and some requests fall back to ID-only behavior.</FormDescription>
                   <FormMessage />
-                  <EnvOverrideNote show={envOverrides.includes('tmdb_api_key')} />
                 </FormItem>
               )} />
               <FormField control={control} name="tvdb_api_key" render={({ field }) => (
                 <FormItem className="relative rounded-none border-0 p-3">
                   <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
                   <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                    <FormLabel className="min-w-0 text-sm font-medium xl:flex-1">TVDB API Key</FormLabel>
+                    <FormLabel className="min-w-0 text-sm font-medium xl:flex-1 flex items-center gap-1.5">TVDB API Key <EnvOverrideIndicator show={envOverrides.includes('tvdb_api_key')} /></FormLabel>
                     <FormControl><div className="w-full xl:max-w-3xl"><PasswordInput className={fieldClassName('tvdb_api_key', 'h-9 w-full font-mono text-xs')} {...field} value={field.value || ''} /></div></FormControl>
                   </div>
                   <FormDescription className="mt-3">Used primarily for series metadata ID resolution. When available, StreamNZB can resolve TVDB IDs directly before falling back to TMDB-based lookup.</FormDescription>
                   <FormMessage />
-                  <EnvOverrideNote show={envOverrides.includes('tvdb_api_key')} />
                 </FormItem>
               )} />
             </div>

@@ -250,11 +250,14 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			return
 		}
 
+		if s.strmServer != nil {
+			s.strmServer.ClearSearchCaches()
+		}
 		s.reloadConfigAsync(&newCfg)
 
 		s.sendConfig(client)
 		s.sendIndexerCaps(client)
-		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded."}`)})
+		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded. Search cache cleared."}`)})
 		return
 	}
 
@@ -398,7 +401,10 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 		return
 	}
 
-	trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Device configurations saved successfully"}`)})
+	if s.strmServer != nil {
+		s.strmServer.ClearSearchCaches()
+	}
+	trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Device configurations saved successfully. Search cache cleared."}`)})
 }
 
 func (s *Server) handleGetDevicesWS(client *Client) {

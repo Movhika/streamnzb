@@ -99,6 +99,9 @@ func (s *Server) handleDevicesCreate(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+	if s.strmServer != nil {
+		s.strmServer.ClearSearchCaches()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
@@ -162,6 +165,9 @@ func (s *Server) handleDeviceByUsername(w http.ResponseWriter, r *http.Request) 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
+		}
+		if s.strmServer != nil {
+			s.strmServer.ClearSearchCaches()
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -245,9 +251,12 @@ func (s *Server) handlePutDeviceConfigs(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
+	if s.strmServer != nil {
+		s.strmServer.ClearSearchCaches()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "success",
-		"message": "Stream configurations saved successfully",
+		"message": "Stream configurations saved successfully. Search cache cleared.",
 	})
 }

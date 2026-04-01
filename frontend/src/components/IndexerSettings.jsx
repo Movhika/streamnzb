@@ -34,22 +34,23 @@ const INDEXER_PRESETS = [
   { name: 'GingaDADDY', url: 'https://www.gingadaddy.com', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
   { name: 'Miatrix', url: 'https://www.miatrix.com', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
   { name: 'Newz69', url: 'https://newz69.keagaming.com', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
-  { name: 'NinjaCentral', url: 'https://ninjacentral.co.za', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
+  { name: 'NinjaCentral', url: 'https://ninjacentral.co.za', api_path: '/api', type: 'newznab', api_hits_day: 2000, downloads_day: 450, rate_limit_rps: 0, timeout_seconds: 5 },
   { name: 'Nzb.life', url: 'https://api.nzb.life', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
   { name: 'NZBCat', url: 'https://nzb.cat', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
   { name: 'NZBFinder', url: 'https://nzbfinder.ws', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
   { name: 'NZBgeek', url: 'https://api.nzbgeek.info', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
   { name: 'NzbNoob', url: 'https://www.nzbnoob.com', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
   { name: 'NZBNDX', url: 'https://www.nzbndx.com', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
-  { name: 'NzbPlanet', url: 'https://api.nzbplanet.net', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
+  { name: 'NzbPlanet', url: 'https://api.nzbplanet.net', api_path: '/api', type: 'newznab', api_hits_day: 5000, downloads_day: 0, rate_limit_rps: 0, timeout_seconds: 5 },
   { name: 'NZBStars', url: 'https://nzbstars.com', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
-  { name: 'SceneNZBs', url: 'https://scenenzbs.com', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
+  { name: 'SceneNZBs', url: 'https://scenenzbs.com', api_path: '/api', type: 'newznab', api_hits_day: 0, downloads_day: 400, rate_limit_rps: 5, timeout_seconds: 5 },
   { name: 'Tabula Rasa', url: 'https://www.tabula-rasa.pw', api_path: '/api/v1', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
   { name: 'Usenet Crawler', url: 'https://www.usenet-crawler.com', api_path: '/api', type: 'newznab', api_hits_day: 100, downloads_day: 50 },
   { name: 'Easynews', url: '', api_path: '/api', type: 'easynews', api_hits_day: 100, downloads_day: 50 },
 ]
 
 const PROWLARR_INDEXER_ID_PLACEHOLDER = '{indexer_id}'
+const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
 
 function normalizeIndexerDraft(draft) {
   const value = draft || {}
@@ -61,6 +62,7 @@ function normalizeIndexerDraft(draft) {
     type: value.type || 'newznab',
     api_hits_day: Number(value.api_hits_day || 0),
     downloads_day: Number(value.downloads_day || 0),
+    rate_limit_rps: Number(value.rate_limit_rps || 0),
     timeout_seconds: Number(value.timeout_seconds || 0),
     enabled: value.enabled !== false,
     username: value.username || '',
@@ -78,10 +80,15 @@ function getDefaultIndexerTimeoutSeconds(type) {
 
 function getPresetDefaults(preset) {
   return {
-    timeout_seconds: getDefaultIndexerTimeoutSeconds(preset.type),
+    timeout_seconds: Number(preset.timeout_seconds || getDefaultIndexerTimeoutSeconds(preset.type)),
     api_hits_day: Number(preset.api_hits_day || 0),
     downloads_day: Number(preset.downloads_day || 0),
+    rate_limit_rps: Number(preset.rate_limit_rps || 0),
   }
+}
+
+function formatLimitValue(value) {
+  return value > 0 ? String(value) : '∞'
 }
 
 function summarizeIndexer(indexer, caps) {
@@ -90,8 +97,9 @@ function summarizeIndexer(indexer, caps) {
   if (indexer.url) parts.push(indexer.url)
   if (indexer.timeout_seconds > 0) parts.push(`Timeout: ${indexer.timeout_seconds}s`)
   else parts.push(`Timeout: ${getDefaultIndexerTimeoutSeconds(indexer.type)}s default`)
-  if (indexer.api_hits_day > 0) parts.push(`Hits/day: ${indexer.api_hits_day}`)
-  if (indexer.downloads_day > 0) parts.push(`DLs/day: ${indexer.downloads_day}`)
+  parts.push(`Hits/day: ${formatLimitValue(indexer.api_hits_day)}`)
+  parts.push(`DLs/day: ${formatLimitValue(indexer.downloads_day)}`)
+  parts.push(`RPS: ${formatLimitValue(indexer.rate_limit_rps)}`)
   return parts
 }
 
@@ -110,6 +118,11 @@ function assignedStreamsForIndexer(devicesByName, indexerName) {
     .filter(Boolean)
     .filter((device) => Array.isArray(device.indexer_selections) && device.indexer_selections.some((name) => normalizeName(name) === target))
     .map((device) => device.username)
+}
+
+function firstFieldErrorMessage(fieldErrors, fallback) {
+  const first = Object.values(fieldErrors || {}).find(Boolean)
+  return first || fallback
 }
 
 function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus, title, description, saveLabel, existingNames = [], existingIndexers = [], editing = false }) {
@@ -214,9 +227,10 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
         else if (path.includes('.timeout_seconds')) nextErrors.timeout_seconds = message
         else if (path.includes('.api_hits_day')) nextErrors.api_hits_day = message
         else if (path.includes('.downloads_day')) nextErrors.downloads_day = message
+        else if (path.includes('.rate_limit_rps')) nextErrors.rate_limit_rps = message
       })
       setFieldErrors(nextErrors)
-      setSaveError(error?.message || 'Save failed')
+      setSaveError(firstFieldErrorMessage(nextErrors, error?.message || 'Save failed'))
     } finally {
       setSaving(false)
     }
@@ -283,6 +297,7 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
                                   timeout_seconds: presetDefaults.timeout_seconds,
                                   api_hits_day: presetDefaults.api_hits_day,
                                   downloads_day: presetDefaults.downloads_day,
+                                  rate_limit_rps: presetDefaults.rate_limit_rps,
                                 }))
                                 requestAnimationFrame(() => {
                                   nameInputRef.current?.focus()
@@ -387,10 +402,21 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
               <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
               <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
                 <div className="min-w-0 xl:flex-1">
+                  <Label className="text-sm font-medium">Requests/Second</Label>
+                </div>
+                <div className="w-full xl:max-w-[8rem]">
+                  <Input className={`h-9 ${fieldClass('rate_limit_rps')}`} type="number" min={0} value={draft.rate_limit_rps === 0 ? '' : draft.rate_limit_rps} onChange={(event) => update('rate_limit_rps', event.target.value === '' ? 0 : Number(event.target.value))} placeholder="∞" />
+                </div>
+              </div>
+            </div>
+            <div className="relative p-3">
+              <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
+                <div className="min-w-0 xl:flex-1">
                   <Label className="text-sm font-medium">Hits/Day</Label>
                 </div>
                 <div className="w-full xl:max-w-[8rem]">
-                  <Input className={`h-9 ${fieldClass('api_hits_day')}`} type="number" min={0} value={draft.api_hits_day === 0 ? '' : draft.api_hits_day} onChange={(event) => update('api_hits_day', event.target.value === '' ? 0 : Number(event.target.value))} placeholder="100" />
+                  <Input className={`h-9 ${fieldClass('api_hits_day')}`} type="number" min={0} value={draft.api_hits_day === 0 ? '' : draft.api_hits_day} onChange={(event) => update('api_hits_day', event.target.value === '' ? 0 : Number(event.target.value))} placeholder="∞" />
                 </div>
               </div>
             </div>
@@ -401,7 +427,7 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
                   <Label className="text-sm font-medium">DLs/Day</Label>
                 </div>
                 <div className="w-full xl:max-w-[8rem]">
-                  <Input className={`h-9 ${fieldClass('downloads_day')}`} type="number" min={0} value={draft.downloads_day === 0 ? '' : draft.downloads_day} onChange={(event) => update('downloads_day', event.target.value === '' ? 0 : Number(event.target.value))} placeholder="50" />
+                  <Input className={`h-9 ${fieldClass('downloads_day')}`} type="number" min={0} value={draft.downloads_day === 0 ? '' : draft.downloads_day} onChange={(event) => update('downloads_day', event.target.value === '' ? 0 : Number(event.target.value))} placeholder="∞" />
                 </div>
               </div>
             </div>
@@ -481,7 +507,7 @@ export function IndexerSettings({ fields = [], append, update, remove, replace, 
     await onPersist?.(nextIndexers)
     append(normalizeIndexerDraft(draft))
     setDeleteBlockedName('')
-    onStatus?.({ type: 'success', message: `Indexer "${draft.name || draft.url}" created successfully` })
+    onStatus?.({ type: 'success', message: `Indexer "${draft.name || draft.url}" created successfully.${CACHE_CLEARED_SUFFIX}` })
   }
 
   const handleSave = async (index, draft) => {
@@ -490,7 +516,7 @@ export function IndexerSettings({ fields = [], append, update, remove, replace, 
     await onPersist?.(nextIndexers)
     update(index, normalizeIndexerDraft(draft))
     setDeleteBlockedName('')
-    onStatus?.({ type: 'success', message: `Indexer "${draft.name || draft.url}" saved successfully` })
+    onStatus?.({ type: 'success', message: `Indexer "${draft.name || draft.url}" saved successfully.${CACHE_CLEARED_SUFFIX}` })
   }
 
   const handleDelete = async (index) => {
@@ -516,7 +542,7 @@ export function IndexerSettings({ fields = [], append, update, remove, replace, 
     try {
       await onPersist?.(nextIndexers)
       replace(nextIndexers)
-      onStatus?.({ type: 'success', message: `Indexer "${indexer.name || indexer.url}" deleted successfully` })
+      onStatus?.({ type: 'success', message: `Indexer "${indexer.name || indexer.url}" deleted successfully.${CACHE_CLEARED_SUFFIX}` })
     } catch (error) {
       onStatus?.({
         type: 'error',

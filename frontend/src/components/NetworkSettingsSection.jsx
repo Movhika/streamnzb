@@ -32,13 +32,19 @@ function pickInitialValues(values = {}) {
   }
 }
 
-function EnvOverrideNote({ show }) {
+function EnvOverrideIndicator({ show, message = 'Overwritten by environment variable on restart.' }) {
   if (!show) return null
   return (
-    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-      <AlertTriangle className="h-3.5 w-3 shrink-0" />
-      Overwritten by environment variable on restart.
-    </p>
+    <TooltipProvider delayDuration={100}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" className="inline-flex items-center text-amber-600 hover:text-amber-700 align-middle" aria-label={message}>
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" align="start">{message}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
@@ -175,24 +181,22 @@ export const NetworkSettingsSection = forwardRef(function NetworkSettingsSection
                 <FormField control={control} name="addon_base_url" render={({ field }) => (
                   <FormItem className="rounded-none border-0 p-3">
                     <div className="flex items-center justify-between gap-4">
-                      <FormLabel className="text-sm font-medium">Base URL</FormLabel>
+                      <FormLabel className="text-sm font-medium flex items-center gap-1.5">Base URL <EnvOverrideIndicator show={envOverrides.includes('addon_base_url')} /></FormLabel>
                       <FormControl><Input placeholder="http://localhost:7000" className={fieldClassName('addon_base_url', 'h-9 w-64')} {...field} /></FormControl>
                     </div>
                     <FormDescription className="mt-3">The public base URL clients use to reach your StreamNZB addon.</FormDescription>
                     <FormMessage />
-                    <EnvOverrideNote show={envOverrides.includes('addon_base_url')} />
                   </FormItem>
                 )} />
                 <FormField control={control} name="addon_port" render={({ field }) => (
                   <FormItem className="relative rounded-none border-0 p-3">
                     <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
                     <div className="flex items-center justify-between gap-4">
-                      <FormLabel className="text-sm font-medium">Port</FormLabel>
+                      <FormLabel className="text-sm font-medium flex items-center gap-1.5">Port <EnvOverrideIndicator show={envOverrides.includes('addon_port')} /></FormLabel>
                       <FormControl><Input type="number" className={fieldClassName('addon_port', 'h-9 w-28')} {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
                     </div>
                     <FormDescription className="mt-3">The local port where the addon server listens.</FormDescription>
                     <FormMessage />
-                    <EnvOverrideNote show={envOverrides.includes('addon_port')} />
                   </FormItem>
                 )} />
               </div>
@@ -209,10 +213,9 @@ export const NetworkSettingsSection = forwardRef(function NetworkSettingsSection
                 <div className="shrink-0">{renderSaveButton('proxy')}</div>
               </div>
               {(envOverrides.includes('proxy_port') || envOverrides.includes('proxy_host') || envOverrides.includes('proxy_enabled') || envOverrides.includes('proxy_auth_user') || envOverrides.includes('proxy_auth_pass')) && (
-                <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                  <AlertTriangle className="h-3.5 w-3 shrink-0" />
-                  Some settings overwritten by environment variables (NNTP_PROXY_*) on restart.
-                </p>
+                <div className="mt-1">
+                  <EnvOverrideIndicator show message="Some settings are overwritten by environment variables (NNTP_PROXY_*) on restart." />
+                </div>
               )}
             </CardHeader>
             <CardContent>
@@ -291,36 +294,33 @@ export const NetworkSettingsSection = forwardRef(function NetworkSettingsSection
               <FormField control={control} name="indexer_query_header" render={({ field }) => (
                 <FormItem className="rounded-none border-0 p-3">
                   <div className="flex items-center justify-between gap-4">
-                    <FormLabel className="text-sm font-medium">Indexer Query Header</FormLabel>
+                    <FormLabel className="text-sm font-medium flex items-center gap-1.5">Indexer Query Header <EnvOverrideIndicator show={envOverrides.includes('indexer_query_header')} /></FormLabel>
                     <FormControl><Input className={fieldClassName('indexer_query_header', 'h-9 w-64')} {...field} value={field.value || ''} placeholder="Prowlarr/2.3.0.5236" /></FormControl>
                   </div>
                   <FormDescription className="mt-3">Used for indexer search and capability requests.</FormDescription>
                   <FormMessage />
-                  <EnvOverrideNote show={envOverrides.includes('indexer_query_header')} />
                 </FormItem>
               )} />
               <FormField control={control} name="indexer_grab_header" render={({ field }) => (
                 <FormItem className="relative rounded-none border-0 p-3">
                   <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
                   <div className="flex items-center justify-between gap-4">
-                    <FormLabel className="text-sm font-medium">Indexer Grab Header</FormLabel>
+                    <FormLabel className="text-sm font-medium flex items-center gap-1.5">Indexer Grab Header <EnvOverrideIndicator show={envOverrides.includes('indexer_grab_header')} /></FormLabel>
                     <FormControl><Input className={fieldClassName('indexer_grab_header', 'h-9 w-64')} {...field} value={field.value || ''} placeholder="SABnzbd/4.5.5" /></FormControl>
                   </div>
                   <FormDescription className="mt-3">Used when grabbing NZBs from indexers.</FormDescription>
                   <FormMessage />
-                  <EnvOverrideNote show={envOverrides.includes('indexer_grab_header')} />
                 </FormItem>
               )} />
               <FormField control={control} name="provider_header" render={({ field }) => (
                 <FormItem className="relative rounded-none border-0 p-3">
                   <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
                   <div className="flex items-center justify-between gap-4">
-                    <FormLabel className="text-sm font-medium">Provider Header</FormLabel>
+                    <FormLabel className="text-sm font-medium flex items-center gap-1.5">Provider Header <EnvOverrideIndicator show={envOverrides.includes('provider_header')} /></FormLabel>
                     <FormControl><Input className={fieldClassName('provider_header', 'h-9 w-64')} {...field} value={field.value || ''} placeholder="VLC/1.2.3.4" /></FormControl>
                   </div>
                   <FormDescription className="mt-3">Custom provider-facing User-Agent header.</FormDescription>
                   <FormMessage />
-                  <EnvOverrideNote show={envOverrides.includes('provider_header')} />
                 </FormItem>
               )} />
             </div>

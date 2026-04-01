@@ -29,6 +29,7 @@ const (
 		content_type TEXT NOT NULL,
 		content_id TEXT NOT NULL,
 		content_title TEXT,
+		indexer_name TEXT,
 		release_title TEXT NOT NULL,
 		release_url TEXT,
 		release_size INTEGER,
@@ -70,7 +71,10 @@ func initSchema(db *sql.DB) error {
 	if err := migrateNzbAttemptsPreload(db); err != nil {
 		return err
 	}
-	return migrateNzbAttemptsServedFile(db)
+	if err := migrateNzbAttemptsServedFile(db); err != nil {
+		return err
+	}
+	return migrateNzbAttemptsIndexerName(db)
 }
 
 // migrateNzbAttemptsPreload adds preload column for existing DBs (no-op if already present).
@@ -86,6 +90,14 @@ func migrateNzbAttemptsServedFile(db *sql.DB) error {
 	_, err := db.Exec(`ALTER TABLE nzb_attempts ADD COLUMN served_file TEXT`)
 	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("migrate nzb_attempts.served_file: %w", err)
+	}
+	return nil
+}
+
+func migrateNzbAttemptsIndexerName(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE nzb_attempts ADD COLUMN indexer_name TEXT`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate nzb_attempts.indexer_name: %w", err)
 	}
 	return nil
 }
