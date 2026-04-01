@@ -85,7 +85,7 @@ func (m *StateManager) RecordAttempt(p RecordAttemptParams) {
 					success = ?,
 					failure_reason = ?,
 					served_file = ?,
-					indexer_name = ?
+					indexer_name = COALESCE(NULLIF(?, ''), indexer_name)
 				WHERE slot_path = ? AND preload = 1`,
 				success, p.FailureReason, p.ServedFile, p.IndexerName, p.SlotPath)
 			if err == nil {
