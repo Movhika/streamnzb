@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { AlertTriangle, Loader2, Save, User } from "lucide-react"
+import { AlertCircle, AlertTriangle, Loader2, Save, User } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
@@ -14,9 +14,9 @@ function EnvOverrideIndicator({ show, message = 'Overwritten by environment vari
     <TooltipProvider delayDuration={100}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button type="button" className="inline-flex items-center text-amber-600 hover:text-amber-700 align-middle" aria-label={message}>
+          <span className="inline-flex items-center text-amber-600 hover:text-amber-700 align-middle" aria-label={message}>
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          </button>
+          </span>
         </TooltipTrigger>
         <TooltipContent side="top" align="start">{message}</TooltipContent>
       </Tooltip>
