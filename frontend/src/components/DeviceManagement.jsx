@@ -11,6 +11,8 @@ import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { apiFetch } from "@/api"
 import { ArrowUpDown, Check, ChevronDown, ChevronUp, Clipboard, Copy, Globe, GripVertical, Loader2, Plus, RefreshCw, Search, Server, Settings, Trash2 } from "lucide-react"
 
+const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
+
 function mapDevicesByUsername(devices) {
   return (Array.isArray(devices) ? devices : []).reduce((acc, device) => {
     if (!device?.username) return acc
@@ -807,7 +809,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
         body: JSON.stringify({ username: draft.username }),
       })
       await saveDeviceAssignments(draft.username, draft, null)
-      const status = { type: 'success', message: `Stream "${draft.username}" created successfully` }
+      const status = { type: 'success', message: `Stream "${draft.username}" created successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
       setAddDialogDraft(null)
@@ -848,7 +850,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     showStatus(null)
     try {
       await saveDeviceAssignments(editingDevice.username, draft, editingDevice)
-      const status = { type: 'success', message: `Stream "${editingDevice.username}" saved successfully` }
+      const status = { type: 'success', message: `Stream "${editingDevice.username}" saved successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
       setEditingDevice(null)
@@ -867,7 +869,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     showStatus(null)
     try {
       await apiFetch(`/api/streams/${encodeURIComponent(username)}`, { method: 'DELETE' })
-      const status = { type: 'success', message: `Stream "${username}" deleted successfully` }
+      const status = { type: 'success', message: `Stream "${username}" deleted successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
       await fetchDevices(false)

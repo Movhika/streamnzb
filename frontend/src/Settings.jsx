@@ -189,7 +189,8 @@ function Settings({ initialConfig, sendCommand, saveStatus, clearSaveStatus, isS
           enabled: idx.enabled != null ? idx.enabled : true,
           api_path: idx.api_path || '/api',
           api_hits_day: Number(idx.api_hits_day || 0),
-          downloads_day: Number(idx.downloads_day || 0),
+	          downloads_day: Number(idx.downloads_day || 0),
+	          rate_limit_rps: Number(idx.rate_limit_rps || 0),
 	          timeout_seconds: Number(idx.timeout_seconds || 0),
           username: idx.username || '',
           password: idx.password || '',
@@ -362,10 +363,13 @@ function Settings({ initialConfig, sendCommand, saveStatus, clearSaveStatus, isS
     () => pickConfigSlice(configSnapshot, ADVANCED_TAB_FIELDS),
     [configSnapshot]
   )
+  const successSuffix = saveStatus.type === 'success' && typeof saveStatus.msg === 'string' && saveStatus.msg.includes('Search cache cleared')
+    ? ' Search cache cleared.'
+    : ''
   const saveFooterMsg = saveStatus.type === 'error' && errorCount > 0
     ? `Validation failed — ${errorCount} field${errorCount > 1 ? 's' : ''} need${errorCount === 1 ? 's' : ''} attention`
     : saveStatus.type === 'success' && lastSettingsSaveCard
-      ? `${settingsCardTitles[lastSettingsSaveCard] || 'Settings'} saved.`
+      ? `${settingsCardTitles[lastSettingsSaveCard] || 'Settings'} saved.${successSuffix}`
       : saveStatus.type === 'normal' && lastConfigSaveSource
         ? `Saving ${settingsCardTitles[lastConfigSaveSource] || 'Settings'}...`
         : saveStatus.msg
@@ -450,7 +454,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, clearSaveStatus, isS
         error.message = summary
       }
       console.error('Error saving configuration:', error)
-      if (sourceTab !== 'network' && sourceTab !== 'advanced') {
+      if (sourceTab !== 'network' && sourceTab !== 'advanced' && sourceTab !== 'providers' && sourceTab !== 'indexers') {
         showFooterStatus({ type: 'error', message: error.message || 'Failed to save configuration.' })
       }
       setError('root', { message: 'Failed to save configuration: ' + error.message })

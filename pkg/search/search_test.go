@@ -31,6 +31,7 @@ func TestRunIndexerSearchesPerIndexerTextRequestCarriesSeasonEpisodeWhenEnabled(
 	req := indexer.SearchRequest{
 		Cat:                    "5000",
 		Limit:                  100,
+		IMDbID:                 "tt1234567",
 		Season:                 "1",
 		Episode:                "5",
 		UseSeasonEpisodeParams: true,
@@ -43,29 +44,20 @@ func TestRunIndexerSearchesPerIndexerTextRequestCarriesSeasonEpisodeWhenEnabled(
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
 
-	if len(idx.reqs) != 2 {
-		t.Fatalf("expected 2 Search calls, got %d", len(idx.reqs))
+	if len(idx.reqs) != 1 {
+		t.Fatalf("expected 1 Search call, got %d", len(idx.reqs))
 	}
 
-	var idReq *indexer.SearchRequest
 	var textReq *indexer.SearchRequest
 	for i := range idx.reqs {
 		reqCopy := idx.reqs[i]
 		if reqCopy.PerIndexerQuery != nil {
 			textReq = &reqCopy
-		} else {
-			idReq = &reqCopy
 		}
 	}
 
-	if idReq == nil {
-		t.Fatal("expected an ID search request")
-	}
 	if textReq == nil {
 		t.Fatal("expected a text search request")
-	}
-	if idReq.Season != "1" || idReq.Episode != "5" {
-		t.Fatalf("expected ID request to keep season/episode, got season=%q episode=%q", idReq.Season, idReq.Episode)
 	}
 	if textReq.Season != "1" || textReq.Episode != "5" {
 		t.Fatalf("expected text request to keep season/episode when enabled, got season=%q episode=%q", textReq.Season, textReq.Episode)

@@ -42,12 +42,13 @@ type Client struct {
 	downloadUsed      int
 	downloadRemaining int
 	usageManager      *indexer.UsageManager
+	requestLimiter    *indexer.RequestLimiter
 	mu                sync.RWMutex
 }
 
 var _ indexer.Indexer = (*Client)(nil)
 
-func NewClient(username, password, name string, downloadBase string, apiLimit, downloadLimit int, um *indexer.UsageManager) (*Client, error) {
+func NewClient(username, password, name string, downloadBase string, apiLimit, downloadLimit, rateLimitRPS int, um *indexer.UsageManager) (*Client, error) {
 	if username == "" || password == "" {
 		return nil, fmt.Errorf("easynews username and password are required")
 	}
@@ -71,6 +72,7 @@ func NewClient(username, password, name string, downloadBase string, apiLimit, d
 		downloadLimit:     downloadLimit,
 		downloadUsed:      0,
 		downloadRemaining: downloadLimit,
+		requestLimiter:    indexer.NewRequestLimiter(rateLimitRPS),
 		client: &http.Client{
 			Timeout:   searchTimeout,
 			Transport: transport,
@@ -150,6 +152,9 @@ func (c *Client) refreshUsageFromManager() *indexer.UsageData {
 }
 
 func (c *Client) Ping() error {
+	if err := c.requestLimiter.Wait(context.Background()); err != nil {
+		return err
+	}
 
 	testQuery := "dune"
 	_, err := c.searchInternal(testQuery, "", "", "", false)
@@ -161,6 +166,9 @@ func (c *Client) Ping() error {
 
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
 	if err := c.checkAPILimit(); err != nil {
+		return nil, err
+	}
+	if err := c.requestLimiter.Wait(context.Background()); err != nil {
 		return nil, err
 	}
 
@@ -209,6 +217,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 
 func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
+		return nil, err
+	}
+	if err := c.requestLimiter.Wait(ctx); err != nil {
 		return nil, err
 	}
 

@@ -9,6 +9,36 @@ import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { apiFetch } from "@/api"
 import { Copy, Plus, Settings, Trash2 } from "lucide-react"
 
+const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
+
+const TITLE_LANGUAGE_OPTIONS = [
+  { value: '', label: 'Original' },
+  { value: 'en-US', label: 'English' },
+  { value: 'de-DE', label: 'German' },
+  { value: 'fr-FR', label: 'French' },
+  { value: 'es-ES', label: 'Spanish' },
+  { value: 'it-IT', label: 'Italian' },
+  { value: 'nl-NL', label: 'Dutch' },
+  { value: 'pl-PL', label: 'Polish' },
+  { value: 'pt-BR', label: 'Portuguese (Brazil)' },
+  { value: 'pt-PT', label: 'Portuguese (Portugal)' },
+  { value: 'sv-SE', label: 'Swedish' },
+  { value: 'no-NO', label: 'Norwegian' },
+  { value: 'da-DK', label: 'Danish' },
+  { value: 'fi-FI', label: 'Finnish' },
+  { value: 'cs-CZ', label: 'Czech' },
+  { value: 'sk-SK', label: 'Slovak' },
+  { value: 'hu-HU', label: 'Hungarian' },
+  { value: 'ro-RO', label: 'Romanian' },
+  { value: 'tr-TR', label: 'Turkish' },
+  { value: 'ru-RU', label: 'Russian' },
+  { value: 'uk-UA', label: 'Ukrainian' },
+  { value: 'ja-JP', label: 'Japanese' },
+  { value: 'ko-KR', label: 'Korean' },
+  { value: 'zh-CN', label: 'Chinese (Simplified)' },
+  { value: 'zh-TW', label: 'Chinese (Traditional)' },
+]
+
 function normalizeName(value) {
   return (value || '').trim().toLowerCase()
 }
@@ -249,7 +279,17 @@ function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors 
                   <Label className="text-sm font-medium">Title Language</Label>
                 </div>
                 <div className={controlNarrowClass}>
-                  <Input className={`h-9 ${fieldClass('search_title_language')}`} placeholder="e.g. de-DE" value={draft.search_title_language || ''} onChange={(event) => update('search_title_language', event.target.value)} />
+                  <select
+                    className={`flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${fieldClass('search_title_language')}`}
+                    value={draft.search_title_language || ''}
+                    onChange={(event) => update('search_title_language', event.target.value)}
+                  >
+                    {TITLE_LANGUAGE_OPTIONS.map((option) => (
+                      <option key={option.value || 'original'} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
@@ -449,7 +489,7 @@ function QuerySection({ title, description, kind, items, names, update, remove, 
       remove(index)
       onStatus?.({
         type: 'success',
-        message: `${kind === 'movie' ? 'Movie' : 'Show'} query "${queryName}" deleted successfully`
+        message: `${kind === 'movie' ? 'Movie' : 'Show'} query "${queryName}" deleted successfully.${CACHE_CLEARED_SUFFIX}`
       })
     } catch (error) {
       onStatus?.({
@@ -574,7 +614,7 @@ function QuerySection({ title, description, kind, items, names, update, remove, 
                     setDeleteBlockedName('')
                     onStatus?.({
                       type: 'success',
-                      message: `${kind === 'movie' ? 'Movie' : 'Show'} query "${next.name}" saved successfully`
+                      message: `${kind === 'movie' ? 'Movie' : 'Show'} query "${next.name}" saved successfully.${CACHE_CLEARED_SUFFIX}`
                     })
                   }}
                 />
@@ -604,7 +644,7 @@ function QuerySection({ title, description, kind, items, names, update, remove, 
           setDeleteBlockedName('')
           onStatus?.({
             type: 'success',
-            message: `${kind === 'movie' ? 'Movie' : 'Show'} query "${next.name}" created successfully`
+            message: `${kind === 'movie' ? 'Movie' : 'Show'} query "${next.name}" created successfully.${CACHE_CLEARED_SUFFIX}`
           })
           setCopyDraft(null)
         }}
@@ -664,7 +704,7 @@ function AddQueryButton({ kind, title, existingNames, existingQueries, onCreate,
           onCreate(next)
           onStatus?.({
             type: 'success',
-            message: `${kind === 'movie' ? 'Movie' : 'Show'} query "${next.name}" created successfully`
+            message: `${kind === 'movie' ? 'Movie' : 'Show'} query "${next.name}" created successfully.${CACHE_CLEARED_SUFFIX}`
           })
         }}
       />

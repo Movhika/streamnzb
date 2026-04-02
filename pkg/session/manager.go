@@ -131,6 +131,13 @@ func (s *Session) ReportReleaseName() string {
 	return ""
 }
 
+func (s *Session) ReleaseIndexer() string {
+	if s.Release != nil {
+		return s.Release.Indexer
+	}
+	return ""
+}
+
 func (s *Session) ProviderHosts() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

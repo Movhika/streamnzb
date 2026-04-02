@@ -110,6 +110,8 @@ const PROVIDER_PRESETS = [
   },
 ]
 
+const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
+
 function normalizeName(value) {
   return (value || '').trim().toLowerCase()
 }
@@ -144,6 +146,11 @@ function summarizeProvider(provider) {
   parts.push(provider.use_ssl !== false ? 'SSL' : 'No SSL')
   parts.push(`Connections: ${provider.connections || 30}`)
   return parts
+}
+
+function firstFieldErrorMessage(fieldErrors, fallback) {
+  const first = Object.values(fieldErrors || {}).find(Boolean)
+  return first || fallback
 }
 
 function mapDevicesByUsername(devices) {
@@ -250,7 +257,7 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
         else if (path.includes('.connections')) nextErrors.connections = message
       })
       setFieldErrors(nextErrors)
-      setSaveError(error?.message || 'Save failed')
+      setSaveError(firstFieldErrorMessage(nextErrors, error?.message || 'Save failed'))
     } finally {
       setSaving(false)
     }
@@ -509,7 +516,7 @@ export function ProviderSettings({ fields = [], append, remove, replace, onPersi
     await onPersist?.(normalizedProviders)
     replaceProviders(normalizedProviders)
     setDeleteBlockedName('')
-    onStatus?.({ type: 'success', message: `Provider "${draft.name || draft.host}" created successfully` })
+    onStatus?.({ type: 'success', message: `Provider "${draft.name || draft.host}" created successfully.${CACHE_CLEARED_SUFFIX}` })
   }
 
   const handleSave = async (index, draft) => {
@@ -528,7 +535,7 @@ export function ProviderSettings({ fields = [], append, remove, replace, onPersi
     await onPersist?.(normalizedProviders)
     replaceProviders(normalizedProviders)
     setDeleteBlockedName('')
-    onStatus?.({ type: 'success', message: `Provider "${draft.name || draft.host}" saved successfully` })
+    onStatus?.({ type: 'success', message: `Provider "${draft.name || draft.host}" saved successfully.${CACHE_CLEARED_SUFFIX}` })
   }
 
   const handleDelete = async (index) => {
@@ -554,7 +561,7 @@ export function ProviderSettings({ fields = [], append, remove, replace, onPersi
     try {
       await onPersist?.(nextProviders)
       replaceProviders(nextProviders)
-      onStatus?.({ type: 'success', message: `Provider "${provider.name || provider.host}" deleted successfully` })
+      onStatus?.({ type: 'success', message: `Provider "${provider.name || provider.host}" deleted successfully.${CACHE_CLEARED_SUFFIX}` })
     } catch (error) {
       onStatus?.({
         type: 'error',
@@ -579,7 +586,7 @@ export function ProviderSettings({ fields = [], append, remove, replace, onPersi
     await onPersist?.(normalizedProviders)
     replaceProviders(normalizedProviders)
     setDeleteBlockedName('')
-    onStatus?.({ type: 'success', message: `Provider "${current.name || current.host}" ${enabled ? 'enabled' : 'disabled'} successfully` })
+    onStatus?.({ type: 'success', message: `Provider "${current.name || current.host}" ${enabled ? 'enabled' : 'disabled'} successfully.${CACHE_CLEARED_SUFFIX}` })
   }
 
   return (

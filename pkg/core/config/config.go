@@ -86,6 +86,7 @@ type IndexerConfig struct {
 	Type           string `json:"type"`
 	APIHitsDay     int    `json:"api_hits_day"`
 	DownloadsDay   int    `json:"downloads_day"`
+	RateLimitRPS   int    `json:"rate_limit_rps,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 

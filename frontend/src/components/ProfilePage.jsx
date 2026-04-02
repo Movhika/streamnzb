@@ -4,16 +4,23 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { AlertCircle, Loader2, Save, User } from "lucide-react"
+import { AlertCircle, AlertTriangle, Loader2, Save, User } from "lucide-react"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
-function EnvOverrideNote({ show }) {
+function EnvOverrideIndicator({ show, message = 'Overwritten by environment variable on restart.' }) {
   if (!show) return null
   return (
-    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-      <AlertCircle className="h-3.5 w-3 shrink-0" />
-      Overwritten by environment variable on restart.
-    </p>
+    <TooltipProvider delayDuration={100}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex items-center text-amber-600 hover:text-amber-700 align-middle" aria-label={message}>
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" align="start">{message}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
@@ -176,7 +183,7 @@ export function ProfilePage({
               <div className="p-3">
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
                   <div className="min-w-0 xl:flex-1">
-                    <Label htmlFor="profile-username" className="text-sm font-medium">Username</Label>
+                    <Label htmlFor="profile-username" className="text-sm font-medium flex items-center gap-1.5">Username <EnvOverrideIndicator show={envOverrides.includes('admin_username')} /></Label>
                   </div>
                   <div className="w-full xl:max-w-xs">
                     <Input
@@ -192,7 +199,6 @@ export function ProfilePage({
                 <p className="mt-3 text-sm text-muted-foreground">
                   The username you use to log in. Save to apply.
                 </p>
-                <EnvOverrideNote show={envOverrides.includes('admin_username')} />
               </div>
             </div>
             {usernameMessage.text && (
