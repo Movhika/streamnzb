@@ -56,7 +56,7 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 
 				} else if isStremioRoute {
 
-					logger.Error("Unauthorized request - invalid stream token", "path", path, "remote", r.RemoteAddr)
+					logger.Warn("Unauthorized request - invalid stream token", "path", path, "remote", r.RemoteAddr)
 					http.Error(w, "Unauthorized", http.StatusUnauthorized)
 					return
 				}
@@ -64,7 +64,7 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 			}
 		} else if isStremioRoute {
 
-			logger.Error("Unauthorized request - Stremio route requires stream token", "path", path, "remote", r.RemoteAddr)
+			logger.Warn("Unauthorized request - Stremio route requires stream token", "path", path, "remote", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

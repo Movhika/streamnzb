@@ -329,13 +329,13 @@ func (s *Server) GetStreams(ctx context.Context, contentType, id string, stream 
 	return streams, nil
 }
 
-func forceDisconnect(w http.ResponseWriter, baseURL string) {
+func forceDisconnect(w http.ResponseWriter, r *http.Request, baseURL string) {
 	errorVideoURL := strings.TrimSuffix(baseURL, "/") + "/error/failure.mp4"
 	logger.Info("Redirecting to error video", "url", errorVideoURL)
 
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	http.Redirect(w, &http.Request{Method: "GET"}, errorVideoURL, http.StatusTemporaryRedirect)
+	http.Redirect(w, r, errorVideoURL, http.StatusTemporaryRedirect)
 }
 
 func addAPIKeyToDownloadURL(downloadURL string, indexers []config.IndexerConfig) string {
@@ -571,26 +571,11 @@ func stableIndexerOverridesKey(overrides map[string]config.IndexerSearchConfig) 
 func streamSearchQueryCacheKey(stream *auth.Stream, contentType string) string {
 	names := streamSearchQueryNames(stream, contentType)
 	queryComponent := "none"
-	if len(names) > 0 {
-		if streamCombinesResults(stream) {
-			sort.Strings(names)
-		}
-		queryComponent = strings.Join(names, ",")
+	if streamCombinesResults(stream) && len(names) > 0 {
+		sort.Strings(names)
 	}
-	if len(names) == 0 {
-		return fmt.Sprintf(
-			"stream=%s|queries=%s|providers=%s|selected_indexers=%s|overrides=%s|avail=%t|indexers=%s|combine=%t|failover=%t|results=%s",
-			streamID(stream),
-			queryComponent,
-			strings.Join(streamProviderSelections(stream), ","),
-			strings.Join(streamIndexerSelections(stream), ","),
-			stableIndexerOverridesKey(streamIndexerOverrides(stream)),
-			streamUsesAvailNZB(stream),
-			streamIndexerMode(stream),
-			streamCombinesResults(stream),
-			streamFailoverEnabled(stream),
-			streamResultsMode(stream),
-		)
+	if len(names) > 0 {
+		queryComponent = strings.Join(names, ",")
 	}
 	return fmt.Sprintf(
 		"stream=%s|queries=%s|providers=%s|selected_indexers=%s|overrides=%s|avail=%t|indexers=%s|combine=%t|failover=%t|results=%s",
@@ -989,7 +974,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, streamConfig
 				w.WriteHeader(http.StatusFound)
 				return
 			}
-			forceDisconnect(w, s.baseURL)
+			forceDisconnect(w, r, s.baseURL)
 			return
 		}
 		// Never resolve or create sessions in the play handler; do not hit indexers here.
@@ -1008,7 +993,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, streamConfig
 			w.WriteHeader(http.StatusFound)
 			return
 		}
-		forceDisconnect(w, s.baseURL)
+		forceDisconnect(w, r, s.baseURL)
 		return
 	}
 
@@ -1029,7 +1014,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, streamConfig
 				sess, sessionID = nextSess, nextID
 				continue
 			}
-			forceDisconnect(w, s.baseURL)
+			forceDisconnect(w, r, s.baseURL)
 			return
 		}
 		if nextSlotID, deriveErr := s.deriveNextSlotID(r.Context(), sess.ID, streamConfig); deriveErr == nil {
@@ -1092,7 +1077,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, streamConfig
 				}
 			}
 			logger.Info("No more fallback slots", "last", sessionID, "err", prepareErr)
-			forceDisconnect(w, s.baseURL)
+			forceDisconnect(w, r, s.baseURL)
 			return
 		}
 
@@ -1569,7 +1554,8 @@ func (s *Server) prefetchNextFallbackNZB(nextSlotID string, stream *auth.Stream)
 		return
 	}
 	go func(id string, stream *auth.Stream) {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
 		sess, err := s.getOrResolveSession(ctx, id, stream)
 		if err != nil {
 			return

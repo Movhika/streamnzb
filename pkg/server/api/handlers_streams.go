@@ -220,7 +220,10 @@ func (s *Server) handlePutStreamConfigs(w http.ResponseWriter, r *http.Request) 
 		s.writeSaveStatus(w, "error", "Invalid stream config data", nil)
 		return
 	}
-	var errors []string
+	var (
+		errors  []string
+		updated bool
+	)
 	for username, dc := range streamConfigs {
 		if username == s.config.GetAdminUsername() {
 			continue
@@ -239,7 +242,12 @@ func (s *Server) handlePutStreamConfigs(w http.ResponseWriter, r *http.Request) 
 			SeriesSearchQueries: dc.SeriesSearchQueries,
 		}); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to update stream config for %s: %v", username, err))
+			continue
 		}
+		updated = true
+	}
+	if updated && s.strmServer != nil {
+		s.strmServer.ClearSearchCaches()
 	}
 	if len(errors) > 0 {
 		w.WriteHeader(http.StatusBadRequest)
@@ -250,9 +258,6 @@ func (s *Server) handlePutStreamConfigs(w http.ResponseWriter, r *http.Request) 
 			"errors":  errors,
 		})
 		return
-	}
-	if s.strmServer != nil {
-		s.strmServer.ClearSearchCaches()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

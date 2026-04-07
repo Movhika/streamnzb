@@ -119,9 +119,14 @@ function App() {
 
   const handleLogout = () => {
     hasLoggedOutRef.current = true
+    fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {})
     setAuthenticated(false)
     setCurrentUser(null)
     setAuthToken('')
+    setMustChangePassword(false)
     localStorage.removeItem('auth_token')
     if (ws) {
       ws.close()

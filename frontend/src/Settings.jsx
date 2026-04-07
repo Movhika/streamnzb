@@ -82,7 +82,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, clearSaveStatus, isS
         use_season_episode_params: initialConfig.use_season_episode_params,
         memory_limit_mb: Number(initialConfig.memory_limit_mb || 0),
         keep_log_files: Number(initialConfig.keep_log_files ?? 9) || 9,
-        nzb_history_retention_days: Number(initialConfig.nzb_history_retention_days ?? 90) || 90,
+        nzb_history_retention_days: initialConfig.nzb_history_retention_days == null ? 90 : Number(initialConfig.nzb_history_retention_days),
         providers: initialConfig.providers?.map((p, index) => ({
           ...p,
           priority: p.priority != null ? p.priority : index + 1,

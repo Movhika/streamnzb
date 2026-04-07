@@ -737,8 +737,8 @@ func (s *Server) validateConfigWithPlan(cfg *config.Config, plan configValidatio
 	if plan.validateKeepLogFiles && (cfg.KeepLogFiles < 1 || cfg.KeepLogFiles > 50) {
 		errors["keep_log_files"] = "Must be between 1 and 50"
 	}
-	if plan.validateNZBHistoryRetention && (cfg.NZBHistoryRetentionDays < 1 || cfg.NZBHistoryRetentionDays > 3650) {
-		errors["nzb_history_retention_days"] = "Must be between 1 and 3650 days"
+	if plan.validateNZBHistoryRetention && (cfg.NZBHistoryRetentionDays < 0 || cfg.NZBHistoryRetentionDays > 3650) {
+		errors["nzb_history_retention_days"] = "Must be between 0 and 3650 days"
 	}
 	validateSearchQueries := func(prefix string, queries []config.SearchQueryConfig) {
 		seen := make(map[string]bool)

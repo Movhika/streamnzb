@@ -863,7 +863,7 @@ func (c *Client) GetReleases(imdbID string, tmdbID string, tvdbID string, season
 		reqURL += "?" + params.Encode()
 	}
 
-	logger.Debug("AvailNZB GetStatus", "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "season", season, "episode", episode, "indexers", len(indexers), "providers", len(providers))
+	logger.Debug("AvailNZB GetReleases", "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "season", season, "episode", episode, "indexers", len(indexers), "providers", len(providers))
 
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
@@ -874,7 +874,7 @@ func (c *Client) GetReleases(imdbID string, tmdbID string, tvdbID string, season
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		logger.Error("AvailNZB GetStatus request failed", "err", err, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID)
+		logger.Error("AvailNZB GetReleases request failed", "err", err, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -882,25 +882,25 @@ func (c *Client) GetReleases(imdbID string, tmdbID string, tvdbID string, season
 	if resp.StatusCode != http.StatusOK {
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
-			logger.Error("AvailNZB GetStatus unexpected status and failed to read error body", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "err", readErr)
+			logger.Error("AvailNZB GetReleases unexpected status and failed to read error body", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "err", readErr)
 			return nil, fmt.Errorf("availnzb releases: unexpected status code: %d", resp.StatusCode)
 		}
 		message := decodeAPIErrorMessage(body)
 		if resp.StatusCode == http.StatusUnauthorized && isAPIKeyMissingMessage(message) {
-			logger.Error("AvailNZB GetStatus unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "api_key_missing", true)
+			logger.Error("AvailNZB GetReleases unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "api_key_missing", true)
 			return nil, fmt.Errorf("availnzb releases: unexpected status code: %d: api key missing", resp.StatusCode)
 		}
 		if message != "" {
-			logger.Error("AvailNZB GetStatus unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "message", message)
+			logger.Error("AvailNZB GetReleases unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "message", message)
 			return nil, fmt.Errorf("availnzb releases: unexpected status code: %d: %s", resp.StatusCode, message)
 		}
-		logger.Error("AvailNZB GetStatus unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID)
+		logger.Error("AvailNZB GetReleases unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID)
 		return nil, fmt.Errorf("availnzb releases: unexpected status code: %d", resp.StatusCode)
 	}
 
 	var raw releasesResponseJSON
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		logger.Error("AvailNZB GetStatus decode failed", "err", err)
+		logger.Error("AvailNZB GetReleases decode failed", "err", err)
 		return nil, err
 	}
 
@@ -929,7 +929,7 @@ func (c *Client) GetReleases(imdbID string, tmdbID string, tvdbID string, season
 			availableCount++
 		}
 	}
-	logger.Debug("AvailNZB GetStatus finished", "raw_results", raw.Count, "available_results", availableCount, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID)
+	logger.Debug("AvailNZB GetReleases finished", "raw_results", raw.Count, "available_results", availableCount, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID)
 	return &ReleasesResult{ImdbID: raw.ImdbID, Count: raw.Count, Releases: releases}, nil
 }
 

@@ -19,10 +19,13 @@ const CARD_FIELDS = {
 }
 
 function pickInitialValues(values = {}) {
+  const parsedRetentionDays = values.nzb_history_retention_days == null
+    ? 90
+    : Number(values.nzb_history_retention_days)
   return {
     log_level: values.log_level ?? 'INFO',
     keep_log_files: Number(values.keep_log_files ?? 9) || 9,
-    nzb_history_retention_days: Number(values.nzb_history_retention_days ?? 90) || 90,
+    nzb_history_retention_days: Number.isFinite(parsedRetentionDays) ? parsedRetentionDays : 90,
     memory_limit_mb: Number(values.memory_limit_mb ?? 512),
     availnzb_api_key: values.availnzb_api_key ?? '',
     availnzb_mode: values.availnzb_mode ?? '',
@@ -41,9 +44,9 @@ function EnvOverrideIndicator({ show, message = 'Overwritten by environment vari
     <TooltipProvider delayDuration={100}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex items-center text-amber-600 hover:text-amber-700 align-middle" aria-label={message}>
+          <button type="button" className="inline-flex items-center text-amber-600 hover:text-amber-700 align-middle" aria-label={message}>
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          </span>
+          </button>
         </TooltipTrigger>
         <TooltipContent side="top" align="start">{message}</TooltipContent>
       </Tooltip>
@@ -278,15 +281,12 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
                     )} />
                   </div>
 
-                  <div className="rounded-md border border-border/60 bg-muted/20">
-                    <div className="border-b border-border/60 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      NZB History
-                    </div>
+                  <div className="rounded-md border border-border/60">
                     <FormField control={control} name="nzb_history_retention_days" render={({ field }) => (
                       <FormItem className="rounded-none border-0 p-3">
                         <div className="flex items-center justify-between gap-4">
                           <FormLabel className="text-sm font-medium">NZB history retention (days)</FormLabel>
-                          <FormControl><Input type="number" min={1} max={3650} className={fieldClassName('nzb_history_retention_days', 'h-9 w-28')} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; field.onChange(v === '' ? 90 : Math.min(3650, Math.max(1, Number(v) || 90))) }} /></FormControl>
+                          <FormControl><Input type="number" min={0} max={3650} className={fieldClassName('nzb_history_retention_days', 'h-9 w-28')} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; const next = Number(v); field.onChange(v === '' ? 90 : Math.min(3650, Math.max(0, Number.isNaN(next) ? 90 : next))) }} /></FormControl>
                         </div>
                         <FormDescription className="mt-3">Delete NZB history entries older than this many days on startup.</FormDescription>
                         <FormMessage />

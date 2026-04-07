@@ -256,7 +256,7 @@ export function useSettingsState({
       const keepLog = Number(trimmedFullData.keep_log_files)
       trimmedFullData.keep_log_files = Math.min(50, Math.max(1, Number.isNaN(keepLog) ? 9 : keepLog))
       const nzbHistoryRetention = Number(trimmedFullData.nzb_history_retention_days)
-      trimmedFullData.nzb_history_retention_days = Math.min(3650, Math.max(1, Number.isNaN(nzbHistoryRetention) ? 90 : nzbHistoryRetention))
+      trimmedFullData.nzb_history_retention_days = Math.min(3650, Math.max(0, Number.isNaN(nzbHistoryRetention) ? 90 : nzbHistoryRetention))
 
       const payload = overrides
         ? Object.keys(overrides).reduce((acc, key) => {

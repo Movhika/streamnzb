@@ -74,7 +74,8 @@ func TestForceDisconnectRedirectsToErrorVideo(t *testing.T) {
 	t.Parallel()
 
 	recorder := httptest.NewRecorder()
-	forceDisconnect(recorder, "http://localhost:11470/")
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:11470/play/test", nil)
+	forceDisconnect(recorder, req, "http://localhost:11470/")
 	response := recorder.Result()
 
 	if response.StatusCode != http.StatusTemporaryRedirect {

@@ -97,6 +97,7 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	stream, ok := auth.StreamFromContext(r)
 	cookiePresent := false
 	bearerPresent := false
+	authViaCookie := false
 	if !ok {
 
 		cookie, err := r.Cookie("auth_session")
@@ -105,6 +106,7 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 			stream, err = s.streamManager.AuthenticateToken(cookie.Value, s.config.GetAdminUsername(), s.config.AdminToken)
 			if err == nil {
 				logger.Debug("Auth check authenticated", "via", "cookie")
+				authViaCookie = true
 				ok = true
 			}
 		}
@@ -137,7 +139,9 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 			"authenticated":        true,
 			"username":             stream.Username,
 			"must_change_password": mustChangePassword,
-			"token":                stream.Token,
+		}
+		if !authViaCookie {
+			out["token"] = stream.Token
 		}
 		if s.strmServer != nil {
 			out["version"] = s.strmServer.Version()
@@ -151,6 +155,24 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 			"authenticated": false,
 		})
 	}
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_session",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {

@@ -831,8 +831,14 @@ func cloneSearchParams(base *SearchParams) *SearchParams {
 		contentIDs := *base.ContentIDs
 		next.ContentIDs = &contentIDs
 	}
-	next.MovieTitleQueries = base.MovieTitleQueries
-	next.SeriesTitleQueries = base.SeriesTitleQueries
+	next.MovieTitleQueries = make(map[string][]string, len(base.MovieTitleQueries))
+	for k, v := range base.MovieTitleQueries {
+		next.MovieTitleQueries[k] = append([]string(nil), v...)
+	}
+	next.SeriesTitleQueries = make(map[string][]string, len(base.SeriesTitleQueries))
+	for k, v := range base.SeriesTitleQueries {
+		next.SeriesTitleQueries[k] = append([]string(nil), v...)
+	}
 	next.Metadata = base.Metadata
 	return &next
 }

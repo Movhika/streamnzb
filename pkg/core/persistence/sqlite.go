@@ -42,8 +42,11 @@ const (
 		preload INTEGER NOT NULL DEFAULT 0
 	);`
 
-	nzbAttemptsIndexTried   = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_tried_at ON nzb_attempts(tried_at DESC);`
-	nzbAttemptsIndexContent = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_content ON nzb_attempts(content_type, content_id);`
+	nzbAttemptsIndexTried    = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_tried_at ON nzb_attempts(tried_at DESC);`
+	nzbAttemptsIndexContent  = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_content ON nzb_attempts(content_type, content_id);`
+	nzbAttemptsIndexStream   = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_stream_name ON nzb_attempts(stream_name);`
+	nzbAttemptsIndexProvider = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_provider_name ON nzb_attempts(provider_name);`
+	nzbAttemptsIndexIndexer  = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_indexer_name ON nzb_attempts(indexer_name);`
 )
 
 func openDB(dataDir string) (*sql.DB, error) {
@@ -65,7 +68,7 @@ func openDB(dataDir string) (*sql.DB, error) {
 }
 
 func initSchema(db *sql.DB) error {
-	for _, stmt := range []string{kvSchema, nzbAttemptsSchema, nzbAttemptsIndexTried, nzbAttemptsIndexContent} {
+	for _, stmt := range []string{kvSchema, nzbAttemptsSchema, nzbAttemptsIndexTried, nzbAttemptsIndexContent, nzbAttemptsIndexStream, nzbAttemptsIndexProvider, nzbAttemptsIndexIndexer} {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("schema: %w", err)
 		}

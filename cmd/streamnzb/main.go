@@ -129,12 +129,17 @@ func main() {
 	}
 
 	{
-		if !cfg.ResetLegacyStreamState && len(cfg.Streams) == 0 {
+		if !cfg.ResetLegacyStreamState {
 			var stateStreams map[string]*auth.Stream
 			if found, _ := stateMgr.Get("devices", &stateStreams); found && len(stateStreams) > 0 {
-				cfg.Streams = make(map[string]*config.StreamEntry)
+				if cfg.Streams == nil {
+					cfg.Streams = make(map[string]*config.StreamEntry)
+				}
 				for k, stream := range stateStreams {
 					if stream == nil {
+						continue
+					}
+					if _, exists := cfg.Streams[k]; exists {
 						continue
 					}
 					ov := stream.IndexerOverrides

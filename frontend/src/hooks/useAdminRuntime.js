@@ -26,6 +26,8 @@ export function useAdminRuntime({
   const [ws, setWs] = useState(null)
   const [version, setVersion] = useState(null)
   const authCheckTimeoutRef = useRef(null)
+  const activeSocketRef = useRef(null)
+  const reconnectTimeoutRef = useRef(null)
   const [logs, setLogs] = useState([])
   const [indexerCaps, setIndexerCaps] = useState({})
   const [nzbAttemptsRefreshTrigger, setNzbAttemptsRefreshTrigger] = useState(0)
@@ -45,11 +47,16 @@ export function useAdminRuntime({
     if (!authenticated) return
     if (hasLoggedOutRef.current) return
 
-    let socket
-    let reconnectTimeout
-
     const connect = () => {
       if (hasLoggedOutRef.current) return
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
+      const existingSocket = activeSocketRef.current
+      if (existingSocket && existingSocket.readyState !== WebSocket.CLOSED) {
+        return
+      }
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const host = window.location.host
@@ -57,7 +64,8 @@ export function useAdminRuntime({
       const tokenPrefix = pathParts.length > 0 && pathParts[0] !== 'api' ? `/${pathParts[0]}` : ''
       const wsToken = authToken || (pathParts.length > 0 && pathParts[0] !== 'api' ? pathParts[0] : '')
       const wsUrl = `${protocol}//${host}${tokenPrefix}/api/ws${wsToken ? `?token=${wsToken}` : ''}`
-      socket = new WebSocket(wsUrl)
+      const socket = new WebSocket(wsUrl)
+      activeSocketRef.current = socket
 
       socket.onopen = () => {
         if (isRestartingRef.current) {
@@ -136,11 +144,14 @@ export function useAdminRuntime({
       }
 
       socket.onclose = () => {
+        if (activeSocketRef.current === socket) {
+          activeSocketRef.current = null
+        }
         setWsStatus('disconnected')
         setWs(null)
         window.ws = null
         if (!hasLoggedOutRef.current) {
-          reconnectTimeout = setTimeout(() => {
+          reconnectTimeoutRef.current = setTimeout(() => {
             if (authenticated && !hasLoggedOutRef.current) {
               connect()
             }
@@ -156,8 +167,14 @@ export function useAdminRuntime({
 
     connect()
     return () => {
-      if (socket) socket.close()
-      if (reconnectTimeout) clearTimeout(reconnectTimeout)
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
+      if (activeSocketRef.current) {
+        activeSocketRef.current.close()
+        activeSocketRef.current = null
+      }
     }
   }, [authenticated, authToken, hasLoggedOutRef, setAuthenticated, setCurrentUser, setMustChangePassword])
 

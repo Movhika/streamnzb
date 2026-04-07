@@ -281,15 +281,46 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		})
 	}
 
-	sort.Slice(releasesOut, func(i, j int) bool {
+	sort.Slice(unified, func(i, j int) bool {
 		si := releaseScores[release.Key(unified[i].rel)].Score
 		sj := releaseScores[release.Key(unified[j].rel)].Score
 		if si != sj {
 			return si > sj
 		}
 		availOrder := map[string]int{"Available": 2, "Unknown": 1, "Unavailable": 0}
-		return availOrder[releasesOut[i].Availability] > availOrder[releasesOut[j].Availability]
+		return availOrder[unified[i].avail] > availOrder[unified[j].avail]
 	})
+
+	releasesOut = releasesOut[:0]
+	for _, u := range unified {
+		r := u.rel
+		key := release.Key(r)
+		ts := releaseScores[key]
+		tags := []SearchStreamTag{{
+			StreamID:   defaultStreamID,
+			StreamName: "StreamNZB",
+			Fits:       ts.Fits,
+			Score:      ts.Score,
+		}}
+		idxName := r.Indexer
+		if idxName == "" && r.SourceIndexer != nil {
+			if idx, ok := r.SourceIndexer.(indexer.Indexer); ok {
+				idxName = idx.Name()
+			}
+		}
+		if idxName == "" {
+			idxName = "Indexer"
+		}
+		releasesOut = append(releasesOut, SearchReleaseTag{
+			Title:        r.Title,
+			Link:         r.Link,
+			DetailsURL:   r.DetailsURL,
+			Size:         r.Size,
+			Indexer:      idxName,
+			Availability: u.avail,
+			StreamTags:   tags,
+		})
+	}
 
 	return &SearchReleasesResponse{Streams: streamInfos, Releases: releasesOut}, nil
 }

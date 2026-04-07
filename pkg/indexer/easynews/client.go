@@ -238,7 +238,7 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 		return nil, fmt.Errorf("invalid payload token: %w", err)
 	}
 
-	nzbData, err := c.downloadNZBInternal(payload)
+	nzbData, err := c.downloadNZBInternal(ctx, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download NZB: %w", err)
 	}
@@ -324,7 +324,7 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 	return results, nil
 }
 
-func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, error) {
+func (c *Client) downloadNZBInternal(ctx context.Context, payload map[string]interface{}) ([]byte, error) {
 	hash, _ := payload["hash"].(string)
 	filename, _ := payload["filename"].(string)
 	ext, _ := payload["ext"].(string)
@@ -344,7 +344,10 @@ func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, er
 		form.Set(key, value)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", easynewsBaseURL+"/2.0/api/dl-nzb", strings.NewReader(form.Encode()))

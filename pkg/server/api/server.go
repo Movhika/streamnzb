@@ -310,6 +310,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/check", s.handleAuthCheck)
+	mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	mux.HandleFunc("/api/info", s.handleInfo)
 
 	authMiddleware := auth.StreamAuthMiddleware(s.streamManager, func() string { return s.config.GetAdminUsername() }, func() string { return s.config.AdminToken })
