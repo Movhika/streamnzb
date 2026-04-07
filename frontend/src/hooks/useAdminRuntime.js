@@ -1,0 +1,253 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+
+import { apiFetch, getApiUrl } from '../api'
+
+const MAX_HISTORY = 60
+const MAX_LOGS = 200
+
+export function useAdminRuntime({
+  authenticated,
+  authToken,
+  hasLoggedOutRef,
+  setAuthenticated,
+  setCurrentUser,
+  setMustChangePassword,
+}) {
+  const [stats, setStats] = useState(null)
+  const [config, setConfig] = useState(null)
+  const [saveStatus, setSaveStatus] = useState({ type: '', msg: '', errors: null })
+  const [isSaving, setIsSaving] = useState(false)
+  const [isRestarting, setIsRestarting] = useState(false)
+  const isRestartingRef = useRef(false)
+  const [error, setError] = useState(null)
+  const [history, setHistory] = useState([])
+  const [connHistory, setConnHistory] = useState([])
+  const [wsStatus, setWsStatus] = useState('connecting')
+  const [ws, setWs] = useState(null)
+  const [version, setVersion] = useState(null)
+  const authCheckTimeoutRef = useRef(null)
+  const [logs, setLogs] = useState([])
+  const [indexerCaps, setIndexerCaps] = useState({})
+  const [nzbAttemptsRefreshTrigger, setNzbAttemptsRefreshTrigger] = useState(0)
+
+  const clearSaveStatus = useCallback(() => {
+    setSaveStatus({ type: '', msg: '', errors: null })
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/info')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => data?.version && setVersion(data.version))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!authenticated) return
+    if (hasLoggedOutRef.current) return
+
+    let socket
+    let reconnectTimeout
+
+    const connect = () => {
+      if (hasLoggedOutRef.current) return
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const host = window.location.host
+      const pathParts = window.location.pathname.split('/').filter((part) => part !== '')
+      const tokenPrefix = pathParts.length > 0 && pathParts[0] !== 'api' ? `/${pathParts[0]}` : ''
+      const wsToken = authToken || (pathParts.length > 0 && pathParts[0] !== 'api' ? pathParts[0] : '')
+      const wsUrl = `${protocol}//${host}${tokenPrefix}/api/ws${wsToken ? `?token=${wsToken}` : ''}`
+      socket = new WebSocket(wsUrl)
+
+      socket.onopen = () => {
+        if (isRestartingRef.current) {
+          window.location.reload()
+          return
+        }
+        if (hasLoggedOutRef.current) {
+          socket.close()
+          return
+        }
+        setWsStatus('connected')
+        setError(null)
+        setWs(socket)
+        window.ws = socket
+        setLogs([])
+      }
+
+      socket.onmessage = (event) => {
+        if (hasLoggedOutRef.current) return
+
+        const msg = JSON.parse(event.data)
+        switch (msg.type) {
+          case 'stats': {
+            const data = msg.payload
+            setStats(data)
+            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            setHistory((prev) => [...prev, { time: timestamp, speed: data.total_speed_mbps }].slice(-MAX_HISTORY))
+            setConnHistory((prev) => [...prev, { time: timestamp, conns: data.active_connections }].slice(-MAX_HISTORY))
+            break
+          }
+          case 'log_entry':
+            setLogs((prev) => [...prev, msg.payload].slice(-MAX_LOGS))
+            break
+          case 'log_history':
+            setLogs(msg.payload.slice(-MAX_LOGS))
+            break
+          case 'nzb_attempts_updated':
+            setNzbAttemptsRefreshTrigger((value) => value + 1)
+            break
+          case 'auth_info': {
+            if (msg.payload?.version) setVersion(msg.payload.version)
+            if (hasLoggedOutRef.current) {
+              socket.close()
+              return
+            }
+            if (msg.payload.authenticated) {
+              if (authCheckTimeoutRef.current) {
+                clearTimeout(authCheckTimeoutRef.current)
+                authCheckTimeoutRef.current = null
+              }
+              setAuthenticated(true)
+              setCurrentUser(msg.payload.username)
+              setMustChangePassword(msg.payload.must_change_password || false)
+              fetch(getApiUrl('/api/config'), { credentials: 'include' })
+                .then((res) => (res.ok ? res.json() : null))
+                .then((data) => { if (data) setConfig(data) })
+                .catch(() => {})
+              fetch(getApiUrl('/api/indexer/caps'), { credentials: 'include' })
+                .then((res) => (res.ok ? res.json() : null))
+                .then((data) => { if (data) setIndexerCaps(data) })
+                .catch(() => {})
+            } else {
+              // The initial HTTP auth check is the authoritative gate for the
+              // admin UI. If the WS channel briefly reports unauthenticated,
+              // don't throw the whole app back to the login screen; just
+              // surface a connection issue and let reconnect / normal API
+              // auth continue to work.
+              setError('Realtime connection is not authenticated')
+              socket.close()
+            }
+            break
+          }
+          default:
+            break
+        }
+      }
+
+      socket.onclose = () => {
+        setWsStatus('disconnected')
+        setWs(null)
+        window.ws = null
+        if (!hasLoggedOutRef.current) {
+          reconnectTimeout = setTimeout(() => {
+            if (authenticated && !hasLoggedOutRef.current) {
+              connect()
+            }
+          }, 3000)
+        }
+      }
+
+      socket.onerror = () => {
+        setError('Network Error: Could not connect to API')
+        socket.close()
+      }
+    }
+
+    connect()
+    return () => {
+      if (socket) socket.close()
+      if (reconnectTimeout) clearTimeout(reconnectTimeout)
+    }
+  }, [authenticated, authToken, hasLoggedOutRef, setAuthenticated, setCurrentUser, setMustChangePassword])
+
+  const sendCommand = useCallback((type, payload) => {
+    if (type === 'save_config') {
+      setSaveStatus({ type: 'normal', msg: 'Validating and saving...', errors: null })
+      setIsSaving(true)
+      return apiFetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+      })
+        .then((data) => {
+          setSaveStatus({ type: 'success', msg: data.message || 'Saved.', errors: data.errors || null })
+          if (window.profileUsernameCallback) {
+            window.profileUsernameCallback(data)
+            delete window.profileUsernameCallback
+          }
+          return apiFetch(`/api/config?_=${Date.now()}`)
+        })
+        .then((cfg) => { if (cfg) setConfig(cfg) })
+        .catch((err) => {
+          const msg = err.message || 'Save failed'
+          setSaveStatus({ type: 'error', msg, errors: err.fieldErrors || null })
+          if (window.profileUsernameCallback) {
+            window.profileUsernameCallback({ status: 'error', message: msg })
+            delete window.profileUsernameCallback
+          }
+          throw err
+        })
+        .finally(() => setIsSaving(false))
+    }
+
+    if (type === 'restart') {
+      setIsRestarting(true)
+      isRestartingRef.current = true
+      apiFetch('/api/restart', { method: 'POST' }).catch(() => {
+        setIsRestarting(false)
+        isRestartingRef.current = false
+      })
+      return
+    }
+
+    if (type === 'close_session') {
+      apiFetch('/api/sessions/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: payload?.id || '' }),
+      }).catch(() => {})
+      return
+    }
+
+    if (type === 'update_password') {
+      apiFetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: payload?.username, password: payload?.password }),
+      })
+        .then(() => {
+          if (window.passwordChangeCallback) window.passwordChangeCallback({})
+          delete window.passwordChangeCallback
+        })
+        .catch((err) => {
+          if (window.passwordChangeCallback) window.passwordChangeCallback({ error: err.message })
+          delete window.passwordChangeCallback
+      })
+      return
+    }
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type, payload }))
+    }
+  }, [ws])
+
+  return {
+    stats,
+    config,
+    saveStatus,
+    clearSaveStatus,
+    isSaving,
+    isRestarting,
+    error,
+    history,
+    connHistory,
+    wsStatus,
+    ws,
+    version,
+    logs,
+    indexerCaps,
+    nzbAttemptsRefreshTrigger,
+    sendCommand,
+  }
+}

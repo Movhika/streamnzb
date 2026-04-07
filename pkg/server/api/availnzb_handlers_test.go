@@ -74,7 +74,7 @@ func TestHandleAvailNZBStatusReturnsStatusForAdmin(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/availnzb/status", nil)
-	req = req.WithContext(auth.ContextWithDevice(req.Context(), &auth.Device{Username: "admin"}))
+	req = req.WithContext(auth.ContextWithStream(req.Context(), &auth.Stream{Username: "admin"}))
 	rr := httptest.NewRecorder()
 
 	s.handleAvailNZBStatus(rr, req)
@@ -125,7 +125,7 @@ func TestHandleAvailNZBStatusReturnsRecoverySecretWhenStatusFetchFails(t *testin
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/availnzb/status", nil)
-	req = req.WithContext(auth.ContextWithDevice(req.Context(), &auth.Device{Username: "admin"}))
+	req = req.WithContext(auth.ContextWithStream(req.Context(), &auth.Stream{Username: "admin"}))
 	rr := httptest.NewRecorder()
 
 	s.handleAvailNZBStatus(rr, req)
@@ -152,7 +152,7 @@ func TestHandleAvailNZBStatusReturnsRecoverySecretWhenStatusFetchFails(t *testin
 func TestHandleAvailNZBStatusRejectsNonAdmin(t *testing.T) {
 	s := &Server{config: &config.Config{AdminUsername: "admin"}}
 	req := httptest.NewRequest(http.MethodGet, "/api/availnzb/status", nil)
-	req = req.WithContext(auth.ContextWithDevice(req.Context(), &auth.Device{Username: "user"}))
+	req = req.WithContext(auth.ContextWithStream(req.Context(), &auth.Stream{Username: "user"}))
 	rr := httptest.NewRecorder()
 
 	s.handleAvailNZBStatus(rr, req)
@@ -168,7 +168,7 @@ func TestHandleAvailNZBStatusRequiresAPIKey(t *testing.T) {
 		availNZBURL: "https://snzb.stream",
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/availnzb/status", nil)
-	req = req.WithContext(auth.ContextWithDevice(req.Context(), &auth.Device{Username: "admin"}))
+	req = req.WithContext(auth.ContextWithStream(req.Context(), &auth.Stream{Username: "admin"}))
 	rr := httptest.NewRecorder()
 
 	s.handleAvailNZBStatus(rr, req)

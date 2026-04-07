@@ -10,15 +10,23 @@ import (
 func TestRecordAttemptParamsIncludesServedFile(t *testing.T) {
 	server := &Server{}
 	sess := &session.Session{
-		ID:          "stream:global:series:tt2261227:2:2:2",
-		ContentType: "series",
-		ContentID:   "tt2261227:2:2",
+		ID:           "stream:global:series:tt2261227:2:2:2",
+		StreamName:   "Stream04",
+		ContentType:  "series",
+		ContentID:    "tt2261227:2:2",
+		ContentTitle: "Altered Carbon",
 	}
 	sess.SetSelectedPlaybackFile("Altered.Carbon.S02E03.1080p.mkv")
 
 	params := server.recordAttemptParams(sess)
 	if got := params.ServedFile; got != "Altered.Carbon.S02E03.1080p.mkv" {
 		t.Fatalf("ServedFile = %q, want %q", got, "Altered.Carbon.S02E03.1080p.mkv")
+	}
+	if got := params.StreamName; got != "Stream04" {
+		t.Fatalf("StreamName = %q, want %q", got, "Stream04")
+	}
+	if got := params.ContentTitle; got != "Altered Carbon" {
+		t.Fatalf("ContentTitle = %q, want %q", got, "Altered Carbon")
 	}
 }
 

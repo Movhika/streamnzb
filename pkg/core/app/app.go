@@ -39,7 +39,7 @@ type Components struct {
 	ProviderOrder        []string
 	StreamingPools       []*nntp.ClientPool
 	UsenetPool           *pool.Pool
-	AvailNZBIndexerHosts []string
+	AvailNZBIndexerHosts map[string]string
 	IndexerCaps          map[string]*indexer.Caps
 	Validator            *validation.Checker
 	Triage               *triage.Service

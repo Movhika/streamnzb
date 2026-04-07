@@ -55,6 +55,29 @@ func (s *Service) Filter(releases []*release.Release) []Candidate {
 	return candidates
 }
 
+func (s *Service) SortCandidates(candidates []Candidate) {
+	for i := range candidates {
+		rel := candidates[i].Release
+		if rel == nil {
+			continue
+		}
+		parsed := parser.ParseReleaseTitle(rel.Title)
+		group := parsed.ResolutionGroup()
+		score := basicScore(rel)
+		querySource := rel.QuerySource
+		if querySource == "" {
+			querySource = "id"
+		}
+		candidates[i].Metadata = parsed
+		candidates[i].Group = group
+		candidates[i].Score = score
+		candidates[i].QuerySource = querySource
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Score > candidates[j].Score
+	})
+}
+
 func basicScore(rel *release.Release) int {
 	score := 0
 

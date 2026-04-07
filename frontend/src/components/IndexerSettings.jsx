@@ -103,21 +103,21 @@ function summarizeIndexer(indexer, caps) {
   return parts
 }
 
-function mapDevicesByUsername(devices) {
-  return (Array.isArray(devices) ? devices : []).reduce((acc, device) => {
-    if (!device?.username) return acc
-    acc[device.username] = device
+function mapStreamsByUsername(streams) {
+  return (Array.isArray(streams) ? streams : []).reduce((acc, stream) => {
+    if (!stream?.username) return acc
+    acc[stream.username] = stream
     return acc
   }, {})
 }
 
-function assignedStreamsForIndexer(devicesByName, indexerName) {
+function assignedStreamsForIndexer(streamsByName, indexerName) {
   const target = normalizeName(indexerName)
-  if (!target || !devicesByName) return []
-  return Object.values(devicesByName)
+  if (!target || !streamsByName) return []
+  return Object.values(streamsByName)
     .filter(Boolean)
-    .filter((device) => Array.isArray(device.indexer_selections) && device.indexer_selections.some((name) => normalizeName(name) === target))
-    .map((device) => device.username)
+    .filter((stream) => Array.isArray(stream.indexer_selections) && stream.indexer_selections.some((name) => normalizeName(name) === target))
+    .map((stream) => stream.username)
 }
 
 function firstFieldErrorMessage(fieldErrors, fallback) {
@@ -467,7 +467,7 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
   )
 }
 
-export function IndexerSettings({ fields = [], append, update, remove, replace, indexerCaps = {}, onPersist, onClearStatus, onStatus, stats, devicesByName = {} }) {
+export function IndexerSettings({ fields = [], append, update, remove, replace, indexerCaps = {}, onPersist, onClearStatus, onStatus, stats, streamsByName = {} }) {
   const indexers = fields
   const [editingIndex, setEditingIndex] = useState(null)
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -524,10 +524,10 @@ export function IndexerSettings({ fields = [], append, update, remove, replace, 
     if (!indexer) return
     let assignedStreams = []
     try {
-      const liveDevices = await apiFetch('/api/streams')
-      assignedStreams = assignedStreamsForIndexer(mapDevicesByUsername(liveDevices), indexer.name)
+      const liveStreams = await apiFetch('/api/streams')
+      assignedStreams = assignedStreamsForIndexer(mapStreamsByUsername(liveStreams), indexer.name)
     } catch {
-      assignedStreams = assignedStreamsForIndexer(devicesByName, indexer.name)
+      assignedStreams = assignedStreamsForIndexer(streamsByName, indexer.name)
     }
     if (assignedStreams.length > 0) {
       setDeleteBlockedName(indexer.name || indexer.url || '')

@@ -219,7 +219,6 @@ func TestFilterResultsMovieYearRange(t *testing.T) {
 	}
 }
 
-
 func TestFilterResultsMovieRejectsWrongIMDBMetadata(t *testing.T) {
 	logger.Init("ERROR")
 
@@ -239,5 +238,35 @@ func TestFilterResultsMovieRejectsWrongIMDBMetadata(t *testing.T) {
 		if rel.Title == releases[0].Title {
 			t.Fatalf("expected %q to be rejected, but it was kept", releases[0].Title)
 		}
+	}
+}
+
+func TestMergeAndDedupeSearchResultsKeepsFirstOccurrenceOrder(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "First A", DetailsURL: "https://idx/details/a"},
+		{Title: "First B", GUID: "https://idx/details/b"},
+		{Title: "Dup A later", DetailsURL: "https://idx/details/a"},
+		{Title: "Dup B later", GUID: "https://idx/details/b"},
+		{Title: "Unique C", DetailsURL: "https://idx/details/c"},
+	}
+
+	got := MergeAndDedupeSearchResults(releases)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 deduped releases, got %d: %+v", len(got), got)
+	}
+	if got[0].Title != "First A" || got[1].Title != "First B" || got[2].Title != "Unique C" {
+		t.Fatalf("expected first occurrences to remain in order, got titles %q, %q, %q", got[0].Title, got[1].Title, got[2].Title)
+	}
+}
+
+func TestMergeAndDedupeSearchResultsDoesNotUseTitleMatching(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "The.Patriot.2000.1080p.BluRay", DetailsURL: "https://idx/details/1"},
+		{Title: "The Patriot (2000) 1080p", DetailsURL: "https://idx/details/2"},
+	}
+
+	got := MergeAndDedupeSearchResults(releases)
+	if len(got) != 2 {
+		t.Fatalf("expected both distinct detail URLs to remain, got %d: %+v", len(got), got)
 	}
 }

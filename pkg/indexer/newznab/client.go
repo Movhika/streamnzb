@@ -363,13 +363,13 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	isTVSearch := strings.HasPrefix(req.Cat, "5")
 
 	query := req.Query
-	isTextMode := !req.ForceIDSearch && query != ""
+	isTextMode := !strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") && query != ""
 	extraTerms := c.cfg.ExtraSearchTerms
 	if o := req.OptionalOverrides; o != nil && o.ExtraSearchTerms != nil {
 		extraTerms = *o.ExtraSearchTerms
 	}
 	if extraTerms != "" {
-		if req.ForceIDSearch {
+		if strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") {
 			if query != "" {
 				query = extraTerms + " " + query
 			} else {
@@ -445,7 +445,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		"stream", req.StreamLabel,
 		"request", req.RequestLabel,
 		"mode", func() string {
-			if req.ForceIDSearch {
+			if strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") {
 				return "id"
 			}
 			return "text"

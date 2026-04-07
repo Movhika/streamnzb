@@ -36,8 +36,8 @@ func TestSwitchToNextFallbackSkipsUnresolvableCandidate(t *testing.T) {
 	skippedID := key.SlotPath(1)
 	wantID := key.SlotPath(2)
 
-	server.playListCache.Store(key.CacheKey(), &playListCacheEntry{
-		result: &orderedPlayListResult{
+	server.playlistCache.Store(key.CacheKey(), &playlistCacheEntry{
+		result: &playlistResult{
 			Candidates: []triage.Candidate{
 				{Release: &release.Release{Link: "https://example.invalid/0"}},
 				{},

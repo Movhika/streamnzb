@@ -49,20 +49,20 @@ function truncateCompactValue(value, maxLength = 28) {
   return `${text.slice(0, maxLength - 3)}...`
 }
 
-function assignedDevicesForQuery(devicesByName, kind, queryName) {
+function assignedStreamsForQuery(streamsByName, kind, queryName) {
   const field = kind === 'movie' ? 'movie_search_queries' : 'series_search_queries'
   const target = normalizeName(queryName)
-  if (!target || !devicesByName) return []
-  return Object.values(devicesByName)
+  if (!target || !streamsByName) return []
+  return Object.values(streamsByName)
     .filter(Boolean)
-    .filter((device) => Array.isArray(device[field]) && device[field].some((name) => normalizeName(name) === target))
-    .map((device) => device.username)
+    .filter((stream) => Array.isArray(stream[field]) && stream[field].some((name) => normalizeName(name) === target))
+    .map((stream) => stream.username)
 }
 
-function mapDevicesByUsername(devices) {
-  return (Array.isArray(devices) ? devices : []).reduce((acc, device) => {
-    if (!device?.username) return acc
-    acc[device.username] = device
+function mapStreamsByUsername(streams) {
+  return (Array.isArray(streams) ? streams : []).reduce((acc, stream) => {
+    if (!stream?.username) return acc
+    acc[stream.username] = stream
     return acc
   }, {})
 }
@@ -450,7 +450,7 @@ function QueryDialog({ open, onOpenChange, kind, initialValue, existingNames = [
   )
 }
 
-function QuerySection({ title, description, kind, items, names, update, remove, watch, devicesByName, onPersist, onCreate, onStatus, onClearStatus }) {
+function QuerySection({ title, description, kind, items, names, update, remove, watch, streamsByName, onPersist, onCreate, onStatus, onClearStatus }) {
   const [editingId, setEditingId] = useState(null)
   const [copyDraft, setCopyDraft] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -463,19 +463,19 @@ function QuerySection({ title, description, kind, items, names, update, remove, 
   )
 
   const handleDelete = async (queryName, index) => {
-    let assignedDevices = []
+    let assignedStreams = []
     try {
-      const liveDevices = await apiFetch('/api/streams')
-      assignedDevices = assignedDevicesForQuery(mapDevicesByUsername(liveDevices), kind, queryName)
+      const liveStreams = await apiFetch('/api/streams')
+      assignedStreams = assignedStreamsForQuery(mapStreamsByUsername(liveStreams), kind, queryName)
     } catch {
-      assignedDevices = assignedDevicesForQuery(devicesByName, kind, queryName)
+      assignedStreams = assignedStreamsForQuery(streamsByName, kind, queryName)
     }
 
-    if (assignedDevices.length > 0) {
+    if (assignedStreams.length > 0) {
       setDeleteBlockedName(queryName || '')
       onStatus?.({
         type: 'error',
-        message: `Query "${queryName}" cannot be deleted while assigned to stream(s): ${assignedDevices.join(', ')}`
+        message: `Query "${queryName}" cannot be deleted while assigned to stream(s): ${assignedStreams.join(', ')}`
       })
       return
     }
@@ -722,7 +722,7 @@ export function SearchQuerySettings({
   updateSeries,
   removeMovie,
   removeSeries,
-  devicesByName = {},
+  streamsByName = {},
   onPersist,
   onStatus,
   onClearStatus,
@@ -749,7 +749,7 @@ export function SearchQuerySettings({
           update={updateMovie}
           remove={removeMovie}
           watch={watch}
-          devicesByName={devicesByName}
+          streamsByName={streamsByName}
           onPersist={onPersist}
           onCreate={(query) => appendMovie(query)}
           onStatus={onStatus}
@@ -764,7 +764,7 @@ export function SearchQuerySettings({
           update={updateSeries}
           remove={removeSeries}
           watch={watch}
-          devicesByName={devicesByName}
+          streamsByName={streamsByName}
           onPersist={onPersist}
           onCreate={(query) => appendSeries(query)}
           onStatus={onStatus}

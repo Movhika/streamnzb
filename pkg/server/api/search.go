@@ -232,21 +232,6 @@ func (s *Server) handleStreams(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"streams": streams})
 }
 
-func (s *Server) handleStreamsAvail(w http.ResponseWriter, r *http.Request) {
-	contentType, id, stream, ok := s.parseStreamRequest(w, r)
-	if !ok {
-		return
-	}
-	streams, err := s.strmServer.GetAvailNZBStreams(r.Context(), contentType, id, stream)
-	if err != nil {
-		logger.Error("GetAvailNZBStreams failed", "type", contentType, "id", id, "err", err)
-		http.Error(w, "AvailNZB streams failed", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"streams": streams})
-}
-
 func (s *Server) handleSearchReleases(w http.ResponseWriter, r *http.Request) {
 	contentType, id, _, ok := s.parseStreamRequest(w, r)
 	if !ok {

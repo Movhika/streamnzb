@@ -119,12 +119,12 @@ func (a *Aggregator) ResolveDownloadURL(ctx context.Context, directURL, title st
 // isIDOnlySearch returns true when the request is an ID-based search
 // (has IMDb/TVDB IDs and no text query).
 func isIDOnlySearch(req SearchRequest) bool {
-	return req.ForceIDSearch || (req.Query == "" && (req.IMDbID != "" || req.TVDBID != ""))
+	return strings.EqualFold(strings.TrimSpace(req.SearchMode), "id")
 }
 
 // isTextSearch returns true when the request carries a text query.
 func isTextSearch(req SearchRequest) bool {
-	return !req.ForceIDSearch && req.Query != ""
+	return strings.EqualFold(strings.TrimSpace(req.SearchMode), "text") && req.Query != ""
 }
 
 // shouldSkipIndexer checks the per-indexer DisableIdSearch / DisableStringSearch

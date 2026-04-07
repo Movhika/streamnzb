@@ -232,7 +232,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 		newCfg.AdminPasswordHash = currentCfg.AdminPasswordHash
 		newCfg.AdminToken = currentCfg.AdminToken
 		newCfg.AdminMustChangePassword = currentCfg.AdminMustChangePassword
-		newCfg.Devices = currentCfg.Devices
+		newCfg.Streams = currentCfg.Streams
 
 		newCfg.ApplyProviderDefaults()
 
@@ -347,14 +347,14 @@ func (s *Server) handleFetchCapsWS(client *Client) {
 	s.sendIndexerCaps(client)
 }
 
-func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, payload json.RawMessage) {
+func (s *Server) handleSaveStreamConfigsWS(conn *websocket.Conn, client *Client, payload json.RawMessage) {
 
 	if client.stream == nil || client.stream.Username != s.config.GetAdminUsername() {
-		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save device configurations"}`)})
+		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save stream configurations"}`)})
 		return
 	}
 
-	var deviceConfigs map[string]struct {
+	var streamConfigs map[string]struct {
 		FilterSortingMode   string                                `json:"filter_sorting_mode"`
 		IndexerMode         string                                `json:"indexer_mode"`
 		UseAvailNZB         *bool                                 `json:"use_availnzb"`
@@ -367,26 +367,26 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 		MovieSearchQueries  []string                              `json:"movie_search_queries"`
 		SeriesSearchQueries []string                              `json:"series_search_queries"`
 	}
-	if err := json.Unmarshal(payload, &deviceConfigs); err != nil {
-		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid device config data"}`)})
+	if err := json.Unmarshal(payload, &streamConfigs); err != nil {
+		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid stream config data"}`)})
 		return
 	}
 
 	var errors []string
-	for username, deviceConfig := range deviceConfigs {
+	for username, streamConfig := range streamConfigs {
 		if username == s.config.GetAdminUsername() {
 			continue
 		}
-		if err := s.streamManager.UpdateStreamIndexerConfig(username, deviceConfig.IndexerSelections, deviceConfig.IndexerOverrides); err != nil {
+		if err := s.streamManager.UpdateStreamIndexerConfig(username, streamConfig.IndexerSelections, streamConfig.IndexerOverrides); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to update indexer overrides for %s: %v", username, err))
 		}
-		if err := s.streamManager.UpdateStreamProviderSelections(username, deviceConfig.ProviderSelections); err != nil {
+		if err := s.streamManager.UpdateStreamProviderSelections(username, streamConfig.ProviderSelections); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to update provider selections for %s: %v", username, err))
 		}
-		if err := s.streamManager.UpdateStreamGeneralSettings(username, deviceConfig.FilterSortingMode, deviceConfig.IndexerMode, deviceConfig.UseAvailNZB, deviceConfig.CombineResults, deviceConfig.EnableFailover, deviceConfig.ResultsMode); err != nil {
+		if err := s.streamManager.UpdateStreamGeneralSettings(username, streamConfig.FilterSortingMode, streamConfig.IndexerMode, streamConfig.UseAvailNZB, streamConfig.CombineResults, streamConfig.EnableFailover, streamConfig.ResultsMode); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to update general settings for %s: %v", username, err))
 		}
-		if err := s.streamManager.UpdateStreamSearchQueries(username, deviceConfig.MovieSearchQueries, deviceConfig.SeriesSearchQueries); err != nil {
+		if err := s.streamManager.UpdateStreamSearchQueries(username, streamConfig.MovieSearchQueries, streamConfig.SeriesSearchQueries); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to update search queries for %s: %v", username, err))
 		}
 	}
@@ -394,7 +394,7 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 	if len(errors) > 0 {
 		errorPayload, _ := json.Marshal(map[string]interface{}{
 			"status":  "error",
-			"message": "Some device configs failed to save",
+			"message": "Some stream configs failed to save",
 			"errors":  errors,
 		})
 		trySendWS(client, WSMessage{Type: "save_status", Payload: errorPayload})
@@ -404,42 +404,42 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 	if s.strmServer != nil {
 		s.strmServer.ClearSearchCaches()
 	}
-	trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Device configurations saved successfully. Search cache cleared."}`)})
+	trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Stream configurations saved successfully. Search cache cleared."}`)})
 }
 
-func (s *Server) handleGetDevicesWS(client *Client) {
+func (s *Server) handleGetStreamsWS(client *Client) {
 
 	if client.stream == nil || client.stream.Username != s.config.GetAdminUsername() {
-		trySendWS(client, WSMessage{Type: "users_response", Payload: json.RawMessage(`{"error":"Only admin can access devices list"}`)})
+		trySendWS(client, WSMessage{Type: "users_response", Payload: json.RawMessage(`{"error":"Only admin can access streams list"}`)})
 		return
 	}
 
-	devices := s.streamManager.GetAllStreams()
+	streams := s.streamManager.GetAllStreams()
 
-	deviceList := make([]map[string]interface{}, 0, len(devices))
-	for _, device := range devices {
-		deviceList = append(deviceList, map[string]interface{}{
-			"username":              device.Username,
-			"token":                 device.Token,
-			"filter_sorting_mode":   device.FilterSortingMode,
-			"indexer_mode":          device.IndexerMode,
-			"use_availnzb":          device.UseAvailNZB,
-			"combine_results":       device.CombineResults,
-			"enable_failover":       device.EnableFailover,
-			"results_mode":          device.ResultsMode,
-			"indexer_overrides":     device.IndexerOverrides,
-			"provider_selections":   device.ProviderSelections,
-			"indexer_selections":    device.IndexerSelections,
-			"movie_search_queries":  device.MovieSearchQueries,
-			"series_search_queries": device.SeriesSearchQueries,
+	streamList := make([]map[string]interface{}, 0, len(streams))
+	for _, stream := range streams {
+		streamList = append(streamList, map[string]interface{}{
+			"username":              stream.Username,
+			"token":                 stream.Token,
+			"filter_sorting_mode":   stream.FilterSortingMode,
+			"indexer_mode":          stream.IndexerMode,
+			"use_availnzb":          stream.UseAvailNZB,
+			"combine_results":       stream.CombineResults,
+			"enable_failover":       stream.EnableFailover,
+			"results_mode":          stream.ResultsMode,
+			"indexer_overrides":     stream.IndexerOverrides,
+			"provider_selections":   stream.ProviderSelections,
+			"indexer_selections":    stream.IndexerSelections,
+			"movie_search_queries":  stream.MovieSearchQueries,
+			"series_search_queries": stream.SeriesSearchQueries,
 		})
 	}
 
-	deviceListPayload, _ := json.Marshal(deviceList)
-	trySendWS(client, WSMessage{Type: "users_response", Payload: deviceListPayload})
+	streamListPayload, _ := json.Marshal(streamList)
+	trySendWS(client, WSMessage{Type: "users_response", Payload: streamListPayload})
 }
 
-func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
+func (s *Server) handleGetStreamWS(client *Client, payload json.RawMessage) {
 
 	if client.stream == nil || client.stream.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_response", Payload: json.RawMessage(`{"error":"Only admin can access user details"}`)})
@@ -454,7 +454,7 @@ func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	device, err := s.streamManager.GetStream(req.Username, s.config.GetAdminUsername())
+	stream, err := s.streamManager.GetStream(req.Username, s.config.GetAdminUsername())
 	if err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
 		trySendWS(client, WSMessage{Type: "user_response", Payload: errorPayload})
@@ -462,26 +462,26 @@ func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 	}
 
 	response := map[string]interface{}{
-		"username":              device.Username,
-		"token":                 device.Token,
-		"filter_sorting_mode":   device.FilterSortingMode,
-		"indexer_mode":          device.IndexerMode,
-		"use_availnzb":          device.UseAvailNZB,
-		"combine_results":       device.CombineResults,
-		"enable_failover":       device.EnableFailover,
-		"results_mode":          device.ResultsMode,
-		"indexer_overrides":     device.IndexerOverrides,
-		"provider_selections":   device.ProviderSelections,
-		"indexer_selections":    device.IndexerSelections,
-		"movie_search_queries":  device.MovieSearchQueries,
-		"series_search_queries": device.SeriesSearchQueries,
+		"username":              stream.Username,
+		"token":                 stream.Token,
+		"filter_sorting_mode":   stream.FilterSortingMode,
+		"indexer_mode":          stream.IndexerMode,
+		"use_availnzb":          stream.UseAvailNZB,
+		"combine_results":       stream.CombineResults,
+		"enable_failover":       stream.EnableFailover,
+		"results_mode":          stream.ResultsMode,
+		"indexer_overrides":     stream.IndexerOverrides,
+		"provider_selections":   stream.ProviderSelections,
+		"indexer_selections":    stream.IndexerSelections,
+		"movie_search_queries":  stream.MovieSearchQueries,
+		"series_search_queries": stream.SeriesSearchQueries,
 	}
 
 	respPayload, _ := json.Marshal(response)
 	trySendWS(client, WSMessage{Type: "user_response", Payload: respPayload})
 }
 
-func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
+func (s *Server) handleCreateStreamWS(client *Client, payload json.RawMessage) {
 
 	if client.stream == nil || client.stream.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can create users"}`)})
@@ -496,7 +496,7 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	device, err := s.streamManager.CreateStream(req.Username, "", s.config.GetAdminUsername())
+	stream, err := s.streamManager.CreateStream(req.Username, "", s.config.GetAdminUsername())
 	if err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: errorPayload})
@@ -506,18 +506,18 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 	response := map[string]interface{}{
 		"success": true,
 		"user": map[string]interface{}{
-			"username": device.Username,
-			"token":    device.Token,
+			"username": stream.Username,
+			"token":    stream.Token,
 		},
 	}
 
 	respPayload, _ := json.Marshal(response)
 	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 
-	s.broadcastUsersList()
+	s.broadcastStreamsList()
 }
 
-func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
+func (s *Server) handleDeleteStreamWS(client *Client, payload json.RawMessage) {
 
 	if client.stream == nil || client.stream.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can delete users"}`)})
@@ -540,13 +540,13 @@ func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
 
 	response := map[string]interface{}{
 		"success": true,
-		"message": fmt.Sprintf("Device %s deleted successfully", req.Username),
+		"message": fmt.Sprintf("Stream %s deleted successfully", req.Username),
 	}
 
 	respPayload, _ := json.Marshal(response)
 	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 
-	s.broadcastUsersList()
+	s.broadcastStreamsList()
 }
 
 func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage) {
@@ -579,7 +579,7 @@ func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage
 	respPayload, _ := json.Marshal(response)
 	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 
-	s.broadcastUsersList()
+	s.broadcastStreamsList()
 }
 
 func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage) {
@@ -618,19 +618,19 @@ func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage)
 	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 }
 
-func (s *Server) broadcastUsersList() {
-	devices := s.streamManager.GetAllStreams()
+func (s *Server) broadcastStreamsList() {
+	streams := s.streamManager.GetAllStreams()
 
-	deviceList := make([]map[string]interface{}, 0, len(devices))
-	for _, device := range devices {
-		deviceList = append(deviceList, map[string]interface{}{
-			"username":          device.Username,
-			"token":             device.Token,
-			"indexer_overrides": device.IndexerOverrides,
+	streamList := make([]map[string]interface{}, 0, len(streams))
+	for _, stream := range streams {
+		streamList = append(streamList, map[string]interface{}{
+			"username":          stream.Username,
+			"token":             stream.Token,
+			"indexer_overrides": stream.IndexerOverrides,
 		})
 	}
 
-	payload, _ := json.Marshal(deviceList)
+	payload, _ := json.Marshal(streamList)
 
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
@@ -651,6 +651,7 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 
 type configValidationPlan struct {
 	validateKeepLogFiles        bool
+	validateNZBHistoryRetention bool
 	validateMovieSearchQueries  bool
 	validateSeriesSearchQueries bool
 	validateDeviceAssignments   bool
@@ -665,6 +666,7 @@ type configValidationPlan struct {
 func fullConfigValidationPlan() configValidationPlan {
 	return configValidationPlan{
 		validateKeepLogFiles:        true,
+		validateNZBHistoryRetention: true,
 		validateMovieSearchQueries:  true,
 		validateSeriesSearchQueries: true,
 		validateDeviceAssignments:   true,
@@ -688,6 +690,9 @@ func validationPlanFromPatch(body []byte, currentCfg, nextCfg *config.Config) co
 
 	if _, ok := raw["keep_log_files"]; ok {
 		plan.validateKeepLogFiles = true
+	}
+	if _, ok := raw["nzb_history_retention_days"]; ok {
+		plan.validateNZBHistoryRetention = true
 	}
 	if _, ok := raw["movie_search_queries"]; ok {
 		plan.validateMovieSearchQueries = true
@@ -732,6 +737,9 @@ func (s *Server) validateConfigWithPlan(cfg *config.Config, plan configValidatio
 	if plan.validateKeepLogFiles && (cfg.KeepLogFiles < 1 || cfg.KeepLogFiles > 50) {
 		errors["keep_log_files"] = "Must be between 1 and 50"
 	}
+	if plan.validateNZBHistoryRetention && (cfg.NZBHistoryRetentionDays < 1 || cfg.NZBHistoryRetentionDays > 3650) {
+		errors["nzb_history_retention_days"] = "Must be between 1 and 3650 days"
+	}
 	validateSearchQueries := func(prefix string, queries []config.SearchQueryConfig) {
 		seen := make(map[string]bool)
 		for i, query := range queries {
@@ -772,18 +780,18 @@ func (s *Server) validateConfigWithPlan(cfg *config.Config, plan configValidatio
 				seriesQueryNames[name] = true
 			}
 		}
-		for username, device := range cfg.Devices {
-			if device == nil {
+		for username, stream := range cfg.Streams {
+			if stream == nil {
 				continue
 			}
-			for i, name := range device.MovieSearchQueries {
+			for i, name := range stream.MovieSearchQueries {
 				if normalized := strings.ToLower(strings.TrimSpace(name)); normalized != "" && !movieQueryNames[normalized] {
-					errors[fmt.Sprintf("devices.%s.movie_search_queries.%d", username, i)] = "Assigned movie search query does not exist"
+					errors[fmt.Sprintf("streams.%s.movie_search_queries.%d", username, i)] = "Assigned movie search query does not exist"
 				}
 			}
-			for i, name := range device.SeriesSearchQueries {
+			for i, name := range stream.SeriesSearchQueries {
 				if normalized := strings.ToLower(strings.TrimSpace(name)); normalized != "" && !seriesQueryNames[normalized] {
-					errors[fmt.Sprintf("devices.%s.series_search_queries.%d", username, i)] = "Assigned show search query does not exist"
+					errors[fmt.Sprintf("streams.%s.series_search_queries.%d", username, i)] = "Assigned show search query does not exist"
 				}
 			}
 		}

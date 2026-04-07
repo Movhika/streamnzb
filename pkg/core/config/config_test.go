@@ -109,7 +109,7 @@ func TestApplyStreamModelUpgradeDefaultsCreatesQueriesAndDefaultStream(t *testin
 		t.Fatalf("expected 2 series queries, got %d", len(cfg.SeriesSearchQueries))
 	}
 
-	stream := cfg.Devices[defaultMigratedStreamID]
+	stream := cfg.Streams[defaultMigratedStreamID]
 	if stream == nil {
 		t.Fatalf("expected migrated default stream to be created")
 	}

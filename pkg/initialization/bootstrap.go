@@ -16,6 +16,7 @@ import (
 	"streamnzb/pkg/usenet/pool"
 	"strings"
 	"sync"
+	"time"
 )
 
 type InitializedComponents struct {
@@ -26,7 +27,7 @@ type InitializedComponents struct {
 	StreamingPools       []*nntp.ClientPool
 	UsenetPool           *pool.Pool
 	SegmentCacheBudget   *pool.SegmentCacheBudget
-	AvailNZBIndexerHosts []string
+	AvailNZBIndexerHosts map[string]string
 	IndexerCaps          map[string]*indexer.Caps
 }
 
@@ -60,15 +61,14 @@ func hostFromIndexerURL(rawURL string) string {
 func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 
 	var indexers []indexer.Indexer
-	var availNzbHosts []string
-	seenHost := make(map[string]bool)
+	availNzbHosts := make(map[string]string)
 
 	dataDir := paths.GetDataDir()
 	stateMgr, err := persistence.GetManager(dataDir)
 	if err != nil {
 		logger.Error("Failed to initialize state manager", "err", err)
 	}
-	if stateMgr != nil && cfg.ResetLegacyDeviceState {
+	if stateMgr != nil && cfg.ResetLegacyStreamState {
 		if err := stateMgr.Delete("devices"); err != nil {
 			logger.Warn("Failed to clear legacy devices state during stream-model upgrade", "err", err)
 		}
@@ -76,6 +76,15 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 			logger.Warn("Failed to clear legacy users state during stream-model upgrade", "err", err)
 		}
 		logger.Info("Cleared legacy persisted device state for stream-model upgrade")
+	}
+	if stateMgr != nil && cfg.NZBHistoryRetentionDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -cfg.NZBHistoryRetentionDays)
+		deleted, err := stateMgr.DeleteAttemptsBefore(cutoff)
+		if err != nil {
+			logger.Warn("Failed to prune NZB attempt history", "retention_days", cfg.NZBHistoryRetentionDays, "err", err)
+		} else if deleted > 0 {
+			logger.Info("Pruned NZB attempt history", "retention_days", cfg.NZBHistoryRetentionDays, "deleted", deleted)
+		}
 	}
 
 	usageMgr, err := indexer.GetUsageManager(stateMgr)
@@ -120,18 +129,16 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 				indexers = append(indexers, easynewsClient)
 				logger.Info("Initialized Easynews indexer", "name", idxCfg.Name)
 			}
-			if h := "members.easynews.com"; !seenHost[h] {
-				seenHost[h] = true
-				availNzbHosts = append(availNzbHosts, h)
+			if h := "members.easynews.com"; h != "" {
+				availNzbHosts[idxCfg.Name] = h
 			}
 		default:
 			client := newznab.NewClient(idxCfg, usageMgr)
 			indexers = append(indexers, client)
 			logger.Info("Initialized Newznab indexer", "name", idxCfg.Name, "url", idxCfg.URL)
-			if h := hostFromIndexerURL(idxCfg.URL); h != "" && !seenHost[h] {
-				seenHost[h] = true
+			if h := hostFromIndexerURL(idxCfg.URL); h != "" {
 				if !isAggregator {
-					availNzbHosts = append(availNzbHosts, h)
+					availNzbHosts[idxCfg.Name] = h
 				}
 			}
 		}

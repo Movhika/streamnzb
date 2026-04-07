@@ -37,6 +37,64 @@ func TestBuildSeriesQueriesWithOptionsCanOmitYear(t *testing.T) {
 	}
 }
 
+func TestBuildMovieQueriesFromMetadataAddsGermanTransliterationVariant(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		MovieDetails: &tmdb.MovieDetails{
+			Title:            "The Lion King",
+			OriginalTitle:    "The Lion King",
+			OriginalLanguage: "en",
+			ReleaseDate:      "1994-06-15",
+		},
+		MovieTranslations: &tmdb.MovieTranslationsResponse{
+			Translations: []tmdb.MovieTranslationEntry{
+				{
+					ISO639_1:  "de",
+					ISO3166_1: "DE",
+					Data: tmdb.MovieTranslationData{
+						Title: "König der Löwen",
+					},
+				},
+			},
+		},
+	}
+
+	got := buildMovieQueriesFromMetadata(metadata, "de-DE", false)
+	want := []string{"Koenig der Loewen"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildMovieQueriesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildSeriesQueriesFromMetadataAddsGermanTransliterationVariant(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "The Lion King",
+			OriginalName:     "The Lion King",
+			OriginalLanguage: "en",
+			FirstAirDate:     "1994-09-10",
+		},
+		TVTranslations: &tmdb.TVTranslationsResponse{
+			Translations: []tmdb.TVTranslationEntry{
+				{
+					ISO639_1:  "de",
+					ISO3166_1: "DE",
+					Data: tmdb.TVTranslationData{
+						Name: "König der Löwen",
+					},
+				},
+			},
+		},
+	}
+
+	got := buildSeriesQueriesFromMetadata(metadata, "de-DE", false, "1", "2", false)
+	want := []string{"Koenig der Loewen S01E02"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSeriesQueriesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
 func TestBuildSearchParamsFromBaseSeriesIDQueryModeMovesSeasonEpisodeIntoQuery(t *testing.T) {
 	srv := &Server{config: &config.Config{}}
 	base := &SearchParams{
@@ -59,8 +117,8 @@ func TestBuildSearchParamsFromBaseSeriesIDQueryModeMovesSeasonEpisodeIntoQuery(t
 		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
 	}
 
-	if !params.Req.ForceIDSearch {
-		t.Fatal("expected ForceIDSearch to be enabled")
+	if params.Req.SearchMode != "id" {
+		t.Fatalf("expected SearchMode to be id, got %q", params.Req.SearchMode)
 	}
 	if params.Req.Query != "S01E04" {
 		t.Fatalf("expected S/E query suffix, got %q", params.Req.Query)
@@ -92,8 +150,8 @@ func TestBuildSearchParamsFromBaseSeriesTextQueryModeKeepsSeasonEpisodeForLaterD
 		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
 	}
 
-	if params.Req.ForceIDSearch {
-		t.Fatal("expected text mode to keep ForceIDSearch disabled")
+	if params.Req.SearchMode != "text" {
+		t.Fatalf("expected SearchMode to be text, got %q", params.Req.SearchMode)
 	}
 	if params.Req.Query != "" {
 		t.Fatalf("expected query to stay empty before text query expansion, got %q", params.Req.Query)
@@ -194,8 +252,8 @@ func TestBuildRawSearchResultShortCircuitsWhenMetadataCannotBeResolved(t *testin
 	if raw == nil {
 		t.Fatal("expected zero-result raw search result, got nil")
 	}
-	if len(raw.IndexerReleases) != 0 || len(raw.AvailReleases) != 0 {
-		t.Fatalf("expected no releases after metadata short-circuit, got indexer=%d avail=%d", len(raw.IndexerReleases), len(raw.AvailReleases))
+	if len(raw.IndexerReleases) != 0 {
+		t.Fatalf("expected no releases after metadata short-circuit, got indexer=%d", len(raw.IndexerReleases))
 	}
 }
 

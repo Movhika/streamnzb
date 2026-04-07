@@ -9,6 +9,8 @@ import (
 type NZBAttempt struct {
 	ID            int64     `json:"id"`
 	TriedAt       time.Time `json:"tried_at"`
+	StreamName    string    `json:"stream_name"`
+	ProviderName  string    `json:"provider_name"`
 	ContentType   string    `json:"content_type"`
 	ContentID     string    `json:"content_id"`
 	ContentTitle  string    `json:"content_title"`
@@ -25,6 +27,8 @@ type NZBAttempt struct {
 
 // RecordAttemptParams holds the fields needed to record an NZB attempt.
 type RecordAttemptParams struct {
+	StreamName    string
+	ProviderName  string
 	ContentType   string // "movie" or "series"
 	ContentID     string // e.g. "tt123" or "tmdb:123:1:2"
 	ContentTitle  string
@@ -48,10 +52,12 @@ func (m *StateManager) RecordPreloadAttempt(p RecordAttemptParams) {
 	}
 	// INSERT only when no active (preload=1) row exists for this slot yet.
 	_ = m.withWriteLock(func(db *sql.DB) error {
-		_, err := db.Exec(`INSERT INTO nzb_attempts (tried_at, content_type, content_id, content_title, indexer_name, release_title, release_url, release_size, served_file, success, failure_reason, slot_path, preload)
-				SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, 1
+		_, err := db.Exec(`INSERT INTO nzb_attempts (tried_at, stream_name, provider_name, content_type, content_id, content_title, indexer_name, release_title, release_url, release_size, served_file, success, failure_reason, slot_path, preload)
+				SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, 1
 			WHERE NOT EXISTS (SELECT 1 FROM nzb_attempts WHERE slot_path = ? AND preload = 1)`,
 			time.Now().UnixMilli(),
+			p.StreamName,
+			p.ProviderName,
 			p.ContentType,
 			p.ContentID,
 			p.ContentTitle,
@@ -85,9 +91,12 @@ func (m *StateManager) RecordAttempt(p RecordAttemptParams) {
 					success = ?,
 					failure_reason = ?,
 					served_file = ?,
-					indexer_name = COALESCE(NULLIF(?, ''), indexer_name)
+					indexer_name = COALESCE(NULLIF(?, ''), indexer_name),
+					stream_name = COALESCE(NULLIF(?, ''), stream_name),
+					provider_name = COALESCE(NULLIF(?, ''), provider_name),
+					content_title = COALESCE(NULLIF(?, ''), content_title)
 				WHERE slot_path = ? AND preload = 1`,
-				success, p.FailureReason, p.ServedFile, p.IndexerName, p.SlotPath)
+				success, p.FailureReason, p.ServedFile, p.IndexerName, p.StreamName, p.ProviderName, p.ContentTitle, p.SlotPath)
 			if err == nil {
 				affected, _ := res.RowsAffected()
 				if affected > 0 {
@@ -96,9 +105,11 @@ func (m *StateManager) RecordAttempt(p RecordAttemptParams) {
 			}
 		}
 
-		_, err := db.Exec(`INSERT INTO nzb_attempts (tried_at, content_type, content_id, content_title, indexer_name, release_title, release_url, release_size, served_file, success, failure_reason, slot_path, preload)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		_, err := db.Exec(`INSERT INTO nzb_attempts (tried_at, stream_name, provider_name, content_type, content_id, content_title, indexer_name, release_title, release_url, release_size, served_file, success, failure_reason, slot_path, preload)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 			time.Now().UnixMilli(),
+			p.StreamName,
+			p.ProviderName,
 			p.ContentType,
 			p.ContentID,
 			p.ContentTitle,
@@ -145,7 +156,7 @@ func (m *StateManager) ListAttempts(opts ListAttemptsOptions) ([]NZBAttempt, err
 		offset = 0
 	}
 
-	query := `SELECT id, tried_at, content_type, content_id, content_title, indexer_name, release_title, release_url, release_size, served_file, success, failure_reason, slot_path, COALESCE(preload, 0)
+	query := `SELECT id, tried_at, stream_name, provider_name, content_type, content_id, content_title, indexer_name, release_title, release_url, release_size, served_file, success, failure_reason, slot_path, COALESCE(preload, 0)
 		FROM nzb_attempts WHERE 1=1`
 	args := []interface{}{}
 	if opts.ContentType != "" {
@@ -175,10 +186,10 @@ func (m *StateManager) ListAttempts(opts ListAttemptsOptions) ([]NZBAttempt, err
 		var triedAtMs int64
 		var success int
 		var preload int
-		var releaseURL, servedFile, failureReason, slotPath, indexerName sql.NullString
+		var releaseURL, servedFile, failureReason, slotPath, indexerName, streamName, providerName sql.NullString
 		var contentTitle sql.NullString
 		var releaseSize sql.NullInt64
-		err := rows.Scan(&a.ID, &triedAtMs, &a.ContentType, &a.ContentID, &contentTitle, &indexerName, &a.ReleaseTitle, &releaseURL, &releaseSize, &servedFile, &success, &failureReason, &slotPath, &preload)
+		err := rows.Scan(&a.ID, &triedAtMs, &streamName, &providerName, &a.ContentType, &a.ContentID, &contentTitle, &indexerName, &a.ReleaseTitle, &releaseURL, &releaseSize, &servedFile, &success, &failureReason, &slotPath, &preload)
 		if err != nil {
 			return nil, err
 		}
@@ -203,10 +214,36 @@ func (m *StateManager) ListAttempts(opts ListAttemptsOptions) ([]NZBAttempt, err
 		if indexerName.Valid {
 			a.IndexerName = indexerName.String
 		}
+		if streamName.Valid {
+			a.StreamName = streamName.String
+		}
+		if providerName.Valid {
+			a.ProviderName = providerName.String
+		}
 		if releaseSize.Valid {
 			a.ReleaseSize = releaseSize.Int64
 		}
 		list = append(list, a)
 	}
 	return list, rows.Err()
+}
+
+// DeleteAttemptsBefore removes NZB attempts older than the provided cutoff.
+func (m *StateManager) DeleteAttemptsBefore(cutoff time.Time) (int64, error) {
+	if m == nil || m.db == nil {
+		return 0, nil
+	}
+	var deleted int64
+	err := m.withWriteLock(func(db *sql.DB) error {
+		res, err := db.Exec(`DELETE FROM nzb_attempts WHERE tried_at < ?`, cutoff.UnixMilli())
+		if err != nil {
+			return err
+		}
+		deleted, _ = res.RowsAffected()
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }

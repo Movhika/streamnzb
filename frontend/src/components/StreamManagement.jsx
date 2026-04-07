@@ -13,16 +13,16 @@ import { ArrowUpDown, Check, ChevronDown, ChevronUp, Clipboard, Copy, Globe, Gri
 
 const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
 
-function mapDevicesByUsername(devices) {
-  return (Array.isArray(devices) ? devices : []).reduce((acc, device) => {
-    if (!device?.username) return acc
-    acc[device.username] = device
+function mapStreamsByUsername(streams) {
+  return (Array.isArray(streams) ? streams : []).reduce((acc, stream) => {
+    if (!stream?.username) return acc
+    acc[stream.username] = stream
     return acc
   }, {})
 }
 
-function devicesFromMap(devicesByName) {
-  return Object.values(devicesByName || {}).filter(Boolean)
+function streamsFromMap(streamsByName) {
+  return Object.values(streamsByName || {}).filter(Boolean)
 }
 
 function uniquePreserveOrder(values) {
@@ -36,7 +36,7 @@ function uniquePreserveOrder(values) {
   return next
 }
 
-function normalizeDeviceDraft(draft) {
+function normalizeStreamDraft(draft) {
   return {
     filter_sorting_mode: draft?.filter_sorting_mode === 'aiostreams' ? 'aiostreams' : 'none',
     indexer_mode: draft?.indexer_mode === 'failover' ? 'failover' : 'combine',
@@ -52,19 +52,19 @@ function normalizeDeviceDraft(draft) {
   }
 }
 
-function buildDeviceDraft(device) {
-  return normalizeDeviceDraft({
-    filter_sorting_mode: device?.filter_sorting_mode,
-    indexer_mode: device?.indexer_mode,
-    username: device?.username || '',
-    use_availnzb: device?.use_availnzb,
-    combine_results: device?.combine_results,
-    enable_failover: device?.enable_failover,
-    results_mode: device?.results_mode,
-    providers: device?.provider_selections || device?.providers || [],
-    indexers: device?.indexer_selections || device?.indexers || Object.keys(device?.indexer_overrides || {}),
-    movie_search_queries: device?.movie_search_queries || [],
-    series_search_queries: device?.series_search_queries || [],
+function buildStreamDraft(stream) {
+  return normalizeStreamDraft({
+    filter_sorting_mode: stream?.filter_sorting_mode,
+    indexer_mode: stream?.indexer_mode,
+    username: stream?.username || '',
+    use_availnzb: stream?.use_availnzb,
+    combine_results: stream?.combine_results,
+    enable_failover: stream?.enable_failover,
+    results_mode: stream?.results_mode,
+    providers: stream?.provider_selections || stream?.providers || [],
+    indexers: stream?.indexer_selections || stream?.indexers || Object.keys(stream?.indexer_overrides || {}),
+    movie_search_queries: stream?.movie_search_queries || [],
+    series_search_queries: stream?.series_search_queries || [],
   })
 }
 
@@ -75,22 +75,22 @@ function buildIndexerOverrides(selectedIndexerNames, existingOverrides = {}) {
   }, {})
 }
 
-function generalCompactValues(device) {
-  return [device?.filter_sorting_mode === 'aiostreams' ? 'AIOStreams' : 'Custom']
+function generalCompactValues(stream) {
+  return [stream?.filter_sorting_mode === 'aiostreams' ? 'AIOStreams' : 'Custom']
 }
 
-function generalDetailValues(device) {
+function generalDetailValues(stream) {
   return [
-    `AvailNZB ${device?.use_availnzb !== false ? 'On' : 'Off'}`,
-    `Failover ${device?.enable_failover !== false ? 'On' : 'Off'}`,
-    `Indexers ${(device?.indexer_mode || 'combine') === 'failover' ? 'Failover' : 'Combine'}`,
-    `Search ${device?.combine_results !== false ? 'Combine' : 'First hit'}`,
-    `Results ${device?.results_mode === 'display_all' ? 'All' : 'Combine'}`,
+    `AvailNZB ${stream?.use_availnzb !== false ? 'On' : 'Off'}`,
+    `Failover ${stream?.enable_failover !== false ? 'On' : 'Off'}`,
+    `Indexers ${(stream?.indexer_mode || 'combine') === 'failover' ? 'Failover' : 'Combine'}`,
+    `Search ${stream?.combine_results !== false ? 'Combine' : 'First hit'}`,
+    `Results ${stream?.results_mode === 'display_all' ? 'All' : 'Combine'}`,
   ]
 }
 
-function filterSortingSummaryValues(device) {
-  return [device?.filter_sorting_mode === 'aiostreams' ? 'AIOStreams' : 'None']
+function filterSortingSummaryValues(stream) {
+  return [stream?.filter_sorting_mode === 'aiostreams' ? 'AIOStreams' : 'None']
 }
 
 function filterSortingLabel(value) {
@@ -122,7 +122,7 @@ function applyFilterSortingMode(current, nextMode) {
     nextDraft.enable_failover = true
     nextDraft.results_mode = 'display_all'
   }
-  return normalizeDeviceDraft(nextDraft)
+  return normalizeStreamDraft(nextDraft)
 }
 
 function copyToClipboard(text) {
@@ -302,8 +302,8 @@ function defaultStreamName(index) {
   return `Stream${String(index + 1).padStart(2, '0')}`
 }
 
-function nextStreamName(devices) {
-  const existing = new Set((Array.isArray(devices) ? devices : []).map((device) => (device?.username || '').toLowerCase()))
+function nextStreamName(streams) {
+  const existing = new Set((Array.isArray(streams) ? streams : []).map((stream) => (stream?.username || '').toLowerCase()))
   for (let index = 0; index < 999; index += 1) {
     const candidate = defaultStreamName(index)
     if (!existing.has(candidate.toLowerCase())) {
@@ -313,20 +313,20 @@ function nextStreamName(devices) {
   return `Stream${Date.now()}`
 }
 
-function StreamDialog({ open, onOpenChange, initialDevice, mode = 'edit', providerNames, indexerNames, movieQueryNames, seriesQueryNames, onSave, saving, nextIndex = 0 }) {
+function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', providerNames, indexerNames, movieQueryNames, seriesQueryNames, onSave, saving, nextIndex = 0 }) {
   const isEditing = mode === 'edit'
-  const [draft, setDraft] = useState(() => buildDeviceDraft(initialDevice))
+  const [draft, setDraft] = useState(() => buildStreamDraft(initialStream))
   const [saveError, setSaveError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
   const [activeTab, setActiveTab] = useState('general')
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const [wasOpen, setWasOpen] = useState(open)
-  const dialogIdentity = `${mode}:${initialDevice?.username || ''}:${nextIndex}`
+  const dialogIdentity = `${mode}:${initialStream?.username || ''}:${nextIndex}`
   const [lastDialogIdentity, setLastDialogIdentity] = useState(dialogIdentity)
 
   useEffect(() => {
     if (open && (!wasOpen || dialogIdentity !== lastDialogIdentity)) {
-      const nextDraft = buildDeviceDraft(initialDevice)
+      const nextDraft = buildStreamDraft(initialStream)
       if (!isEditing && !nextDraft.username) {
         nextDraft.username = defaultStreamName(nextIndex)
       }
@@ -337,10 +337,10 @@ function StreamDialog({ open, onOpenChange, initialDevice, mode = 'edit', provid
       setLastDialogIdentity(dialogIdentity)
     }
     setWasOpen(open)
-  }, [open, initialDevice, nextIndex, isEditing, wasOpen, dialogIdentity, lastDialogIdentity])
+  }, [open, initialStream, nextIndex, isEditing, wasOpen, dialogIdentity, lastDialogIdentity])
 
-  const normalizedInitial = JSON.stringify(buildDeviceDraft(isEditing ? initialDevice : null))
-  const normalizedCurrent = JSON.stringify(normalizeDeviceDraft(draft))
+  const normalizedInitial = JSON.stringify(buildStreamDraft(isEditing ? initialStream : null))
+  const normalizedCurrent = JSON.stringify(normalizeStreamDraft(draft))
   const isDirty = normalizedInitial !== normalizedCurrent
   const aiostreamsMode = draft.filter_sorting_mode === 'aiostreams'
 
@@ -373,7 +373,7 @@ function StreamDialog({ open, onOpenChange, initialDevice, mode = 'edit', provid
   }
 
   const handleSave = () => {
-    const next = normalizeDeviceDraft(draft)
+    const next = normalizeStreamDraft(draft)
     const nextFieldErrors = {}
     if (!next.username) {
       nextFieldErrors.username = 'Stream name is required'
@@ -672,24 +672,24 @@ function StreamDialog({ open, onOpenChange, initialDevice, mode = 'edit', provid
   )
 }
 
-function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQueries = [], initialDevicesByName = {}, onDevicesChange, onStatus }) {
-  const initialDevices = useMemo(() => devicesFromMap(initialDevicesByName), [initialDevicesByName])
-  const initialDevicesSignature = useMemo(() => JSON.stringify(initialDevices), [initialDevices])
+function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQueries = [], initialStreamsByName = {}, onStreamsChange, onStatus }) {
+  const initialStreams = useMemo(() => streamsFromMap(initialStreamsByName), [initialStreamsByName])
+  const initialStreamsSignature = useMemo(() => JSON.stringify(initialStreams), [initialStreams])
   const initialFetchStartedRef = useRef(false)
-  const lastAppliedInitialSignatureRef = useRef(initialDevicesSignature)
-  const [devices, setDevices] = useState(() => initialDevices)
+  const lastAppliedInitialSignatureRef = useRef(initialStreamsSignature)
+  const [streams, setStreams] = useState(() => initialStreams)
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(null)
   const [dialogSaving, setDialogSaving] = useState(false)
   const [error, setError] = useState('')
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [addDialogDraft, setAddDialogDraft] = useState(null)
-  const [editingDevice, setEditingDevice] = useState(null)
+  const [editingStream, setEditingStream] = useState(null)
   const [copiedToken, setCopiedToken] = useState('')
   const [visibleFooterStatus, setVisibleFooterStatus] = useState(null)
   const [footerStatusVisible, setFooterStatusVisible] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState('')
-  const [expandedDevices, setExpandedDevices] = useState({})
+  const [expandedStreams, setExpandedStreams] = useState({})
 
   const indexerNames = useMemo(
     () => (globalConfig?.indexers || []).map((indexer) => indexer.name).filter(Boolean),
@@ -703,12 +703,12 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
   const seriesQueryNames = useMemo(() => seriesSearchQueries.map((query) => query.name).filter(Boolean), [seriesSearchQueries])
 
   useEffect(() => {
-    if (initialDevices.length === 0) return
-    if (lastAppliedInitialSignatureRef.current === initialDevicesSignature) return
-    lastAppliedInitialSignatureRef.current = initialDevicesSignature
-    setDevices(initialDevices)
+    if (initialStreams.length === 0) return
+    if (lastAppliedInitialSignatureRef.current === initialStreamsSignature) return
+    lastAppliedInitialSignatureRef.current = initialStreamsSignature
+    setStreams(initialStreams)
     setLoading(false)
-  }, [initialDevices, initialDevicesSignature])
+  }, [initialStreams, initialStreamsSignature])
 
   const showStatus = useCallback((status) => {
     if (status?.type === 'error') {
@@ -742,12 +742,12 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     setVisibleFooterStatus(status)
   }, [])
 
-  const fetchDevices = useCallback(async (showLoader = true) => {
+  const fetchStreams = useCallback(async (showLoader = true) => {
     if (showLoader) setLoading(true)
     try {
-      const nextDevices = await apiFetch('/api/streams')
-      setDevices(Array.isArray(nextDevices) ? nextDevices : [])
-      onDevicesChange?.(mapDevicesByUsername(nextDevices))
+      const nextStreams = await apiFetch('/api/streams')
+      setStreams(Array.isArray(nextStreams) ? nextStreams : [])
+      onStreamsChange?.(mapStreamsByUsername(nextStreams))
       setError('')
     } catch (err) {
       const status = { type: 'error', message: err.message || 'Failed to load streams' }
@@ -756,13 +756,13 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     } finally {
       if (showLoader) setLoading(false)
     }
-  }, [onDevicesChange, showStatus])
+  }, [onStreamsChange, showStatus])
 
   useEffect(() => {
     if (initialFetchStartedRef.current) return
     initialFetchStartedRef.current = true
-    fetchDevices(false)
-  }, [fetchDevices])
+    fetchStreams(false)
+  }, [fetchStreams])
 
   const getManifestUrl = (token) => {
     const baseUrl = globalConfig?.addon_base_url
@@ -778,7 +778,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     })
   }
 
-  const saveDeviceAssignments = async (username, draft, existingDevice) => {
+  const saveStreamAssignments = async (username, draft, existingStream) => {
     const payload = {
       [username]: {
         filter_sorting_mode: draft.filter_sorting_mode,
@@ -789,7 +789,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
         results_mode: draft.results_mode,
         provider_selections: draft.providers || [],
         indexer_selections: draft.indexers || [],
-        indexer_overrides: buildIndexerOverrides(draft.indexers, existingDevice?.indexer_overrides),
+        indexer_overrides: buildIndexerOverrides(draft.indexers, existingStream?.indexer_overrides),
         movie_search_queries: draft.movie_search_queries || [],
         series_search_queries: draft.series_search_queries || [],
       },
@@ -800,7 +800,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     })
   }
 
-  const handleCreateDevice = async (draft) => {
+  const handleCreateStream = async (draft) => {
     setDialogSaving(true)
     showStatus(null)
     try {
@@ -808,13 +808,13 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
         method: 'POST',
         body: JSON.stringify({ username: draft.username }),
       })
-      await saveDeviceAssignments(draft.username, draft, null)
+      await saveStreamAssignments(draft.username, draft, null)
       const status = { type: 'success', message: `Stream "${draft.username}" created successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
       setAddDialogDraft(null)
       setShowAddDialog(false)
-      await fetchDevices(false)
+      await fetchStreams(false)
     } catch (err) {
       const status = { type: 'error', message: err.message || 'Failed to create stream' }
       showStatus(status)
@@ -824,37 +824,37 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     }
   }
 
-  const handleCloneDevice = (device) => {
-    if (!device?.username) return
-    const nextName = nextStreamName(devices)
-    const draft = normalizeDeviceDraft({
-      filter_sorting_mode: device.filter_sorting_mode,
-      indexer_mode: device.indexer_mode,
+  const handleCloneStream = (stream) => {
+    if (!stream?.username) return
+    const nextName = nextStreamName(streams)
+    const draft = normalizeStreamDraft({
+      filter_sorting_mode: stream.filter_sorting_mode,
+      indexer_mode: stream.indexer_mode,
       username: nextName,
-      use_availnzb: device.use_availnzb,
-      combine_results: device.combine_results,
-      enable_failover: device.enable_failover,
-      results_mode: device.results_mode,
-      providers: device.provider_selections || [],
-      indexers: device.indexer_selections || Object.keys(device.indexer_overrides || {}),
-      movie_search_queries: device.movie_search_queries || [],
-      series_search_queries: device.series_search_queries || [],
+      use_availnzb: stream.use_availnzb,
+      combine_results: stream.combine_results,
+      enable_failover: stream.enable_failover,
+      results_mode: stream.results_mode,
+      providers: stream.provider_selections || [],
+      indexers: stream.indexer_selections || Object.keys(stream.indexer_overrides || {}),
+      movie_search_queries: stream.movie_search_queries || [],
+      series_search_queries: stream.series_search_queries || [],
     })
     setAddDialogDraft(draft)
     setShowAddDialog(true)
   }
 
-  const handleSaveDevice = async (draft) => {
-    if (!editingDevice) return
+  const handleSaveStream = async (draft) => {
+    if (!editingStream) return
     setDialogSaving(true)
     showStatus(null)
     try {
-      await saveDeviceAssignments(editingDevice.username, draft, editingDevice)
-      const status = { type: 'success', message: `Stream "${editingDevice.username}" saved successfully.${CACHE_CLEARED_SUFFIX}` }
+      await saveStreamAssignments(editingStream.username, draft, editingStream)
+      const status = { type: 'success', message: `Stream "${editingStream.username}" saved successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
-      setEditingDevice(null)
-      await fetchDevices(false)
+      setEditingStream(null)
+      await fetchStreams(false)
     } catch (err) {
       const status = { type: 'error', message: err.message || 'Failed to save stream' }
       showStatus(status)
@@ -864,7 +864,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     }
   }
 
-  const handleDeleteDevice = async (username) => {
+  const handleDeleteStream = async (username) => {
     setActionLoading(`delete-${username}`)
     showStatus(null)
     try {
@@ -872,7 +872,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
       const status = { type: 'success', message: `Stream "${username}" deleted successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
-      await fetchDevices(false)
+      await fetchStreams(false)
     } catch (err) {
       const status = { type: 'error', message: err.message || 'Failed to delete stream' }
       showStatus(status)
@@ -887,9 +887,9 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     showStatus(null)
     try {
       const payload = await apiFetch(`/api/streams/${encodeURIComponent(username)}/regenerate-token`, { method: 'POST' })
-      setDevices((prev) => {
-        const next = prev.map((device) => device.username === username ? { ...device, token: payload.token } : device)
-        onDevicesChange?.(mapDevicesByUsername(next))
+      setStreams((prev) => {
+        const next = prev.map((stream) => stream.username === username ? { ...stream, token: payload.token } : stream)
+        onStreamsChange?.(mapStreamsByUsername(next))
         return next
       })
       const status = { type: 'success', message: `Token regenerated for "${username}"` }
@@ -904,8 +904,8 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     }
   }
 
-  const toggleExpandedDevice = (username) => {
-    setExpandedDevices((current) => ({
+  const toggleExpandedStream = (username) => {
+    setExpandedStreams((current) => ({
       ...current,
       [username]: !current[username],
     }))
@@ -940,25 +940,25 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {loading && devices.length > 0 ? (
+          {loading && streams.length > 0 ? (
             <div className="flex items-center justify-center p-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : devices.length === 0 ? (
+          ) : streams.length === 0 ? (
             <div className="p-8 text-center text-muted-foreground">No streams found. Create your first stream to get started.</div>
           ) : (
             <div className="space-y-4">
-              {devices.map((device) => (
-                <Card key={device.username}>
+              {streams.map((stream) => (
+                <Card key={stream.username}>
                   <CardContent className="pt-6">
                     <div className="space-y-4">
                       <div className="space-y-3">
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <h3 className="font-semibold">{device.username}</h3>
+                            <h3 className="font-semibold">{stream.username}</h3>
                           </div>
                           <div className="flex flex-wrap items-center gap-2 sm:ml-4 sm:shrink-0">
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button type="button" variant="outline" size="icon" onClick={() => setEditingDevice(device)} className="h-9 w-9">
+                              <Button type="button" variant="outline" size="icon" onClick={() => setEditingStream(stream)} className="h-9 w-9">
                                 <Settings className="h-4 w-4" />
                               </Button>
                             </TooltipTrigger>
@@ -970,19 +970,19 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                                 type="button"
                                 variant="outline"
                                 size="icon"
-                                onClick={() => handleCloneDevice(device)}
+                                onClick={() => handleCloneStream(stream)}
                                 disabled={actionLoading !== null || loading}
                                 className="h-9 w-9"
                               >
-                                  {actionLoading === `copy-${device.username}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                                  {actionLoading === `copy-${stream.username}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>Copy stream</TooltipContent>
                           </Tooltip>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                                <Button type="button" variant="destructive" size="icon" onClick={() => setDeleteTarget(device.username)} disabled={actionLoading !== null || loading} className="h-9 w-9">
-                                  {actionLoading === `delete-${device.username}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                                <Button type="button" variant="destructive" size="icon" onClick={() => setDeleteTarget(stream.username)} disabled={actionLoading !== null || loading} className="h-9 w-9">
+                                  {actionLoading === `delete-${stream.username}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>Delete stream</TooltipContent>
@@ -995,20 +995,20 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                         <div className="space-y-1.5">
                           <Label className="block text-xs text-muted-foreground">Manifest</Label>
                           <div className="flex items-start gap-2">
-                            <code className="block min-w-0 flex-1 break-all rounded bg-muted px-2.5 py-1.5 text-[11px] leading-5">{getManifestUrl(device.token)}</code>
+                            <code className="block min-w-0 flex-1 break-all rounded bg-muted px-2.5 py-1.5 text-[11px] leading-5">{getManifestUrl(stream.token)}</code>
                             <div className="flex items-center gap-2">
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <Button type="button" variant="ghost" size="icon" onClick={() => copyManifestUrl(device.token)} className="h-8 w-8 shrink-0 bg-muted hover:bg-muted">
-                                    {copiedToken === device.token ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
+                                  <Button type="button" variant="ghost" size="icon" onClick={() => copyManifestUrl(stream.token)} className="h-8 w-8 shrink-0 bg-muted hover:bg-muted">
+                                    {copiedToken === stream.token ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
                                   </Button>
                                 </TooltipTrigger>
-                                <TooltipContent>{copiedToken === device.token ? 'Copied' : 'Copy manifest URL'}</TooltipContent>
+                                <TooltipContent>{copiedToken === stream.token ? 'Copied' : 'Copy manifest URL'}</TooltipContent>
                               </Tooltip>
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <Button type="button" variant="outline" size="icon" onClick={() => handleRegenerateToken(device.username)} disabled={actionLoading !== null || loading} className="h-8 w-8 shrink-0">
-                                    {actionLoading === `regenerate-${device.username}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                                  <Button type="button" variant="outline" size="icon" onClick={() => handleRegenerateToken(stream.username)} disabled={actionLoading !== null || loading} className="h-8 w-8 shrink-0">
+                                    {actionLoading === `regenerate-${stream.username}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                                   </Button>
                                 </TooltipTrigger>
                                 <TooltipContent>Regenerate token</TooltipContent>
@@ -1019,14 +1019,14 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                       </div>
 
                       <div className="relative rounded-md border border-border/70 bg-muted/10 px-3 py-3 pb-6">
-                        {expandedDevices[device.username] ? (
+                        {expandedStreams[stream.username] ? (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-                            <SummaryRow label="General" icon={Settings} values={generalDetailValues(device)} />
-                            <SummaryRow label="Providers" icon={Globe} values={device.provider_selections || []} />
-                            <SummaryRow label="Indexers" icon={Server} values={device.indexer_selections || Object.keys(device.indexer_overrides || {})} />
-                            <SummaryRow label="Movie" icon={Search} values={device.movie_search_queries || []} />
-                            <SummaryRow label="TV" icon={Search} values={device.series_search_queries || []} />
-                            <SummaryRow label="Filter/Sorting" icon={ArrowUpDown} values={filterSortingSummaryValues(device)} />
+                            <SummaryRow label="General" icon={Settings} values={generalDetailValues(stream)} />
+                            <SummaryRow label="Providers" icon={Globe} values={stream.provider_selections || []} />
+                            <SummaryRow label="Indexers" icon={Server} values={stream.indexer_selections || Object.keys(stream.indexer_overrides || {})} />
+                            <SummaryRow label="Movie" icon={Search} values={stream.movie_search_queries || []} />
+                            <SummaryRow label="TV" icon={Search} values={stream.series_search_queries || []} />
+                            <SummaryRow label="Filter/Sorting" icon={ArrowUpDown} values={filterSortingSummaryValues(stream)} />
                           </div>
                         ) : (
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
@@ -1036,7 +1036,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                                 <span>General</span>
                               </div>
                               <div className="flex flex-wrap items-center gap-2">
-                                {generalCompactValues(device).map((value) => (
+                                {generalCompactValues(stream).map((value) => (
                                   <div key={value} className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">
                                     {value}
                                   </div>
@@ -1048,28 +1048,28 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                                 <Globe className="h-3.5 w-3.5" />
                                 <span>Providers</span>
                               </div>
-                              <div className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{(device.provider_selections || []).length}</div>
+                              <div className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{(stream.provider_selections || []).length}</div>
                             </div>
                             <div className="space-y-1">
                               <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                                 <Server className="h-3.5 w-3.5" />
                                 <span>Indexers</span>
                               </div>
-                              <div className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{(device.indexer_selections || Object.keys(device.indexer_overrides || {})).length}</div>
+                              <div className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{(stream.indexer_selections || Object.keys(stream.indexer_overrides || {})).length}</div>
                             </div>
                             <div className="space-y-1">
                               <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                                 <Search className="h-3.5 w-3.5" />
                                 <span>Movie</span>
                               </div>
-                              <div className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{(device.movie_search_queries || []).length}</div>
+                              <div className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{(stream.movie_search_queries || []).length}</div>
                             </div>
                             <div className="space-y-1">
                               <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                                 <Search className="h-3.5 w-3.5" />
                                 <span>TV</span>
                               </div>
-                              <div className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{(device.series_search_queries || []).length}</div>
+                              <div className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{(stream.series_search_queries || []).length}</div>
                             </div>
                             <div className="space-y-1">
                               <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -1077,7 +1077,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                                 <span>Filter/Sorting</span>
                               </div>
                               <div className="flex flex-wrap items-center gap-2">
-                                {filterSortingSummaryValues(device).map((value) => (
+                                {filterSortingSummaryValues(stream).map((value) => (
                                   <div key={value} className="inline-flex items-center justify-center rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">
                                     {value}
                                   </div>
@@ -1093,13 +1093,13 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                               <Button
                                 type="button"
                                 variant="outline"
-                                onClick={() => toggleExpandedDevice(device.username)}
+                                onClick={() => toggleExpandedStream(stream.username)}
                                 className="h-7 w-9 rounded-md border-dashed border-border/80 bg-muted text-muted-foreground shadow-sm hover:bg-muted/90"
                               >
-                                {expandedDevices[device.username] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                {expandedStreams[stream.username] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent>{expandedDevices[device.username] ? 'Hide details' : 'Show details'}</TooltipContent>
+                            <TooltipContent>{expandedStreams[stream.username] ? 'Hide details' : 'Show details'}</TooltipContent>
                           </Tooltip>
                         </div>
                       </div>
@@ -1116,29 +1116,29 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
               setShowAddDialog(nextOpen)
               if (!nextOpen) setAddDialogDraft(null)
             }}
-            initialDevice={addDialogDraft}
+            initialStream={addDialogDraft}
             mode="add"
             providerNames={providerNames}
             indexerNames={indexerNames}
             movieQueryNames={movieQueryNames}
             seriesQueryNames={seriesQueryNames}
-            onSave={handleCreateDevice}
+            onSave={handleCreateStream}
             saving={dialogSaving}
-            nextIndex={devices.length}
+            nextIndex={streams.length}
           />
 
           <StreamDialog
-            open={Boolean(editingDevice)}
+            open={Boolean(editingStream)}
             onOpenChange={(nextOpen) => {
-              if (!nextOpen) setEditingDevice(null)
+              if (!nextOpen) setEditingStream(null)
             }}
-            initialDevice={editingDevice}
+            initialStream={editingStream}
             mode="edit"
             providerNames={providerNames}
             indexerNames={indexerNames}
             movieQueryNames={movieQueryNames}
             seriesQueryNames={seriesQueryNames}
-            onSave={handleSaveDevice}
+            onSave={handleSaveStream}
             saving={dialogSaving}
           />
         </CardContent>
@@ -1170,7 +1170,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
           const username = deleteTarget
           setDeleteTarget('')
           if (username) {
-            void handleDeleteDevice(username)
+            void handleDeleteStream(username)
           }
         }}
       />

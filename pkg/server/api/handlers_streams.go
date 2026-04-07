@@ -21,28 +21,28 @@ func trimStreamAPIPath(path string) string {
 	return strings.Trim(path, "/")
 }
 
-func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleManagedStreams(w http.ResponseWriter, r *http.Request) {
 	path := trimStreamAPIPath(r.URL.Path)
 	if path == "configs" {
-		s.handlePutDeviceConfigs(w, r)
+		s.handlePutStreamConfigs(w, r)
 		return
 	}
 	if path == "" {
 		if r.Method == http.MethodGet {
-			s.handleDevicesList(w, r)
+			s.handleStreamsList(w, r)
 			return
 		}
 		if r.Method == http.MethodPost {
-			s.handleDevicesCreate(w, r)
+			s.handleStreamsCreate(w, r)
 			return
 		}
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.handleDeviceByUsername(w, r)
+	s.handleStreamByUsername(w, r)
 }
 
-func (s *Server) handleDevicesList(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStreamsList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -75,7 +75,7 @@ func (s *Server) handleDevicesList(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-func (s *Server) handleDevicesCreate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStreamsCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -109,7 +109,7 @@ func (s *Server) handleDevicesCreate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleDeviceByUsername(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStreamByUsername(w http.ResponseWriter, r *http.Request) {
 	path := trimStreamAPIPath(r.URL.Path)
 	parts := strings.SplitN(path, "/", 2)
 	username := parts[0]
@@ -193,7 +193,7 @@ func (s *Server) handleDeviceByUsername(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func (s *Server) handlePutDeviceConfigs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePutStreamConfigs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -225,7 +225,7 @@ func (s *Server) handlePutDeviceConfigs(w http.ResponseWriter, r *http.Request) 
 		if username == s.config.GetAdminUsername() {
 			continue
 		}
-		if err := s.streamManager.UpdateStreamConfig(username, &auth.Device{
+		if err := s.streamManager.UpdateStreamConfig(username, &auth.Stream{
 			FilterSortingMode:   dc.FilterSortingMode,
 			IndexerMode:         dc.IndexerMode,
 			UseAvailNZB:         dc.UseAvailNZB,

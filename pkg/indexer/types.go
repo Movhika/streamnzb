@@ -43,7 +43,8 @@ type SearchRequest struct {
 	Season                 string
 	Episode                string
 	UseSeasonEpisodeParams bool
-	ForceIDSearch          bool
+	SearchMode             string
+	DisableResultFiltering bool
 	IndexerMode            string
 	FilterQuery            string
 	StreamLabel            string `json:"-"`
@@ -154,22 +155,13 @@ func (i *Item) ToRelease() *release.Release {
 }
 
 func (i *Item) ReleaseDetailsURL() string {
-	comments := strings.TrimSpace(i.Comments)
-	if comments != "" && (strings.HasPrefix(comments, "http://") || strings.HasPrefix(comments, "https://")) {
-		if idx := strings.Index(comments, "#"); idx >= 0 {
-			comments = comments[:idx]
-		}
-		if comments != "" {
-			return comments
-		}
-	}
 	if i.ActualGUID != "" && strings.Contains(i.ActualGUID, "://") {
 		return i.ActualGUID
 	}
 	if i.GUID != "" && strings.Contains(i.GUID, "://") {
 		return i.GUID
 	}
-	return i.Link
+	return ""
 }
 
 func NormalizeItem(item *Item) {
