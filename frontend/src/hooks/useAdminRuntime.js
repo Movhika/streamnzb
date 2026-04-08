@@ -86,12 +86,12 @@ export function useAdminRuntime({
       }
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const host = window.location.host
-      const pathParts = window.location.pathname.split('/').filter((part) => part !== '')
-      const tokenPrefix = pathParts.length > 0 && pathParts[0] !== 'api' ? `/${pathParts[0]}` : ''
-      const wsToken = authToken || (pathParts.length > 0 && pathParts[0] !== 'api' ? pathParts[0] : '')
-      const wsUrl = `${protocol}//${host}${tokenPrefix}/api/ws${wsToken ? `?token=${wsToken}` : ''}`
-      const socket = new WebSocket(wsUrl)
+      const wsEndpoint = new URL(getApiUrl('/api/ws'), window.location.origin)
+      wsEndpoint.protocol = protocol
+      if (authToken) {
+        wsEndpoint.searchParams.set('token', authToken)
+      }
+      const socket = new WebSocket(wsEndpoint.toString())
       activeSocketRef.current = socket
 
       socket.onopen = () => {

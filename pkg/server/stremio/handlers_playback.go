@@ -286,16 +286,9 @@ func (s *Server) buildStreamsForKey(ctx context.Context, key StreamSlotKey, stre
 	if list == nil || len(list.Candidates) == 0 {
 		return nil, nil, nil
 	}
-	if isAIOStreams {
-		list = filterPlaylistToAvailableForAIOStreams(list)
-		if list == nil || len(list.Candidates) == 0 {
-			return nil, nil, nil
-		}
-	}
-	if isAIOStreams {
-		if order := s.sessionManager.GetStreamFailoverOrder(streamToken(stream), key.CacheKey()); len(order) > 0 {
-			list = filterPlaylistByOrder(list, key, order)
-		}
+	list = s.applyExposedPlaylistOrder(list, key, stream)
+	if list == nil || len(list.Candidates) == 0 {
+		return nil, nil, nil
 	}
 	for _, slotPath := range list.SlotPaths {
 		s.sessionManager.ClearSlotFailedDuringPlayback(slotPath)
@@ -305,6 +298,23 @@ func (s *Server) buildStreamsForKey(ctx context.Context, key StreamSlotKey, stre
 	streamName := "StreamNZB"
 	showAll := streamResultsMode(stream) == "display_all"
 	return buildStreamsFromPlaylist(list, key, streamName, baseURL, showAll), list, nil
+}
+
+func (s *Server) applyExposedPlaylistOrder(list *playlistResult, key StreamSlotKey, stream *auth.Stream) *playlistResult {
+	if list == nil {
+		return nil
+	}
+	if !streamUsesAIOStreamsProfile(stream) {
+		return list
+	}
+	list = filterPlaylistToAvailableForAIOStreams(list)
+	if list == nil || len(list.Candidates) == 0 {
+		return list
+	}
+	if order := s.sessionManager.GetStreamFailoverOrder(streamToken(stream), key.CacheKey()); len(order) > 0 {
+		list = filterPlaylistByOrder(list, key, order)
+	}
+	return list
 }
 
 const defaultStreamID = "default"
@@ -718,6 +728,10 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 	if list == nil {
 		return nil, fmt.Errorf("build play list: no candidates found")
 	}
+	list = s.applyExposedPlaylistOrder(list, key, stream)
+	if list == nil || len(list.Candidates) == 0 {
+		return nil, fmt.Errorf("build play list: no candidates found")
+	}
 	return s.resolveStreamSlotFromPlaylist(key, index, list, stream)
 }
 
@@ -820,6 +834,10 @@ func (s *Server) advanceNextReleaseCursor(ctx context.Context, key StreamSlotKey
 	list, err := s.buildPlaylist(ctx, key, isAIOStreams, stream)
 	if err != nil || list == nil {
 		return "", err
+	}
+	list = s.applyExposedPlaylistOrder(list, key, stream)
+	if list == nil {
+		return "", nil
 	}
 	n := len(list.Candidates)
 	useSlotPaths := len(list.SlotPaths) == n
@@ -1593,50 +1611,32 @@ func (s *Server) deriveNextSlotID(ctx context.Context, currentID string, stream 
 	if err != nil || list == nil {
 		return "", err
 	}
+	list = s.applyExposedPlaylistOrder(list, key, stream)
+	if list == nil {
+		return "", nil
+	}
 	return s.deriveNextSlotIDFromPlaylist(currentID, key, currentIndex, list, stream), nil
 }
 
 func (s *Server) deriveNextSlotIDFromPlaylist(currentID string, key StreamSlotKey, currentIndex int, list *playlistResult, stream *auth.Stream) string {
 	n := len(list.Candidates)
 	useSlotPaths := len(list.SlotPaths) == n
-	isAIOStreams := streamUsesAIOStreamsProfile(stream)
-
-	// If the stream uses the AIOStreams profile and has a failover order, advance through that order.
-	order := []string(nil)
-	if isAIOStreams {
-		order = s.sessionManager.GetStreamFailoverOrder(streamToken(stream), key.CacheKey())
-	}
-	if len(order) > 0 {
-		ourPosition := -1
-		for p, entry := range order {
-			if entry == currentID {
-				ourPosition = p
+	startIndex := currentIndex + 1
+	if useSlotPaths {
+		startIndex = n
+		for i, slotPath := range list.SlotPaths {
+			if slotPath == currentID {
+				startIndex = i + 1
 				break
 			}
 		}
-		if ourPosition >= 0 {
-			for j := ourPosition + 1; j < len(order); j++ {
-				entry := order[j]
-				if !strings.HasPrefix(entry, streamSlotPrefix) {
-					continue
-				}
-				_, ct, eid, orderIndex, ok := parseStreamSlotID(entry)
-				if !ok || orderIndex < 0 || orderIndex >= n {
-					continue
-				}
-				if ct != key.ContentType || eid != key.ID {
-					continue
-				}
-				if !s.sessionManager.GetSlotFailedDuringPlayback(entry) {
-					return entry
-				}
-			}
-			return "" // exhausted the stream-provided order
+		if startIndex > n {
+			return ""
 		}
 	}
 
 	// Sequential fallback: increment index, skip slots already marked as failed.
-	for i := currentIndex + 1; i < n; i++ {
+	for i := startIndex; i < n; i++ {
 		slotPath := key.SlotPath(i)
 		if useSlotPaths {
 			slotPath = list.SlotPaths[i]
@@ -1661,6 +1661,10 @@ func (s *Server) switchToNextFallback(ctx context.Context, sess *session.Session
 	list, err := s.buildPlaylist(ctx, key, isAIOStreams, stream)
 	if err != nil || list == nil {
 		return nil, "", err
+	}
+	list = s.applyExposedPlaylistOrder(list, key, stream)
+	if list == nil {
+		return nil, "", nil
 	}
 	for {
 		nextID := s.deriveNextSlotIDFromPlaylist(currentID, key, currentIndex, list, stream)

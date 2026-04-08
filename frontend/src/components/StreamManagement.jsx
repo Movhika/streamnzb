@@ -47,6 +47,7 @@ function normalizeStreamDraft(draft) {
     results_mode: draft?.results_mode === 'display_all' ? 'display_all' : 'combined_stream',
     providers: uniquePreserveOrder(draft?.providers),
     indexers: uniquePreserveOrder(draft?.indexers),
+    indexer_overrides: draft?.indexer_overrides || {},
     movie_search_queries: uniquePreserveOrder(draft?.movie_search_queries),
     series_search_queries: uniquePreserveOrder(draft?.series_search_queries),
   }
@@ -63,6 +64,7 @@ function buildStreamDraft(stream) {
     results_mode: stream?.results_mode,
     providers: stream?.provider_selections || stream?.providers || [],
     indexers: stream?.indexer_selections || stream?.indexers || Object.keys(stream?.indexer_overrides || {}),
+    indexer_overrides: stream?.indexer_overrides || {},
     movie_search_queries: stream?.movie_search_queries || [],
     series_search_queries: stream?.series_search_queries || [],
   })
@@ -73,6 +75,24 @@ function buildIndexerOverrides(selectedIndexerNames, existingOverrides = {}) {
     acc[name] = existingOverrides?.[name] || {}
     return acc
   }, {})
+}
+
+function buildStreamStateFromDraft(username, token, draft, existingOverrides = {}) {
+  return {
+    username,
+    token: token || '',
+    filter_sorting_mode: draft.filter_sorting_mode,
+    indexer_mode: draft.indexer_mode,
+    use_availnzb: draft.use_availnzb,
+    combine_results: draft.combine_results,
+    enable_failover: draft.enable_failover,
+    results_mode: draft.results_mode,
+    provider_selections: draft.providers || [],
+    indexer_selections: draft.indexers || [],
+    indexer_overrides: buildIndexerOverrides(draft.indexers || [], draft.indexer_overrides || existingOverrides),
+    movie_search_queries: draft.movie_search_queries || [],
+    series_search_queries: draft.series_search_queries || [],
+  }
 }
 
 function generalCompactValues(stream) {
@@ -817,13 +837,21 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     setDialogSaving(true)
     showStatus(null)
     let created = false
+    let createdStream = null
     try {
-      await apiFetch('/api/streams', {
+      const payload = await apiFetch('/api/streams', {
         method: 'POST',
         body: JSON.stringify({ username: draft.username }),
       })
       created = true
-      await saveStreamAssignments(draft.username, draft, null)
+      createdStream = payload?.user || null
+      await saveStreamAssignments(draft.username, draft, draft)
+      setStreams((prev) => {
+        const next = prev.filter((stream) => stream.username !== draft.username)
+        next.push(buildStreamStateFromDraft(draft.username, createdStream?.token || '', draft, draft.indexer_overrides))
+        onStreamsChange?.(mapStreamsByUsername(next))
+        return next
+      })
       const status = { type: 'success', message: `Stream "${draft.username}" created successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
@@ -861,6 +889,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
       results_mode: stream.results_mode,
       providers: stream.provider_selections || [],
       indexers: stream.indexer_selections || Object.keys(stream.indexer_overrides || {}),
+      indexer_overrides: stream.indexer_overrides || {},
       movie_search_queries: stream.movie_search_queries || [],
       series_search_queries: stream.series_search_queries || [],
     })
@@ -876,6 +905,15 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     try {
       await saveStreamAssignments(editingStream.username, draft, editingStream)
       saved = true
+      setStreams((prev) => {
+        const next = prev.map((stream) =>
+          stream.username === editingStream.username
+            ? buildStreamStateFromDraft(editingStream.username, stream.token, draft, editingStream.indexer_overrides)
+            : stream
+        )
+        onStreamsChange?.(mapStreamsByUsername(next))
+        return next
+      })
       const status = { type: 'success', message: `Stream "${editingStream.username}" saved successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
@@ -899,6 +937,11 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     try {
       await apiFetch(`/api/streams/${encodeURIComponent(username)}`, { method: 'DELETE' })
       deleted = true
+      setStreams((prev) => {
+        const next = prev.filter((stream) => stream.username !== username)
+        onStreamsChange?.(mapStreamsByUsername(next))
+        return next
+      })
       const status = { type: 'success', message: `Stream "${username}" deleted successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)

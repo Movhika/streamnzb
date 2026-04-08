@@ -155,6 +155,16 @@ function buildContentKey(attempt) {
   return [attempt.stream_name || 'default', attempt.content_type || '', identity].join('::')
 }
 
+function getSafeReleaseUrl(value) {
+  if (!value) return ''
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : ''
+  } catch {
+    return ''
+  }
+}
+
 function buildRequestGroups(attempts) {
   const byContent = new Map()
   attempts.forEach((attempt) => {
@@ -656,9 +666,9 @@ export function NZBHistoryPage({ refreshTrigger }) {
                       {copiedAttemptId === selectedAttempt.id ? <Check className="size-4" /> : <Copy className="size-4" />}
                       {copiedAttemptId === selectedAttempt.id ? 'Copied' : 'Copy bad match'}
                     </Button>
-                    {selectedAttempt.release_url ? (
+                    {getSafeReleaseUrl(selectedAttempt.release_url) ? (
                       <a
-                        href={selectedAttempt.release_url}
+                        href={getSafeReleaseUrl(selectedAttempt.release_url)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex w-full min-w-0 items-center justify-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium shadow-xs hover:bg-accent hover:text-accent-foreground"

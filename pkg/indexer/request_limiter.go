@@ -40,13 +40,19 @@ func (l *RequestLimiter) Wait(ctx context.Context) error {
 	if l.nextAllowed.Before(now) {
 		l.nextAllowed = now
 	}
+	prevNext := l.nextAllowed
 	wait := l.nextAllowed.Sub(now)
 	l.nextAllowed = l.nextAllowed.Add(l.interval)
-	l.mu.Unlock()
-
 	if wait <= 0 {
-		return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			l.nextAllowed = prevNext
+			l.mu.Unlock()
+			return err
+		}
+		l.mu.Unlock()
+		return nil
 	}
+	l.mu.Unlock()
 
 	timer := time.NewTimer(wait)
 	defer timer.Stop()

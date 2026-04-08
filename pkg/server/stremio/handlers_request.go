@@ -32,10 +32,13 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 			return
 		}
 
-		isStremioRoute := path == "/manifest.json" || path == FailoverOrderPath || strings.HasPrefix(path, "/stream/") || strings.HasPrefix(path, "/play/") || strings.HasPrefix(path, "/next/") || strings.HasPrefix(path, "/debug/play")
-
 		trimmedPath := strings.TrimPrefix(path, "/")
 		parts := strings.SplitN(trimmedPath, "/", 2)
+		effectivePath := path
+		if len(parts) == 2 && parts[0] != "" {
+			effectivePath = "/" + parts[1]
+		}
+		isStremioRoute := effectivePath == "/manifest.json" || effectivePath == FailoverOrderPath || strings.HasPrefix(effectivePath, "/stream/") || strings.HasPrefix(effectivePath, "/play/") || strings.HasPrefix(effectivePath, "/next/") || strings.HasPrefix(effectivePath, "/debug/play")
 
 		if len(parts) >= 1 && parts[0] != "" {
 			token := parts[0]

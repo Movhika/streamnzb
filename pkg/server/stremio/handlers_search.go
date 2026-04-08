@@ -523,6 +523,7 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 		}
 		for _, queryVariant := range queryVariants {
 			reqVariant := profileParams.Req
+			reqVariant.Limit = effectiveLimit
 			if searchMode != "id" {
 				reqVariant.Query = queryVariant
 				reqVariant.FilterQuery = queryVariant

@@ -295,7 +295,7 @@ func TestBuildRawSearchResultShortCircuitsWhenMetadataCannotBeResolved(t *testin
 		SeriesSearchQueries: []string{"TVQuery01"},
 	}
 
-	raw, err := srv.buildRawSearchResult(t.Context(), "tv", "stremevent_866", stream)
+	raw, err := srv.buildRawSearchResult(t.Context(), "series", "stremevent_866", stream)
 	if err != nil {
 		t.Fatalf("buildRawSearchResult() error = %v", err)
 	}
