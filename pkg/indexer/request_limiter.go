@@ -30,6 +30,9 @@ func (l *RequestLimiter) Wait(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	now := time.Now()
 
@@ -42,7 +45,7 @@ func (l *RequestLimiter) Wait(ctx context.Context) error {
 	l.mu.Unlock()
 
 	if wait <= 0 {
-		return nil
+		return ctx.Err()
 	}
 
 	timer := time.NewTimer(wait)

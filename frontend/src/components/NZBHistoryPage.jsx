@@ -26,6 +26,9 @@ function formatAttemptResult(attempt) {
 function shortReason(reason) {
   const value = (reason || '').toLowerCase()
   if (!value) return ''
+  if (value.includes('download limit reached') || value.includes('api limit reached') || value.includes('request limit reached')) return 'Limit'
+  if (value.includes('playback startup timeout') || value.includes('timed out') || value.includes('context deadline exceeded')) return 'Timeout'
+  if (value.includes('probe inspect') || value.includes('probe:') || value.includes('invalid container header')) return 'Probe'
   if (value.includes('430') || value.includes('segment unavailable') || value.includes('not found')) return 'Segment'
   if (value.includes('eof')) return 'EOF'
   if (value.includes('corrupt') || value.includes('rapidyenc') || value.includes('yenc')) return 'Corrupt'
@@ -33,6 +36,13 @@ function shortReason(reason) {
   if (value.includes('encrypted')) return 'Encrypted'
   if (value.includes('episode target not found') || value.includes('no file')) return 'No file'
   return 'Error'
+}
+
+function attemptBadgeClass(attempt, reasonLabel) {
+  if (attempt.success) return 'bg-green-600 text-white hover:bg-green-600 hover:text-white dark:text-black'
+  if (attempt.preload) return 'bg-muted text-foreground hover:bg-muted'
+  if (reasonLabel === 'Limit') return 'bg-slate-500 text-white hover:bg-slate-500 hover:text-white dark:bg-slate-400 dark:text-black'
+  return 'bg-red-500 text-white hover:bg-red-500 hover:text-white dark:bg-red-500 dark:text-black'
 }
 
 function formatDateTime(value) {
@@ -141,7 +151,8 @@ function matchesStream(attempt, streamName) {
 }
 
 function buildContentKey(attempt) {
-  return [attempt.content_type || '', attempt.content_id || '', attempt.content_title || ''].join('::')
+  const identity = attempt.content_id || attempt.content_title || ''
+  return [attempt.content_type || '', identity].join('::')
 }
 
 function buildRequestGroups(attempts) {
@@ -540,6 +551,8 @@ export function NZBHistoryPage({ refreshTrigger }) {
                                   <button
                                     type="button"
                                     onClick={() => toggleGroup(group.key)}
+                                    aria-label={`${expanded ? 'Collapse' : 'Expand'} attempts for ${group.title}`}
+                                    aria-expanded={expanded}
                                     className="inline-flex items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
                                   >
                                     {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
@@ -569,11 +582,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                                                   <div className="flex items-center justify-center pl-5">
                                                     <Badge
                                                       variant={attempt.success ? 'default' : attempt.preload ? 'secondary' : 'destructive'}
-                                                      className={cn(
-                                                        attempt.success && 'bg-green-600 text-white hover:bg-green-600 hover:text-white dark:text-black',
-                                                        attempt.preload && 'bg-muted text-foreground hover:bg-muted',
-                                                        !attempt.success && !attempt.preload && 'bg-red-500 text-white hover:bg-red-500 hover:text-white dark:bg-red-500 dark:text-black'
-                                                      )}
+                                                      className={attemptBadgeClass(attempt, reasonLabel)}
                                                     >
                                                       {attemptBadgeLabel}
                                                     </Badge>

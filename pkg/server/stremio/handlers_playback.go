@@ -597,17 +597,7 @@ func hasResolvedIdentifiers(req indexer.SearchRequest) bool {
 }
 
 func hasPreparedTextQueries(req indexer.SearchRequest) bool {
-	if strings.TrimSpace(req.Query) != "" || strings.TrimSpace(req.FilterQuery) != "" {
-		return true
-	}
-	for _, queries := range req.PerIndexerQuery {
-		for _, query := range queries {
-			if strings.TrimSpace(query) != "" {
-				return true
-			}
-		}
-	}
-	return false
+	return strings.TrimSpace(req.Query) != "" || strings.TrimSpace(req.FilterQuery) != ""
 }
 
 func looksLikeTMDBID(value string) bool {
@@ -663,14 +653,6 @@ func applyStreamIndexerSelection(req *indexer.SearchRequest, stream *auth.Stream
 		effective.DisableStringSearch = &disableText
 	}
 
-	if req.PerIndexerQuery == nil {
-		return
-	}
-	for name := range req.PerIndexerQuery {
-		if _, ok := selected[name]; !ok {
-			delete(req.PerIndexerQuery, name)
-		}
-	}
 }
 
 func formatStreamSlotPath(streamID, contentType, id string, index int) string {
@@ -730,8 +712,11 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 	}
 	isAIOStreams := streamUsesAIOStreamsProfile(stream)
 	list, err := s.buildPlaylist(ctx, key, isAIOStreams, stream)
-	if err != nil || list == nil {
+	if err != nil {
 		return nil, fmt.Errorf("build play list: %w", err)
+	}
+	if list == nil {
+		return nil, fmt.Errorf("build play list: no candidates found")
 	}
 	n := len(list.Candidates)
 	if index < 0 || index >= n {
@@ -942,6 +927,16 @@ func isPlayPrepareCancellation(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
+func isIndexerLimitErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := strings.ToLower(err.Error())
+	return strings.Contains(value, "download limit reached") ||
+		strings.Contains(value, "api limit reached") ||
+		strings.Contains(value, "request limit reached")
+}
+
 type playbackSourceOpenResult struct {
 	stream io.ReadSeekCloser
 	err    error
@@ -1053,9 +1048,12 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, streamConfig
 			if errors.Is(prepareErr, ErrPlaybackStartupTimeout) {
 				logger.Warn("Playback startup timed out", "session", sessionID, "err", prepareErr)
 			}
-			// Always mark slot as permanently failed when we abandon it, so future retries on the same URL
-			// get a redirect instead of a 404.
-			s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
+			temporaryLimitErr := isIndexerLimitErr(prepareErr)
+			// Indexer limit errors are temporary and should not poison the slot for later retries
+			// after the quota resets or is raised manually.
+			if !temporaryLimitErr {
+				s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
+			}
 			if (isSegmentUnavailableErr(prepareErr) || isDataCorruptErr(prepareErr)) && s.availReporter != nil {
 				s.availReporter.ReportBad(sess, prepareErr.Error())
 			}
@@ -1069,7 +1067,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, streamConfig
 				}(sessionID, sess.Done())
 			}
 			s.sessionManager.DeleteSession(sessionID)
-			if streamFailoverEnabled(streamConfig) {
+			if !temporaryLimitErr && streamFailoverEnabled(streamConfig) {
 				if nextSess, nextID, switchErr := s.switchToNextFallback(r.Context(), sess, streamConfig); nextID != "" && switchErr == nil {
 					logger.Info("Trying next fallback slot (internal)", "from", sessionID, "to", nextID, "err", prepareErr)
 					sess, sessionID = nextSess, nextID

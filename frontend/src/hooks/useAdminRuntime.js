@@ -86,7 +86,13 @@ export function useAdminRuntime({
       socket.onmessage = (event) => {
         if (hasLoggedOutRef.current) return
 
-        const msg = JSON.parse(event.data)
+        let msg
+        try {
+          msg = JSON.parse(event.data)
+        } catch (err) {
+          console.error('Failed to parse websocket message', err)
+          return
+        }
         switch (msg.type) {
           case 'stats': {
             const data = msg.payload

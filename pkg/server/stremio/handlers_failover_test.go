@@ -124,3 +124,27 @@ func TestClassifyPlaybackStartupErrPreservesParentCancellation(t *testing.T) {
 		t.Fatalf("expected canceled prepare error to stay classified as cancellation, got %v", err)
 	}
 }
+
+func TestIsIndexerLimitErr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "download limit", err: errors.New("failed to lazy download NZB: download limit reached for Easynews"), want: true},
+		{name: "api limit", err: errors.New("API limit reached for NZBPlanet"), want: true},
+		{name: "request limit", err: errors.New("NzbPlanet request limit reached (code 429): daily quota exhausted"), want: true},
+		{name: "segment unavailable", err: errors.New("segment unavailable: first segment not found (430)"), want: false},
+		{name: "nil", err: nil, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isIndexerLimitErr(tt.err); got != tt.want {
+				t.Fatalf("isIndexerLimitErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}

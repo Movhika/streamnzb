@@ -161,6 +161,62 @@ func TestBuildSearchParamsFromBaseSeriesTextQueryModeKeepsSeasonEpisodeForLaterD
 	}
 }
 
+func TestBuildSearchParamsFromBaseTextModeUsesRequestLanguageNotPerIndexerOverrides(t *testing.T) {
+	srv := &Server{config: &config.Config{
+		Indexers: []config.IndexerConfig{
+			{Name: "IndexerA", SearchTitleLanguage: "de"},
+			{Name: "IndexerB", SearchTitleLanguage: "en"},
+			{Name: "Easynews", Type: "easynews", SearchTitleLanguage: "fr"},
+		},
+	}}
+	base := &SearchParams{
+		ContentType: "movie",
+		ID:          "tt0110357",
+		Req: indexer.SearchRequest{
+			IMDbID: "tt0110357",
+			Cat:    "2000",
+			Limit:  1000,
+		},
+		Metadata: &resolvedSearchMetadata{
+			MovieDetails: &tmdb.MovieDetails{
+				Title:            "The Lion King",
+				OriginalTitle:    "The Lion King",
+				OriginalLanguage: "en",
+				ReleaseDate:      "1994-06-15",
+			},
+			MovieTranslations: &tmdb.MovieTranslationsResponse{
+				Translations: []tmdb.MovieTranslationEntry{
+					{
+						ISO639_1:  "de",
+						ISO3166_1: "DE",
+						Data: tmdb.MovieTranslationData{
+							Title: "König der Löwen",
+						},
+					},
+				},
+			},
+		},
+		MovieTitleQueries:  make(map[string][]string),
+		SeriesTitleQueries: make(map[string][]string),
+	}
+
+	params, err := srv.buildSearchParamsFromBase(base, &config.SearchQueryConfig{
+		SearchMode:              "text",
+		SearchTitleLanguage:     "de-DE",
+		IncludeYearInTextSearch: boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
+	}
+
+	if params.Req.Query != "Koenig der Loewen" {
+		t.Fatalf("expected request-level localized query, got %q", params.Req.Query)
+	}
+	if params.Req.FilterQuery != "Koenig der Loewen" {
+		t.Fatalf("expected filter query to match request query, got %q", params.Req.FilterQuery)
+	}
+}
+
 func TestBuildSearchParamsBaseNumericIDMapsToTMDBID(t *testing.T) {
 	srv := &Server{config: &config.Config{}}
 
@@ -204,12 +260,6 @@ func TestHasPreparedTextQueries(t *testing.T) {
 	}
 	if !hasPreparedTextQueries(indexer.SearchRequest{FilterQuery: "Invincible S01E04"}) {
 		t.Fatal("expected filter query to count as prepared text query")
-	}
-	if !hasPreparedTextQueries(indexer.SearchRequest{PerIndexerQuery: map[string][]string{"NzbPlanet": {"Invincible 2021"}}}) {
-		t.Fatal("expected per-indexer query to count as prepared text query")
-	}
-	if hasPreparedTextQueries(indexer.SearchRequest{PerIndexerQuery: map[string][]string{"NzbPlanet": {"", "   "}}}) {
-		t.Fatal("expected blank per-indexer queries not to count as prepared text query")
 	}
 }
 

@@ -237,12 +237,25 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 	}
 }
 
+func (c *Client) requestContext() (context.Context, context.CancelFunc) {
+	if timeout := c.client.Timeout; timeout > 0 {
+		return context.WithTimeout(context.Background(), timeout)
+	}
+	return context.Background(), func() {}
+}
+
+func (c *Client) waitForRateLimit(ctx context.Context) error {
+	return c.requestLimiter.Wait(ctx)
+}
+
 func (c *Client) Ping() error {
-	if err := c.requestLimiter.Wait(context.Background()); err != nil {
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	if err := c.waitForRateLimit(ctx); err != nil {
 		return err
 	}
 	apiURL := fmt.Sprintf("%s%s?t=caps&apikey=%s", c.baseURL, c.apiPath, c.apiKey)
-	req, err := http.NewRequest("GET", apiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return err
 	}
@@ -260,14 +273,16 @@ func (c *Client) Ping() error {
 }
 
 func (c *Client) GetCaps() (*indexer.Caps, error) {
-	if err := c.requestLimiter.Wait(context.Background()); err != nil {
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	if err := c.waitForRateLimit(ctx); err != nil {
 		return nil, err
 	}
 	apiURL := fmt.Sprintf("%s%s?t=caps", c.baseURL, c.apiPath)
 	if c.apiKey != "" {
 		apiURL += "&apikey=" + url.QueryEscape(c.apiKey)
 	}
-	req, err := http.NewRequest("GET", apiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create caps request: %w", err)
 	}
@@ -334,7 +349,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if err := c.checkAPILimit(); err != nil {
 		return nil, err
 	}
-	if err := c.requestLimiter.Wait(context.Background()); err != nil {
+	ctx, cancel := c.requestContext()
+	defer cancel()
+	if err := c.waitForRateLimit(ctx); err != nil {
 		return nil, err
 	}
 
@@ -392,11 +409,11 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			params.Set("t", "search")
 		}
 	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
+		useTVSearchParams = req.UseSeasonEpisodeParams && (req.Season != "" || req.Episode != "")
 		if isTextMode {
 			params.Set("t", "search")
 		} else {
 			params.Set("t", "tvsearch")
-			useTVSearchParams = true
 		}
 	} else {
 		params.Set("t", "search")
@@ -456,7 +473,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		"limit", limit,
 	)
 
-	httpReq, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

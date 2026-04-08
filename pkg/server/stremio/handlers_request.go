@@ -203,14 +203,18 @@ type failoverOrderRequest struct {
 }
 
 func (s *Server) handleFailoverOrder(w http.ResponseWriter, r *http.Request, stream *auth.Stream) {
+	if stream == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	logger.Debug("Failover order request", "stream", stream.Username, "method", r.Method, "url", r.URL.Path)
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	r.Body.Close()
+	defer r.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
@@ -418,7 +422,7 @@ func buildStreamsFromPlaylist(list *playlistResult, key StreamSlotKey, streamNam
 			nextURL := baseURL + "/next/" + nextPath
 			nextName := nameLeft + " (next release)"
 			nextDesc := "StreamNZB\nTry next release in list"
-			nextFailoverId := "streamnzb-" + nextPath
+			nextFailoverId := "streamnzb-next-" + nextPath
 			nextHints := streamBehaviorHints(nameLeft, key.StreamID, nil, nil, nameLeft)
 			streams = append(streams, Stream{
 				FailoverID:    nextFailoverId,

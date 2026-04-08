@@ -51,7 +51,6 @@ type SearchRequest struct {
 	RequestLabel           string `json:"-"`
 
 	EffectiveByIndexer map[string]*config.IndexerSearchConfig `json:"-"`
-	PerIndexerQuery    map[string][]string                    `json:"-"`
 
 	OptionalOverrides *config.IndexerSearchConfig `json:"-"`
 }
@@ -157,6 +156,9 @@ func (i *Item) ToRelease() *release.Release {
 func (i *Item) ReleaseDetailsURL() string {
 	if i.ActualGUID != "" && strings.Contains(i.ActualGUID, "://") {
 		return i.ActualGUID
+	}
+	if i.Comments != "" && strings.Contains(i.Comments, "://") {
+		return i.Comments
 	}
 	if i.GUID != "" && strings.Contains(i.GUID, "://") {
 		return i.GUID

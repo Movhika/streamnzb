@@ -339,7 +339,13 @@ function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', provid
     setWasOpen(open)
   }, [open, initialStream, nextIndex, isEditing, wasOpen, dialogIdentity, lastDialogIdentity])
 
-  const normalizedInitial = JSON.stringify(buildStreamDraft(isEditing ? initialStream : null))
+  const normalizedInitial = JSON.stringify((() => {
+    const base = buildStreamDraft(initialStream)
+    if (!isEditing && !base.username) {
+      base.username = defaultStreamName(nextIndex)
+    }
+    return base
+  })())
   const normalizedCurrent = JSON.stringify(normalizeStreamDraft(draft))
   const isDirty = normalizedInitial !== normalizedCurrent
   const aiostreamsMode = draft.filter_sorting_mode === 'aiostreams'
@@ -800,27 +806,46 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     })
   }
 
+  const refreshStreamsAfterMutation = async () => {
+    try {
+      await fetchStreams(false)
+    } catch {
+      // fetchStreams already reports refresh problems.
+    }
+  }
+
   const handleCreateStream = async (draft) => {
     setDialogSaving(true)
     showStatus(null)
+    let created = false
     try {
       await apiFetch('/api/streams', {
         method: 'POST',
         body: JSON.stringify({ username: draft.username }),
       })
+      created = true
       await saveStreamAssignments(draft.username, draft, null)
       const status = { type: 'success', message: `Stream "${draft.username}" created successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
       setAddDialogDraft(null)
       setShowAddDialog(false)
-      await fetchStreams(false)
     } catch (err) {
+      if (created) {
+        try {
+          await apiFetch(`/api/streams/${encodeURIComponent(draft.username)}`, { method: 'DELETE' })
+        } catch {
+          // Preserve the original create error below.
+        }
+      }
       const status = { type: 'error', message: err.message || 'Failed to create stream' }
       showStatus(status)
       showFooterStatus(status)
     } finally {
       setDialogSaving(false)
+    }
+    if (created) {
+      await refreshStreamsAfterMutation()
     }
   }
 
@@ -848,13 +873,14 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     if (!editingStream) return
     setDialogSaving(true)
     showStatus(null)
+    let saved = false
     try {
       await saveStreamAssignments(editingStream.username, draft, editingStream)
+      saved = true
       const status = { type: 'success', message: `Stream "${editingStream.username}" saved successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
       setEditingStream(null)
-      await fetchStreams(false)
     } catch (err) {
       const status = { type: 'error', message: err.message || 'Failed to save stream' }
       showStatus(status)
@@ -862,23 +888,30 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     } finally {
       setDialogSaving(false)
     }
+    if (saved) {
+      await refreshStreamsAfterMutation()
+    }
   }
 
   const handleDeleteStream = async (username) => {
     setActionLoading(`delete-${username}`)
     showStatus(null)
+    let deleted = false
     try {
       await apiFetch(`/api/streams/${encodeURIComponent(username)}`, { method: 'DELETE' })
+      deleted = true
       const status = { type: 'success', message: `Stream "${username}" deleted successfully.${CACHE_CLEARED_SUFFIX}` }
       showStatus(status)
       showFooterStatus(status)
-      await fetchStreams(false)
     } catch (err) {
       const status = { type: 'error', message: err.message || 'Failed to delete stream' }
       showStatus(status)
       showFooterStatus(status)
     } finally {
       setActionLoading(null)
+    }
+    if (deleted) {
+      await refreshStreamsAfterMutation()
     }
   }
 

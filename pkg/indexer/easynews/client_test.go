@@ -102,3 +102,89 @@ func TestLimitChecksRefreshDailyUsageAfterRollover(t *testing.T) {
 		t.Fatalf("checkDownloadLimit() error = %v, want nil after rollover refresh", err)
 	}
 }
+
+func TestBuildEasynewsGPSQuery(t *testing.T) {
+	tests := []struct {
+		name                   string
+		query                  string
+		season                 string
+		episode                string
+		useSeasonEpisodeParams bool
+		category               string
+		want                   string
+	}{
+		{
+			name:                   "tv param mode appends season and episode",
+			query:                  "The Last of Us",
+			season:                 "1",
+			episode:                "2",
+			useSeasonEpisodeParams: true,
+			category:               "5000",
+			want:                   "The Last of Us S01E02",
+		},
+		{
+			name:                   "tv query mode keeps prepared query unchanged",
+			query:                  "The Last of Us S01E02",
+			season:                 "1",
+			episode:                "2",
+			useSeasonEpisodeParams: false,
+			category:               "5000",
+			want:                   "The Last of Us S01E02",
+		},
+		{
+			name:                   "movie query unchanged",
+			query:                  "The Age of Adaline 2015",
+			season:                 "1",
+			episode:                "2",
+			useSeasonEpisodeParams: true,
+			category:               "2000",
+			want:                   "The Age of Adaline 2015",
+		},
+		{
+			name:                   "normalizes german punctuation and umlauts",
+			query:                  "Bube, Dame, König, grAS",
+			useSeasonEpisodeParams: false,
+			category:               "5000",
+			want:                   "Bube Dame Koenig grAS",
+		},
+		{
+			name:                   "normalizes original punctuation",
+			query:                  "Lock, Stock & Two Smoking Barrels",
+			useSeasonEpisodeParams: false,
+			category:               "2000",
+			want:                   "Lock Stock Two Smoking Barrels",
+		},
+		{
+			name:                   "normalizes colon punctuation",
+			query:                  "Avatar: Fire and Ash",
+			useSeasonEpisodeParams: false,
+			category:               "2000",
+			want:                   "Avatar Fire and Ash",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildEasynewsGPSQuery(tt.query, tt.season, tt.episode, tt.useSeasonEpisodeParams, tt.category); got != tt.want {
+				t.Fatalf("buildEasynewsGPSQuery() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeEasynewsQuery(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"Bube, Dame, König, grAS", "Bube Dame Koenig grAS"},
+		{"Lock, Stock & Two Smoking Barrels", "Lock Stock Two Smoking Barrels"},
+		{"Avatar: Fire and Ash", "Avatar Fire and Ash"},
+	}
+
+	for _, tt := range tests {
+		if got := normalizeEasynewsQuery(tt.in); got != tt.want {
+			t.Fatalf("normalizeEasynewsQuery(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

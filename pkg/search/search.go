@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
@@ -58,44 +57,15 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 	_ = cfg
 
 	runIDSearch := strings.EqualFold(strings.TrimSpace(req.SearchMode), "id")
-	var idReq indexer.SearchRequest
-	if runIDSearch {
-		idReq = req
-		idReq.Query = ""
-		idReq.PerIndexerQuery = nil
-	}
+	searchReq := req
 
-	var textReq *indexer.SearchRequest
 	filterQuery := req.FilterQuery
 	if filterQuery == "" {
 		filterQuery = BuildFilterQuery(tmdbClient, req, contentType, contentIDs, imdbForText, tmdbForText)
 	}
 
-	usePerIndexerQuery := len(req.PerIndexerQuery) > 0
-
-	if usePerIndexerQuery {
-		textReq = &indexer.SearchRequest{
-			Cat:                    req.Cat,
-			Limit:                  req.Limit,
-			IMDbID:                 req.IMDbID,
-			TMDBID:                 req.TMDBID,
-			TVDBID:                 req.TVDBID,
-			EffectiveByIndexer:     req.EffectiveByIndexer,
-			PerIndexerQuery:        req.PerIndexerQuery,
-			UseSeasonEpisodeParams: req.UseSeasonEpisodeParams,
-			SearchMode:             "text",
-			IndexerMode:            req.IndexerMode,
-			StreamLabel:            req.StreamLabel,
-			RequestLabel:           req.RequestLabel,
-		}
-		if req.UseSeasonEpisodeParams {
-			textReq.Season = req.Season
-			textReq.Episode = req.Episode
-		}
-	} else if !runIDSearch && strings.TrimSpace(req.Query) != "" {
-		textReqCopy := req
-		textReqCopy.SearchMode = "text"
-		textReq = &textReqCopy
+	if !runIDSearch && strings.TrimSpace(req.Query) != "" {
+		searchReq.SearchMode = "text"
 	}
 
 	filterAggregator := func(base indexer.Indexer, request indexer.SearchRequest, textMode bool) indexer.Indexer {
@@ -109,19 +79,10 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 			if request.EffectiveByIndexer != nil {
 				overrides = request.EffectiveByIndexer[idxr.Name()]
 			}
-			if textMode && request.PerIndexerQuery != nil && len(request.PerIndexerQuery[idxr.Name()]) == 0 {
-				continue
-			}
 			reqCopy := request
 			reqCopy.EffectiveByIndexer = nil
-			reqCopy.PerIndexerQuery = nil
 			reqCopy.OptionalOverrides = overrides
-			if textMode {
-				if queries := request.PerIndexerQuery[idxr.Name()]; len(queries) > 0 {
-					reqCopy.Query = queries[0]
-				} else if reqCopy.Query == "" {
-					reqCopy.Query = "__prepared_text_query__"
-				}
+			if textMode && reqCopy.Query != "" {
 				reqCopy.SearchMode = "text"
 			}
 			if indexer.ShouldSkipIndexerForRequest(reqCopy, overrides) {
@@ -139,107 +100,57 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 	// inside the Aggregator.Search method as a fallback, but we prefilter here so only
 	// relevant indexers participate in each request path.
 
-	var idResp *indexer.SearchResponse
-	var idErr error
-	var textReleases []*release.Release
-	var textErr error
-	var wg sync.WaitGroup
+	idxForMode := filterAggregator(idx, searchReq, !runIDSearch)
+	if idxForMode == nil {
+		return nil, nil
+	}
 
-	if runIDSearch {
-		idIdx := filterAggregator(idx, idReq, false)
-		if idIdx != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				idResp, idErr = idIdx.Search(idReq)
-			}()
-		} else {
-			idResp = &indexer.SearchResponse{}
+	resp, err := idxForMode.Search(searchReq)
+	if err != nil {
+		if runIDSearch {
+			return nil, fmt.Errorf("indexer search failed: %w", err)
 		}
-	}
-
-	if textReq != nil {
-		textIdx := filterAggregator(idx, *textReq, true)
-		if textIdx != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if resp, err := textIdx.Search(*textReq); err == nil {
-					indexer.NormalizeSearchResponse(resp)
-					textReleases = resp.Releases
-				} else {
-					textErr = err
-				}
-			}()
-		} else {
-			textReleases = nil
-		}
-	}
-
-	wg.Wait()
-
-	if idErr != nil {
-		return nil, fmt.Errorf("indexer search failed: %w", idErr)
-	}
-	if textErr != nil {
 		logger.Warn("Stream text search failed",
 			"stream", req.StreamLabel,
 			"request", req.RequestLabel,
-			"err", textErr,
+			"err", err,
 		)
+		return nil, nil
 	}
-	if idResp != nil {
-		indexer.NormalizeSearchResponse(idResp)
+	indexer.NormalizeSearchResponse(resp)
+
+	rawReleases := resp.Releases
+	var releases []*release.Release
+	for _, rel := range rawReleases {
+		if rel != nil {
+			if runIDSearch {
+				rel.QuerySource = "id"
+			} else {
+				rel.QuerySource = "text"
+			}
+			releases = append(releases, rel)
+		}
 	}
 
-	var idReleases []*release.Release
-	if idResp != nil {
-		idReleases = idResp.Releases
+	if filterQuery != "" && !req.DisableResultFiltering {
+		releases = FilterResults(releases, contentType, filterQuery, req.Season, req.Episode)
 	}
-	var releases []*release.Release
+
 	switch {
-	case len(textReleases) > 0:
-		for _, rel := range textReleases {
-			if rel != nil {
-				rel.QuerySource = "text"
-				releases = append(releases, rel)
-			}
-		}
+	case !runIDSearch:
 		logger.Debug("Search request finished",
 			"stream", req.StreamLabel,
 			"request", req.RequestLabel,
 			"mode", "text",
-			"raw_results", len(textReleases),
-		)
-	case len(idReleases) > 0:
-		for _, rel := range idReleases {
-			if rel != nil {
-				rel.QuerySource = "id"
-				releases = append(releases, rel)
-			}
-		}
-		logger.Debug("Search request finished",
-			"stream", req.StreamLabel,
-			"request", req.RequestLabel,
-			"mode", "id",
-			"raw_results", len(idReleases),
+			"raw_results", len(rawReleases),
 		)
 	default:
 		logger.Debug("Search request finished",
 			"stream", req.StreamLabel,
 			"request", req.RequestLabel,
-			"mode", func() string {
-				if runIDSearch {
-					return "id"
-				}
-				return "text"
-			}(),
-			"raw_results", 0,
+			"mode", "id",
+			"raw_results", len(rawReleases),
 		)
-	}
-
-	if filterQuery != "" && !req.DisableResultFiltering {
-		releases = FilterResults(releases, contentType, filterQuery, req.Season, req.Episode)
 	}
 	return releases, nil
 }

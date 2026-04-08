@@ -851,11 +851,13 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 	contentType := params.ContentType
 	req := &params.Req
 	searchMode := ""
+	searchTitleLanguage := ""
 	includeYearInTextSearch := true
 	useSeasonEpisodeParams := true
 	var queryIndexerConfig *config.IndexerSearchConfig
 	if searchQuery != nil {
 		searchMode = strings.ToLower(strings.TrimSpace(searchQuery.SearchMode))
+		searchTitleLanguage = strings.TrimSpace(searchQuery.SearchTitleLanguage)
 		queryIndexerConfig = searchQuery.AsIndexerSearchConfig()
 		if searchQuery.IncludeYearInTextSearch != nil {
 			includeYearInTextSearch = *searchQuery.IncludeYearInTextSearch
@@ -867,7 +869,6 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 	req.UseSeasonEpisodeParams = useSeasonEpisodeParams
 	req.SearchMode = "text"
 	req.Query = ""
-	req.PerIndexerQuery = nil
 	req.FilterQuery = ""
 	if searchMode == "id" {
 		req.SearchMode = "id"
@@ -902,69 +903,33 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 			indexerTypeByName[ic.Name] = ic.Type
 		}
 		if searchMode != "id" {
-			req.PerIndexerQuery = make(map[string][]string)
-		}
-		if searchMode != "id" {
-			if contentType == "movie" {
-				for name, eff := range req.EffectiveByIndexer {
-					includeYear := includeYearInTextSearch
-					if strings.EqualFold(indexerTypeByName[name], "easynews") {
-						includeYear = false
-					}
-					lang := ""
-					if eff.SearchTitleLanguage != nil {
-						lang = *eff.SearchTitleLanguage
-					}
-					cacheKey := fmt.Sprintf("%s|%t", lang, includeYear)
-					if queries, ok := params.MovieTitleQueries[cacheKey]; ok {
-						req.PerIndexerQuery[name] = queries
-						continue
-					}
-					queries := buildMovieQueriesFromMetadata(params.Metadata, lang, includeYear)
-					if len(queries) == 0 {
-						logger.Debug("Prepared movie search titles failed", "stream", req.StreamLabel, "request", req.RequestLabel, "language", lang, "err", "metadata unavailable")
-						continue
-					}
-					params.MovieTitleQueries[cacheKey] = queries
-					req.PerIndexerQuery[name] = queries
-				}
-			} else if req.Season != "" && req.Episode != "" {
-				for name, eff := range req.EffectiveByIndexer {
-					includeYear := includeYearInTextSearch
-					if strings.EqualFold(indexerTypeByName[name], "easynews") {
-						includeYear = false
-					}
-					lang := ""
-					if eff.SearchTitleLanguage != nil {
-						lang = *eff.SearchTitleLanguage
-					}
-					cacheKey := fmt.Sprintf("%s|%t", lang, includeYear)
-					if queries, ok := params.SeriesTitleQueries[cacheKey]; ok {
-						req.PerIndexerQuery[name] = queries
-						continue
-					}
-					queries := buildSeriesQueriesFromMetadata(params.Metadata, lang, includeYear, req.Season, req.Episode, useSeasonEpisodeParams)
-					if len(queries) == 0 {
-						logger.Debug("Prepared series search titles failed", "stream", req.StreamLabel, "request", req.RequestLabel, "language", lang, "err", "metadata unavailable")
-						continue
-					}
-					params.SeriesTitleQueries[cacheKey] = queries
-					req.PerIndexerQuery[name] = queries
-				}
-			}
 		}
 	}
 	if searchMode != "id" {
+		var queries []string
+		cacheKey := fmt.Sprintf("%s|%t|%t", searchTitleLanguage, includeYearInTextSearch, useSeasonEpisodeParams)
 		if contentType == "movie" {
-			queries := buildMovieQueriesFromMetadata(params.Metadata, "", includeYearInTextSearch)
-			if len(queries) > 0 {
-				req.FilterQuery = queries[0]
+			if cached, ok := params.MovieTitleQueries[cacheKey]; ok {
+				queries = cached
+			} else {
+				queries = buildMovieQueriesFromMetadata(params.Metadata, searchTitleLanguage, includeYearInTextSearch)
+				if len(queries) > 0 {
+					params.MovieTitleQueries[cacheKey] = queries
+				}
 			}
 		} else if req.Season != "" && req.Episode != "" {
-			queries := buildSeriesQueriesFromMetadata(params.Metadata, "", false, req.Season, req.Episode, false)
-			if len(queries) > 0 {
-				req.FilterQuery = queries[0]
+			if cached, ok := params.SeriesTitleQueries[cacheKey]; ok {
+				queries = cached
+			} else {
+				queries = buildSeriesQueriesFromMetadata(params.Metadata, searchTitleLanguage, includeYearInTextSearch, req.Season, req.Episode, useSeasonEpisodeParams)
+				if len(queries) > 0 {
+					params.SeriesTitleQueries[cacheKey] = queries
+				}
 			}
+		}
+		if len(queries) > 0 {
+			req.Query = queries[0]
+			req.FilterQuery = queries[0]
 		}
 	}
 	return params, nil

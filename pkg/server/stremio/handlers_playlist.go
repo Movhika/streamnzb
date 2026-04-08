@@ -250,37 +250,6 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 
 	streamInfos := []SearchStreamInfo{{ID: defaultStreamID, Name: "StreamNZB"}}
 
-	releasesOut := make([]SearchReleaseTag, 0, len(unified))
-	for _, u := range unified {
-		r := u.rel
-		key := release.Key(r)
-		ts := releaseScores[key]
-		tags := []SearchStreamTag{{
-			StreamID:   defaultStreamID,
-			StreamName: "StreamNZB",
-			Fits:       ts.Fits,
-			Score:      ts.Score,
-		}}
-		idxName := r.Indexer
-		if idxName == "" && r.SourceIndexer != nil {
-			if idx, ok := r.SourceIndexer.(indexer.Indexer); ok {
-				idxName = idx.Name()
-			}
-		}
-		if idxName == "" {
-			idxName = "Indexer"
-		}
-		releasesOut = append(releasesOut, SearchReleaseTag{
-			Title:        r.Title,
-			Link:         r.Link,
-			DetailsURL:   r.DetailsURL,
-			Size:         r.Size,
-			Indexer:      idxName,
-			Availability: u.avail,
-			StreamTags:   tags,
-		})
-	}
-
 	sort.Slice(unified, func(i, j int) bool {
 		si := releaseScores[release.Key(unified[i].rel)].Score
 		sj := releaseScores[release.Key(unified[j].rel)].Score
@@ -291,7 +260,7 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		return availOrder[unified[i].avail] > availOrder[unified[j].avail]
 	})
 
-	releasesOut = releasesOut[:0]
+	releasesOut := make([]SearchReleaseTag, 0, len(unified))
 	for _, u := range unified {
 		r := u.rel
 		key := release.Key(r)

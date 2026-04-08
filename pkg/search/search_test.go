@@ -40,7 +40,7 @@ func (s *staticIndexer) Ping() error                                         { r
 func (s *staticIndexer) Name() string                                        { return s.name }
 func (s *staticIndexer) GetUsage() indexer.Usage                             { return indexer.Usage{} }
 
-func TestRunIndexerSearchesPerIndexerTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing.T) {
+func TestRunIndexerSearchesTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{
 		Cat:                    "5000",
@@ -49,9 +49,7 @@ func TestRunIndexerSearchesPerIndexerTextRequestCarriesSeasonEpisodeWhenEnabled(
 		Season:                 "1",
 		Episode:                "5",
 		UseSeasonEpisodeParams: true,
-		PerIndexerQuery: map[string][]string{
-			"TestIndexer": {"The Walking Dead"},
-		},
+		Query:                  "The Walking Dead",
 	}
 
 	if _, err := RunIndexerSearches(idx, nil, req, "series", nil, "", "", nil); err != nil {
@@ -62,22 +60,12 @@ func TestRunIndexerSearchesPerIndexerTextRequestCarriesSeasonEpisodeWhenEnabled(
 		t.Fatalf("expected 1 Search call, got %d", len(idx.reqs))
 	}
 
-	var textReq *indexer.SearchRequest
-	for i := range idx.reqs {
-		reqCopy := idx.reqs[i]
-		if reqCopy.PerIndexerQuery != nil {
-			textReq = &reqCopy
-		}
-	}
-
-	if textReq == nil {
-		t.Fatal("expected a text search request")
-	}
+	textReq := &idx.reqs[0]
 	if textReq.Season != "1" || textReq.Episode != "5" {
 		t.Fatalf("expected text request to keep season/episode when enabled, got season=%q episode=%q", textReq.Season, textReq.Episode)
 	}
-	if got := textReq.PerIndexerQuery["TestIndexer"]; len(got) != 1 || got[0] != "The Walking Dead" {
-		t.Fatalf("expected text request queries to be preserved, got %#v", got)
+	if textReq.Query != "The Walking Dead" {
+		t.Fatalf("expected text query to be preserved, got %q", textReq.Query)
 	}
 }
 
@@ -93,13 +81,11 @@ func TestRunIndexerSearchesSkipsPostFilterWhenDisabled(t *testing.T) {
 		},
 	}
 	req := indexer.SearchRequest{
-		Cat:         "2100",
-		IMDbID:      "tt0187393",
-		TMDBID:      "2024",
-		FilterQuery: "The Patriot 2000",
-		PerIndexerQuery: map[string][]string{
-			"SceneNZBs": {"Der Patriot 2000"},
-		},
+		Cat:                    "2100",
+		IMDbID:                 "tt0187393",
+		TMDBID:                 "2024",
+		Query:                  "Der Patriot 2000",
+		FilterQuery:            "The Patriot 2000",
 		DisableResultFiltering: true,
 	}
 
@@ -134,5 +120,31 @@ func TestRunIndexerSearchesQueryWithIDsDoesNotAlsoRunIDSearch(t *testing.T) {
 	}
 	if idx.reqs[0].Query != "Meal Ticket 2026" {
 		t.Fatalf("expected text query to be preserved, got %q", idx.reqs[0].Query)
+	}
+}
+
+func TestRunIndexerSearchesIDModePreservesPreparedQuery(t *testing.T) {
+	idx := &recordingIndexer{name: "TestIndexer"}
+	req := indexer.SearchRequest{
+		Cat:        "2000",
+		Limit:      100,
+		SearchMode: "id",
+		IMDbID:     "tt1655441",
+		TMDBID:     "1655441",
+		Query:      "The Age of Adaline",
+	}
+
+	if _, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil); err != nil {
+		t.Fatalf("RunIndexerSearches() error = %v", err)
+	}
+
+	if len(idx.reqs) != 1 {
+		t.Fatalf("expected exactly 1 Search call, got %d", len(idx.reqs))
+	}
+	if idx.reqs[0].SearchMode != "id" {
+		t.Fatalf("expected id mode to stay id-only, got mode %q", idx.reqs[0].SearchMode)
+	}
+	if idx.reqs[0].Query != "The Age of Adaline" {
+		t.Fatalf("expected id request to preserve prepared query, got %q", idx.reqs[0].Query)
 	}
 }

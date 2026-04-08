@@ -291,61 +291,13 @@ func (a *Aggregator) searchWithFailover(req SearchRequest) (*SearchResponse, err
 }
 
 func searchItemsForIndexer(idx Indexer, req SearchRequest) ([]Item, error) {
-	queries := req.PerIndexerQuery[idx.Name()]
 	var indexerOverrides *config.IndexerSearchConfig
 	if req.EffectiveByIndexer != nil {
 		indexerOverrides = req.EffectiveByIndexer[idx.Name()]
 	}
 
-	if req.PerIndexerQuery != nil && len(queries) == 0 {
-		return []Item{}, nil
-	}
-	if req.PerIndexerQuery != nil && len(queries) > 0 {
-		resultsByQuery := make([][]Item, len(queries))
-		var queryWG sync.WaitGroup
-		for i, q := range queries {
-			if q == "" {
-				continue
-			}
-			queryWG.Add(1)
-			go func(i int, q string) {
-				defer queryWG.Done()
-				reqCopy := req
-				reqCopy.EffectiveByIndexer = nil
-				reqCopy.PerIndexerQuery = nil
-				reqCopy.OptionalOverrides = indexerOverrides
-				reqCopy.Query = q
-				if shouldSkipIndexer(reqCopy, indexerOverrides) {
-					logger.Debug("Indexer skipped for request",
-						"stream", reqCopy.StreamLabel,
-						"request", reqCopy.RequestLabel,
-						"indexer", idx.Name(),
-						"reason", "text search disabled for this request",
-						"query", q,
-					)
-					return
-				}
-				resp, err := idx.Search(reqCopy)
-				if err != nil {
-					logger.Warn("Indexer search failed", "indexer", idx.Name(), "query", q, "err", err)
-					return
-				}
-				if resp != nil && len(resp.Channel.Items) > 0 {
-					resultsByQuery[i] = resp.Channel.Items
-				}
-			}(i, q)
-		}
-		queryWG.Wait()
-		var merged []Item
-		for _, items := range resultsByQuery {
-			merged = append(merged, items...)
-		}
-		return merged, nil
-	}
-
 	reqCopy := req
 	reqCopy.EffectiveByIndexer = nil
-	reqCopy.PerIndexerQuery = nil
 	reqCopy.OptionalOverrides = indexerOverrides
 	if shouldSkipIndexer(reqCopy, indexerOverrides) {
 		skipReason := "request mode disabled"
