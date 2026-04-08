@@ -2,6 +2,8 @@ package search
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -39,6 +41,20 @@ func (s *staticIndexer) DownloadNZB(context.Context, string) ([]byte, error) { r
 func (s *staticIndexer) Ping() error                                         { return nil }
 func (s *staticIndexer) Name() string                                        { return s.name }
 func (s *staticIndexer) GetUsage() indexer.Usage                             { return indexer.Usage{} }
+
+type errIndexer struct {
+	name string
+	err  error
+}
+
+func (e *errIndexer) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
+	return nil, e.err
+}
+
+func (e *errIndexer) DownloadNZB(context.Context, string) ([]byte, error) { return nil, nil }
+func (e *errIndexer) Ping() error                                         { return nil }
+func (e *errIndexer) Name() string                                        { return e.name }
+func (e *errIndexer) GetUsage() indexer.Usage                             { return indexer.Usage{} }
 
 func TestRunIndexerSearchesTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
@@ -146,5 +162,23 @@ func TestRunIndexerSearchesIDModePreservesPreparedQuery(t *testing.T) {
 	}
 	if idx.reqs[0].Query != "The Age of Adaline" {
 		t.Fatalf("expected id request to preserve prepared query, got %q", idx.reqs[0].Query)
+	}
+}
+
+func TestRunIndexerSearchesReturnsTextSearchErrors(t *testing.T) {
+	idx := &errIndexer{name: "BrokenIndexer", err: fmt.Errorf("backend unavailable")}
+	req := indexer.SearchRequest{
+		SearchMode:   "text",
+		Query:        "The King Who Never Was",
+		StreamLabel:  "TestStream",
+		RequestLabel: "Text Request",
+	}
+
+	_, err := RunIndexerSearches(idx, nil, req, "series", nil, "", "", nil)
+	if err == nil {
+		t.Fatalf("expected text search error, got nil")
+	}
+	if got := err.Error(); got == "" || !strings.Contains(got, "text search failed") {
+		t.Fatalf("expected wrapped text search error, got %q", got)
 	}
 }

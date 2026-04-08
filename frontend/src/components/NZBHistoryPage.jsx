@@ -29,12 +29,12 @@ function shortReason(reason) {
   if (value.includes('download limit reached') || value.includes('api limit reached') || value.includes('request limit reached')) return 'Limit'
   if (value.includes('playback startup timeout') || value.includes('timed out') || value.includes('context deadline exceeded')) return 'Timeout'
   if (value.includes('probe inspect') || value.includes('probe:') || value.includes('invalid container header')) return 'Probe'
+  if (value.includes('episode target not found') || value.includes('no file')) return 'No file'
   if (value.includes('430') || value.includes('segment unavailable') || value.includes('not found')) return 'Segment'
   if (value.includes('eof')) return 'EOF'
   if (value.includes('corrupt') || value.includes('rapidyenc') || value.includes('yenc')) return 'Corrupt'
   if (value.includes('compressed')) return 'Compressed'
   if (value.includes('encrypted')) return 'Encrypted'
-  if (value.includes('episode target not found') || value.includes('no file')) return 'No file'
   return 'Error'
 }
 
@@ -686,6 +686,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                   <div className="flex items-center justify-between gap-4">
                     <div className="text-sm font-medium">Timeframe</div>
                     <select
+                      aria-label="Timeframe"
                       value={timeframe}
                       onChange={(event) => setTimeframe(event.target.value)}
                       className="flex h-9 w-40 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
@@ -702,6 +703,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                   <div className="flex items-center justify-between gap-4">
                     <div className="text-sm font-medium">Stream</div>
                     <select
+                      aria-label="Stream"
                       value={streamFilter}
                       onChange={(event) => setStreamFilter(event.target.value)}
                       className="flex h-9 w-40 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
@@ -718,6 +720,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                   <div className="flex items-center justify-between gap-4">
                     <div className="text-sm font-medium">Status</div>
                     <select
+                      aria-label="Status"
                       value={resultFilter}
                       onChange={(event) => setResultFilter(event.target.value)}
                       className="flex h-9 w-40 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"

@@ -107,15 +107,17 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 
 	resp, err := idxForMode.Search(searchReq)
 	if err != nil {
+		mode := "text"
 		if runIDSearch {
-			return nil, fmt.Errorf("indexer search failed: %w", err)
+			mode = "id"
 		}
-		logger.Warn("Stream text search failed",
+		logger.Warn("Stream search failed",
 			"stream", req.StreamLabel,
 			"request", req.RequestLabel,
+			"mode", mode,
 			"err", err,
 		)
-		return nil, nil
+		return nil, fmt.Errorf("%s search failed for stream=%s request=%s: %w", mode, req.StreamLabel, req.RequestLabel, err)
 	}
 	indexer.NormalizeSearchResponse(resp)
 

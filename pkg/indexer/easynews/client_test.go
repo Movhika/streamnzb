@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/indexer"
@@ -141,6 +142,15 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			want:                   "The Age of Adaline 2015",
 		},
 		{
+			name:                   "all 5xxx categories are treated as tv",
+			query:                  "The King Who Never Was",
+			season:                 "1",
+			episode:                "1",
+			useSeasonEpisodeParams: true,
+			category:               "5030",
+			want:                   "The King Who Never Was S01E01",
+		},
+		{
 			name:                   "normalizes german punctuation and umlauts",
 			query:                  "Bube, Dame, König, grAS",
 			useSeasonEpisodeParams: false,
@@ -186,5 +196,56 @@ func TestNormalizeEasynewsQuery(t *testing.T) {
 		if got := normalizeEasynewsQuery(tt.in); got != tt.want {
 			t.Fatalf("normalizeEasynewsQuery(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestPrepareEasynewsQueryIncludesExtraSearchTerms(t *testing.T) {
+	overrideTerms := "GERMAN"
+	uhdTerms := "2160p"
+	punctuatedTerms := "x265-GER"
+
+	tests := []struct {
+		name             string
+		baseQuery        string
+		searchMode       string
+		overrides        *config.IndexerSearchConfig
+		wantPreparedText string
+	}{
+		{
+			name:             "text search appends override extra terms",
+			baseQuery:        "Avatar Fire and Ash",
+			searchMode:       "text",
+			overrides:        &config.IndexerSearchConfig{ExtraSearchTerms: &uhdTerms},
+			wantPreparedText: "Avatar Fire and Ash 2160p",
+		},
+		{
+			name:             "id search prepends override extra terms",
+			baseQuery:        "S01E01",
+			searchMode:       "id",
+			overrides:        &config.IndexerSearchConfig{ExtraSearchTerms: &overrideTerms},
+			wantPreparedText: "GERMAN S01E01",
+		},
+		{
+			name:             "without override leaves query unchanged",
+			baseQuery:        "Lock Stock Two Smoking Barrels",
+			searchMode:       "text",
+			overrides:        nil,
+			wantPreparedText: "Lock Stock Two Smoking Barrels",
+		},
+		{
+			name:             "extra terms are not normalized",
+			baseQuery:        "Bube, Dame, König, grAS",
+			searchMode:       "text",
+			overrides:        &config.IndexerSearchConfig{ExtraSearchTerms: &punctuatedTerms},
+			wantPreparedText: "Bube Dame Koenig grAS x265-GER",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := prepareEasynewsQuery(tt.baseQuery, tt.searchMode, tt.overrides); got != tt.wantPreparedText {
+				t.Fatalf("prepareEasynewsQuery() = %q, want %q", got, tt.wantPreparedText)
+			}
+		})
 	}
 }

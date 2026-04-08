@@ -37,7 +37,7 @@ export function useAdminRuntime({
   }, [])
 
   useEffect(() => {
-    fetch('/api/info')
+    fetch(getApiUrl('/api/info'))
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => data?.version && setVersion(data.version))
       .catch(() => {})
@@ -46,9 +46,12 @@ export function useAdminRuntime({
   useEffect(() => {
     if (!authenticated) return
     if (hasLoggedOutRef.current) return
+    let cancelled = false
+
+    const isActiveSocket = (socket) => !cancelled && !hasLoggedOutRef.current && activeSocketRef.current === socket
 
     const connect = () => {
-      if (hasLoggedOutRef.current) return
+      if (cancelled || hasLoggedOutRef.current) return
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
         reconnectTimeoutRef.current = null
@@ -68,6 +71,7 @@ export function useAdminRuntime({
       activeSocketRef.current = socket
 
       socket.onopen = () => {
+        if (!isActiveSocket(socket)) return
         if (isRestartingRef.current) {
           window.location.reload()
           return
@@ -84,7 +88,7 @@ export function useAdminRuntime({
       }
 
       socket.onmessage = (event) => {
-        if (hasLoggedOutRef.current) return
+        if (!isActiveSocket(socket)) return
 
         let msg
         try {
@@ -112,6 +116,7 @@ export function useAdminRuntime({
             setNzbAttemptsRefreshTrigger((value) => value + 1)
             break
           case 'auth_info': {
+            if (!isActiveSocket(socket)) return
             if (msg.payload?.version) setVersion(msg.payload.version)
             if (hasLoggedOutRef.current) {
               socket.close()
@@ -150,15 +155,14 @@ export function useAdminRuntime({
       }
 
       socket.onclose = () => {
-        if (activeSocketRef.current === socket) {
-          activeSocketRef.current = null
-        }
+        if (cancelled || activeSocketRef.current !== socket) return
+        activeSocketRef.current = null
         setWsStatus('disconnected')
         setWs(null)
         window.ws = null
         if (!hasLoggedOutRef.current) {
           reconnectTimeoutRef.current = setTimeout(() => {
-            if (authenticated && !hasLoggedOutRef.current) {
+            if (!cancelled && authenticated && !hasLoggedOutRef.current && !activeSocketRef.current) {
               connect()
             }
           }, 3000)
@@ -166,6 +170,7 @@ export function useAdminRuntime({
       }
 
       socket.onerror = () => {
+        if (!isActiveSocket(socket)) return
         setError('Network Error: Could not connect to API')
         socket.close()
       }
@@ -173,13 +178,18 @@ export function useAdminRuntime({
 
     connect()
     return () => {
+      cancelled = true
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
         reconnectTimeoutRef.current = null
       }
       if (activeSocketRef.current) {
-        activeSocketRef.current.close()
+        const socket = activeSocketRef.current
         activeSocketRef.current = null
+        setWs(null)
+        setWsStatus('disconnected')
+        window.ws = null
+        socket.close()
       }
     }
   }, [authenticated, authToken, hasLoggedOutRef, setAuthenticated, setCurrentUser, setMustChangePassword])
@@ -200,8 +210,9 @@ export function useAdminRuntime({
             delete window.profileUsernameCallback
           }
           return apiFetch(`/api/config?_=${Date.now()}`)
+            .then((cfg) => { if (cfg) setConfig(cfg) })
+            .catch(() => {})
         })
-        .then((cfg) => { if (cfg) setConfig(cfg) })
         .catch((err) => {
           const msg = err.message || 'Save failed'
           setSaveStatus({ type: 'error', msg, errors: err.fieldErrors || null })
@@ -234,20 +245,21 @@ export function useAdminRuntime({
     }
 
     if (type === 'update_password') {
-      apiFetch('/api/auth/change-password', {
+      return apiFetch('/api/auth/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: payload?.username, password: payload?.password }),
       })
         .then(() => {
           if (window.passwordChangeCallback) window.passwordChangeCallback({})
-          delete window.passwordChangeCallback
         })
         .catch((err) => {
           if (window.passwordChangeCallback) window.passwordChangeCallback({ error: err.message })
+          throw err
+        })
+        .finally(() => {
           delete window.passwordChangeCallback
-      })
-      return
+        })
     }
 
     if (ws && ws.readyState === WebSocket.OPEN) {

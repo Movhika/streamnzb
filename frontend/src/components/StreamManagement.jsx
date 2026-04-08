@@ -313,9 +313,17 @@ function nextStreamName(streams) {
   return `Stream${Date.now()}`
 }
 
+function getInitialStreamDraft(initialStream, isEditing, nextIndex) {
+  const base = buildStreamDraft(initialStream)
+  if (!isEditing && !base.username) {
+    base.username = defaultStreamName(nextIndex)
+  }
+  return base
+}
+
 function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', providerNames, indexerNames, movieQueryNames, seriesQueryNames, onSave, saving, nextIndex = 0 }) {
   const isEditing = mode === 'edit'
-  const [draft, setDraft] = useState(() => buildStreamDraft(initialStream))
+  const [draft, setDraft] = useState(() => getInitialStreamDraft(initialStream, isEditing, nextIndex))
   const [saveError, setSaveError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
   const [activeTab, setActiveTab] = useState('general')
@@ -326,11 +334,7 @@ function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', provid
 
   useEffect(() => {
     if (open && (!wasOpen || dialogIdentity !== lastDialogIdentity)) {
-      const nextDraft = buildStreamDraft(initialStream)
-      if (!isEditing && !nextDraft.username) {
-        nextDraft.username = defaultStreamName(nextIndex)
-      }
-      setDraft(nextDraft)
+      setDraft(getInitialStreamDraft(initialStream, isEditing, nextIndex))
       setSaveError('')
       setFieldErrors({})
       setActiveTab('general')
@@ -339,13 +343,7 @@ function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', provid
     setWasOpen(open)
   }, [open, initialStream, nextIndex, isEditing, wasOpen, dialogIdentity, lastDialogIdentity])
 
-  const normalizedInitial = JSON.stringify((() => {
-    const base = buildStreamDraft(initialStream)
-    if (!isEditing && !base.username) {
-      base.username = defaultStreamName(nextIndex)
-    }
-    return base
-  })())
+  const normalizedInitial = JSON.stringify(getInitialStreamDraft(initialStream, isEditing, nextIndex))
   const normalizedCurrent = JSON.stringify(normalizeStreamDraft(draft))
   const isDirty = normalizedInitial !== normalizedCurrent
   const aiostreamsMode = draft.filter_sorting_mode === 'aiostreams'
@@ -709,7 +707,6 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
   const seriesQueryNames = useMemo(() => seriesSearchQueries.map((query) => query.name).filter(Boolean), [seriesSearchQueries])
 
   useEffect(() => {
-    if (initialStreams.length === 0) return
     if (lastAppliedInitialSignatureRef.current === initialStreamsSignature) return
     lastAppliedInitialSignatureRef.current = initialStreamsSignature
     setStreams(initialStreams)
