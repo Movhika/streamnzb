@@ -53,6 +53,12 @@ func (l *RequestLimiter) Wait(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		l.mu.Lock()
+		l.nextAllowed = l.nextAllowed.Add(-l.interval)
+		if now := time.Now(); l.nextAllowed.Before(now) {
+			l.nextAllowed = now
+		}
+		l.mu.Unlock()
 		return ctx.Err()
 	case <-timer.C:
 		return nil

@@ -313,37 +313,34 @@ function nextStreamName(streams) {
   return `Stream${Date.now()}`
 }
 
-function getInitialStreamDraft(initialStream, isEditing, nextIndex) {
+function getInitialStreamDraft(initialStream, isEditing) {
   const base = buildStreamDraft(initialStream)
-  if (!isEditing && !base.username) {
-    base.username = defaultStreamName(nextIndex)
-  }
   return base
 }
 
-function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', providerNames, indexerNames, movieQueryNames, seriesQueryNames, onSave, saving, nextIndex = 0 }) {
+function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', providerNames, indexerNames, movieQueryNames, seriesQueryNames, onSave, saving }) {
   const isEditing = mode === 'edit'
-  const [draft, setDraft] = useState(() => getInitialStreamDraft(initialStream, isEditing, nextIndex))
+  const [draft, setDraft] = useState(() => getInitialStreamDraft(initialStream, isEditing))
   const [saveError, setSaveError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
   const [activeTab, setActiveTab] = useState('general')
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const [wasOpen, setWasOpen] = useState(open)
-  const dialogIdentity = `${mode}:${initialStream?.username || ''}:${nextIndex}`
+  const dialogIdentity = `${mode}:${initialStream?.username || ''}`
   const [lastDialogIdentity, setLastDialogIdentity] = useState(dialogIdentity)
 
   useEffect(() => {
     if (open && (!wasOpen || dialogIdentity !== lastDialogIdentity)) {
-      setDraft(getInitialStreamDraft(initialStream, isEditing, nextIndex))
+      setDraft(getInitialStreamDraft(initialStream, isEditing))
       setSaveError('')
       setFieldErrors({})
       setActiveTab('general')
       setLastDialogIdentity(dialogIdentity)
     }
     setWasOpen(open)
-  }, [open, initialStream, nextIndex, isEditing, wasOpen, dialogIdentity, lastDialogIdentity])
+  }, [open, initialStream, isEditing, wasOpen, dialogIdentity, lastDialogIdentity])
 
-  const normalizedInitial = JSON.stringify(getInitialStreamDraft(initialStream, isEditing, nextIndex))
+  const normalizedInitial = JSON.stringify(getInitialStreamDraft(initialStream, isEditing))
   const normalizedCurrent = JSON.stringify(normalizeStreamDraft(draft))
   const isDirty = normalizedInitial !== normalizedCurrent
   const aiostreamsMode = draft.filter_sorting_mode === 'aiostreams'
@@ -745,17 +742,22 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
     setVisibleFooterStatus(status)
   }, [])
 
-  const fetchStreams = useCallback(async (showLoader = true) => {
+  const fetchStreams = useCallback(async (showLoader = true, options = {}) => {
+    const { silent = false } = options
     if (showLoader) setLoading(true)
     try {
       const nextStreams = await apiFetch('/api/streams')
       setStreams(Array.isArray(nextStreams) ? nextStreams : [])
       onStreamsChange?.(mapStreamsByUsername(nextStreams))
       setError('')
+      return nextStreams
     } catch (err) {
-      const status = { type: 'error', message: err.message || 'Failed to load streams' }
-      showStatus(status)
-      showFooterStatus(status)
+      if (!silent) {
+        const status = { type: 'error', message: err.message || 'Failed to load streams' }
+        showStatus(status)
+        showFooterStatus(status)
+      }
+      throw err
     } finally {
       if (showLoader) setLoading(false)
     }
@@ -764,7 +766,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
   useEffect(() => {
     if (initialFetchStartedRef.current) return
     initialFetchStartedRef.current = true
-    fetchStreams(false)
+    fetchStreams(false).catch(() => {})
   }, [fetchStreams])
 
   const getManifestUrl = (token) => {
@@ -805,9 +807,9 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
 
   const refreshStreamsAfterMutation = async () => {
     try {
-      await fetchStreams(false)
+      await fetchStreams(false, { silent: true })
     } catch {
-      // fetchStreams already reports refresh problems.
+      // Preserve the successful mutation state when only the refresh fails.
     }
   }
 
@@ -958,9 +960,10 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                   size="icon"
                   className="h-9 w-9"
                   onClick={() => {
-                    setAddDialogDraft(null)
+                    setAddDialogDraft({ username: nextStreamName(streams) })
                     setShowAddDialog(true)
                   }}
+                  aria-label="Add stream"
                 >
                   <Plus className="h-4 w-4 shrink-0" />
                 </Button>
@@ -988,7 +991,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                           <div className="flex flex-wrap items-center gap-2 sm:ml-4 sm:shrink-0">
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button type="button" variant="outline" size="icon" onClick={() => setEditingStream(stream)} className="h-9 w-9">
+                              <Button type="button" variant="outline" size="icon" onClick={() => setEditingStream(stream)} className="h-9 w-9" aria-label={`Edit ${stream.username} stream`}>
                                 <Settings className="h-4 w-4" />
                               </Button>
                             </TooltipTrigger>
@@ -1003,6 +1006,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                                 onClick={() => handleCloneStream(stream)}
                                 disabled={actionLoading !== null || loading}
                                 className="h-9 w-9"
+                                aria-label={`Copy ${stream.username} stream`}
                               >
                                   {actionLoading === `copy-${stream.username}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
                               </Button>
@@ -1011,7 +1015,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                           </Tooltip>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                                <Button type="button" variant="destructive" size="icon" onClick={() => setDeleteTarget(stream.username)} disabled={actionLoading !== null || loading} className="h-9 w-9">
+                                <Button type="button" variant="destructive" size="icon" onClick={() => setDeleteTarget(stream.username)} disabled={actionLoading !== null || loading} className="h-9 w-9" aria-label={`Delete ${stream.username} stream`}>
                                   {actionLoading === `delete-${stream.username}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                                 </Button>
                               </TooltipTrigger>
@@ -1029,7 +1033,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                             <div className="flex items-center gap-2">
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <Button type="button" variant="ghost" size="icon" onClick={() => copyManifestUrl(stream.token)} className="h-8 w-8 shrink-0 bg-muted hover:bg-muted">
+                                  <Button type="button" variant="ghost" size="icon" onClick={() => copyManifestUrl(stream.token)} className="h-8 w-8 shrink-0 bg-muted hover:bg-muted" aria-label={`Copy manifest URL for ${stream.username}`}>
                                     {copiedToken === stream.token ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
                                   </Button>
                                 </TooltipTrigger>
@@ -1037,7 +1041,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                               </Tooltip>
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <Button type="button" variant="outline" size="icon" onClick={() => handleRegenerateToken(stream.username)} disabled={actionLoading !== null || loading} className="h-8 w-8 shrink-0">
+                                  <Button type="button" variant="outline" size="icon" onClick={() => handleRegenerateToken(stream.username)} disabled={actionLoading !== null || loading} className="h-8 w-8 shrink-0" aria-label={`Regenerate token for ${stream.username}`}>
                                     {actionLoading === `regenerate-${stream.username}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                                   </Button>
                                 </TooltipTrigger>
@@ -1125,6 +1129,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                                 variant="outline"
                                 onClick={() => toggleExpandedStream(stream.username)}
                                 className="h-7 w-9 rounded-md border-dashed border-border/80 bg-muted text-muted-foreground shadow-sm hover:bg-muted/90"
+                                aria-label={expandedStreams[stream.username] ? `Hide details for ${stream.username}` : `Show details for ${stream.username}`}
                               >
                                 {expandedStreams[stream.username] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                               </Button>
@@ -1154,7 +1159,6 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
             seriesQueryNames={seriesQueryNames}
             onSave={handleCreateStream}
             saving={dialogSaving}
-            nextIndex={streams.length}
           />
 
           <StreamDialog

@@ -152,7 +152,7 @@ function matchesStream(attempt, streamName) {
 
 function buildContentKey(attempt) {
   const identity = attempt.content_id || attempt.content_title || ''
-  return [attempt.content_type || '', identity].join('::')
+  return [attempt.stream_name || 'default', attempt.content_type || '', identity].join('::')
 }
 
 function buildRequestGroups(attempts) {
@@ -737,8 +737,8 @@ export function NZBHistoryPage({ refreshTrigger }) {
                 <Button type="button" variant="outline" onClick={resetFilters}>
                   Reset
                 </Button>
-                <Button type="button" variant="destructive" onClick={() => setFiltersDialogOpen(false)}>
-                  Save
+                <Button type="button" variant="destructive" onClick={() => setFiltersDialogOpen(false)} aria-label="Close filters dialog">
+                  Close
                 </Button>
               </DialogFooter>
             </DialogContent>

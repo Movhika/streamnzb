@@ -123,8 +123,8 @@ func TestBuildSearchParamsFromBaseSeriesIDQueryModeMovesSeasonEpisodeIntoQuery(t
 	if params.Req.Query != "S01E04" {
 		t.Fatalf("expected S/E query suffix, got %q", params.Req.Query)
 	}
-	if params.Req.Season != "" || params.Req.Episode != "" {
-		t.Fatalf("expected season/episode params to be cleared, got season=%q episode=%q", params.Req.Season, params.Req.Episode)
+	if params.Req.Season != "1" || params.Req.Episode != "4" {
+		t.Fatalf("expected season/episode params to be preserved, got season=%q episode=%q", params.Req.Season, params.Req.Episode)
 	}
 }
 

@@ -184,7 +184,7 @@ func (s *Server) getOrBuildRawSearchResult(ctx context.Context, contentType, id 
 	if v, ok := s.rawSearchCache.Load(rawKey); ok {
 		if ent, _ := v.(*rawSearchCacheEntry); ent != nil && time.Now().Before(ent.until) {
 			logger.Debug("Raw search cache hit", "key", rawKey)
-			return ent.raw, nil
+			return cloneRawSearchResult(ent.raw), nil
 		}
 	}
 	raw, err := s.buildRawSearchResult(ctx, contentType, id, stream)
@@ -192,7 +192,7 @@ func (s *Server) getOrBuildRawSearchResult(ctx context.Context, contentType, id 
 		return nil, err
 	}
 	s.rawSearchCache.Store(rawKey, &rawSearchCacheEntry{raw: raw, until: time.Now().Add(playlistCacheTTL)})
-	return raw, nil
+	return cloneRawSearchResult(raw), nil
 }
 
 func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) (*SearchReleasesResponse, error) {
@@ -392,7 +392,77 @@ func resolveFilterMode(stream *auth.Stream) (string, bool) {
 	if stream != nil && strings.TrimSpace(stream.FilterSortingMode) != "" {
 		filterMode = strings.ToLower(strings.TrimSpace(stream.FilterSortingMode))
 	}
-	return filterMode, filterMode != "none" && filterMode != "aiostreams"
+	return filterMode, filterMode != "none"
+}
+
+func cloneReleaseForPlaylist(rel *release.Release) *release.Release {
+	if rel == nil {
+		return nil
+	}
+	next := *rel
+	if rel.Languages != nil {
+		next.Languages = append([]string(nil), rel.Languages...)
+	}
+	if rel.Available != nil {
+		available := *rel.Available
+		next.Available = &available
+	}
+	return &next
+}
+
+func cloneAvailContext(availCtx *AvailContext) *AvailContext {
+	if availCtx == nil {
+		return nil
+	}
+	next := &AvailContext{
+		InputResults:            availCtx.InputResults,
+		ByDetailsURL:            make(map[string]*availnzb.ReleaseWithStatus, len(availCtx.ByDetailsURL)),
+		AvailableByDetailsURL:   make(map[string]bool, len(availCtx.AvailableByDetailsURL)),
+		UnavailableByDetailsURL: make(map[string]bool, len(availCtx.UnavailableByDetailsURL)),
+	}
+	for k, v := range availCtx.AvailableByDetailsURL {
+		next.AvailableByDetailsURL[k] = v
+	}
+	for k, v := range availCtx.UnavailableByDetailsURL {
+		next.UnavailableByDetailsURL[k] = v
+	}
+	if availCtx.Result != nil {
+		result := &availnzb.ReleasesResult{
+			ImdbID: availCtx.Result.ImdbID,
+			Count:  availCtx.Result.Count,
+		}
+		for _, rws := range availCtx.Result.Releases {
+			if rws == nil {
+				result.Releases = append(result.Releases, nil)
+				continue
+			}
+			copyRWS := *rws
+			copyRWS.Release = cloneReleaseForPlaylist(rws.Release)
+			result.Releases = append(result.Releases, &copyRWS)
+			if copyRWS.Release != nil && copyRWS.Release.DetailsURL != "" {
+				next.ByDetailsURL[copyRWS.Release.DetailsURL] = &copyRWS
+			}
+		}
+		next.Result = result
+	}
+	return next
+}
+
+func cloneRawSearchResult(raw *rawSearchResult) *rawSearchResult {
+	if raw == nil {
+		return nil
+	}
+	next := &rawSearchResult{
+		Params: cloneSearchParams(raw.Params),
+		Avail:  cloneAvailContext(raw.Avail),
+	}
+	if raw.IndexerReleases != nil {
+		next.IndexerReleases = make([]*release.Release, 0, len(raw.IndexerReleases))
+		for _, rel := range raw.IndexerReleases {
+			next.IndexerReleases = append(next.IndexerReleases, cloneReleaseForPlaylist(rel))
+		}
+	}
+	return next
 }
 
 func buildUnavailableDetailsURLs(availCtx *AvailContext, filteringActive bool) map[string]bool {

@@ -32,6 +32,24 @@ export function useAdminRuntime({
   const [indexerCaps, setIndexerCaps] = useState({})
   const [nzbAttemptsRefreshTrigger, setNzbAttemptsRefreshTrigger] = useState(0)
 
+  const resetRuntime = useCallback(() => {
+    setStats(null)
+    setConfig(null)
+    setSaveStatus({ type: '', msg: '', errors: null })
+    setIsSaving(false)
+    setIsRestarting(false)
+    isRestartingRef.current = false
+    setError(null)
+    setHistory([])
+    setConnHistory([])
+    setWsStatus('connecting')
+    setWs(null)
+    window.ws = null
+    setLogs([])
+    setIndexerCaps({})
+    setNzbAttemptsRefreshTrigger(0)
+  }, [])
+
   const clearSaveStatus = useCallback(() => {
     setSaveStatus({ type: '', msg: '', errors: null })
   }, [])
@@ -42,6 +60,12 @@ export function useAdminRuntime({
       .then((data) => data?.version && setVersion(data.version))
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!authenticated || hasLoggedOutRef.current) {
+      resetRuntime()
+    }
+  }, [authenticated, hasLoggedOutRef, resetRuntime])
 
   useEffect(() => {
     if (!authenticated) return
@@ -130,13 +154,18 @@ export function useAdminRuntime({
               setAuthenticated(true)
               setCurrentUser(msg.payload.username)
               setMustChangePassword(msg.payload.must_change_password || false)
+              const currentSocket = socket
               fetch(getApiUrl('/api/config'), { credentials: 'include' })
                 .then((res) => (res.ok ? res.json() : null))
-                .then((data) => { if (data) setConfig(data) })
+                .then((data) => {
+                  if (data && isActiveSocket(currentSocket)) setConfig(data)
+                })
                 .catch(() => {})
               fetch(getApiUrl('/api/indexer/caps'), { credentials: 'include' })
                 .then((res) => (res.ok ? res.json() : null))
-                .then((data) => { if (data) setIndexerCaps(data) })
+                .then((data) => {
+                  if (data && isActiveSocket(currentSocket)) setIndexerCaps(data)
+                })
                 .catch(() => {})
             } else {
               // The initial HTTP auth check is the authoritative gate for the
@@ -186,13 +215,12 @@ export function useAdminRuntime({
       if (activeSocketRef.current) {
         const socket = activeSocketRef.current
         activeSocketRef.current = null
-        setWs(null)
+        resetRuntime()
         setWsStatus('disconnected')
-        window.ws = null
         socket.close()
       }
     }
-  }, [authenticated, authToken, hasLoggedOutRef, setAuthenticated, setCurrentUser, setMustChangePassword])
+  }, [authenticated, authToken, hasLoggedOutRef, resetRuntime, setAuthenticated, setCurrentUser, setMustChangePassword])
 
   const sendCommand = useCallback((type, payload) => {
     if (type === 'save_config') {
@@ -220,7 +248,6 @@ export function useAdminRuntime({
             window.profileUsernameCallback({ status: 'error', message: msg })
             delete window.profileUsernameCallback
           }
-          throw err
         })
         .finally(() => setIsSaving(false))
     }
@@ -255,7 +282,6 @@ export function useAdminRuntime({
         })
         .catch((err) => {
           if (window.passwordChangeCallback) window.passwordChangeCallback({ error: err.message })
-          throw err
         })
         .finally(() => {
           delete window.passwordChangeCallback

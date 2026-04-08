@@ -22,6 +22,7 @@ type SearchParams struct {
 	ID                 string
 	ContentTitle       string
 	Req                indexer.SearchRequest
+	PreparedQueries    []string
 	ContentIDs         *session.AvailReportMeta
 	ImdbForText        string
 	TmdbForText        string
@@ -516,17 +517,28 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 				)
 			}
 		}
-		executedRequests++
-		releases, runErr := search.RunIndexerSearches(s.indexer, tmdbResolver, profileParams.Req, contentType, profileParams.ContentIDs, profileParams.ImdbForText, profileParams.TmdbForText, s.config)
-		if runErr != nil {
-			return nil, executedRequests, runErr
+		queryVariants := profileParams.PreparedQueries
+		if searchMode == "id" || len(queryVariants) == 0 {
+			queryVariants = []string{profileParams.Req.Query}
 		}
-		if streamCombinesResults(stream) {
-			indexerReleases = append(indexerReleases, releases...)
-			continue
-		}
-		if len(releases) > 0 {
-			return releases, executedRequests, nil
+		for _, queryVariant := range queryVariants {
+			reqVariant := profileParams.Req
+			if searchMode != "id" {
+				reqVariant.Query = queryVariant
+				reqVariant.FilterQuery = queryVariant
+			}
+			executedRequests++
+			releases, runErr := search.RunIndexerSearches(s.indexer, tmdbResolver, reqVariant, contentType, profileParams.ContentIDs, profileParams.ImdbForText, profileParams.TmdbForText, s.config)
+			if runErr != nil {
+				return nil, executedRequests, runErr
+			}
+			if streamCombinesResults(stream) {
+				indexerReleases = append(indexerReleases, releases...)
+				continue
+			}
+			if len(releases) > 0 {
+				return releases, executedRequests, nil
+			}
 		}
 	}
 	return indexerReleases, executedRequests, nil
@@ -831,6 +843,7 @@ func cloneSearchParams(base *SearchParams) *SearchParams {
 		contentIDs := *base.ContentIDs
 		next.ContentIDs = &contentIDs
 	}
+	next.PreparedQueries = append([]string(nil), base.PreparedQueries...)
 	next.MovieTitleQueries = make(map[string][]string, len(base.MovieTitleQueries))
 	for k, v := range base.MovieTitleQueries {
 		next.MovieTitleQueries[k] = append([]string(nil), v...)
@@ -881,8 +894,6 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 			if req.Query == "" {
 				req.Query = fmt.Sprintf("S%sE%s", req.Season, req.Episode)
 			}
-			req.Season = ""
-			req.Episode = ""
 		}
 	}
 
@@ -928,6 +939,7 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 			}
 		}
 		if len(queries) > 0 {
+			params.PreparedQueries = append([]string(nil), queries...)
 			req.Query = queries[0]
 			req.FilterQuery = queries[0]
 		}

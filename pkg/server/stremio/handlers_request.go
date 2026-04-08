@@ -61,6 +61,11 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 					return
 				}
 
+			} else if isStremioRoute {
+
+				logger.Warn("Unauthorized request - stream authentication unavailable", "path", path, "remote", r.RemoteAddr)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
 			}
 		} else if isStremioRoute {
 

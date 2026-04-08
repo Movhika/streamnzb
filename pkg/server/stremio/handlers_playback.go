@@ -718,14 +718,28 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 	if list == nil {
 		return nil, fmt.Errorf("build play list: no candidates found")
 	}
-	n := len(list.Candidates)
-	if index < 0 || index >= n {
-		return nil, fmt.Errorf("index %d out of range (candidates %d)", index, n)
+	return s.resolveStreamSlotFromPlaylist(key, index, list, stream)
+}
+
+func (s *Server) resolveStreamSlotFromPlaylist(key StreamSlotKey, index int, list *playlistResult, stream *auth.Stream) (*session.Session, error) {
+	requestedSlotPath := key.SlotPath(index)
+	candidateIndex := index
+	if len(list.SlotPaths) == len(list.Candidates) {
+		candidateIndex = -1
+		for i, slotPath := range list.SlotPaths {
+			if slotPath == requestedSlotPath {
+				candidateIndex = i
+				break
+			}
+		}
 	}
-	cand := list.Candidates[index]
+	if candidateIndex < 0 || candidateIndex >= len(list.Candidates) {
+		return nil, fmt.Errorf("slot %s not found in play list", requestedSlotPath)
+	}
+	cand := list.Candidates[candidateIndex]
 	rel := cand.Release
 	if rel == nil || rel.Link == "" {
-		return nil, fmt.Errorf("no release at index %d", index)
+		return nil, fmt.Errorf("no release at slot %s", requestedSlotPath)
 	}
 	downloadURL := addAPIKeyToDownloadURL(rel.Link, s.config.Indexers)
 	idx := s.indexer
@@ -734,8 +748,8 @@ func (s *Server) resolveStreamSlot(ctx context.Context, key StreamSlotKey, index
 			idx = i
 		}
 	}
-	sessionID := key.SlotPath(index)
-	_, err = s.sessionManager.CreateDeferredSessionWithFetcher(sessionID, downloadURL, rel, idx, list.Params.ContentIDs, list.Params.ContentType, list.Params.ID, list.Params.ContentTitle, streamID(stream), s.segmentFetcherForStream(stream), s.providerHostsForStream(stream))
+	sessionID := requestedSlotPath
+	_, err := s.sessionManager.CreateDeferredSessionWithFetcher(sessionID, downloadURL, rel, idx, list.Params.ContentIDs, list.Params.ContentType, list.Params.ID, list.Params.ContentTitle, streamID(stream), s.segmentFetcherForStream(stream), s.providerHostsForStream(stream))
 	if err != nil {
 		return nil, fmt.Errorf("create deferred session: %w", err)
 	}
@@ -1053,6 +1067,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, streamConfig
 			// after the quota resets or is raised manually.
 			if !temporaryLimitErr {
 				s.sessionManager.SetSlotFailedDuringPlayback(sessionID)
+				s.ClearSearchCaches()
 			}
 			if (isSegmentUnavailableErr(prepareErr) || isDataCorruptErr(prepareErr)) && s.availReporter != nil {
 				s.availReporter.ReportBad(sess, prepareErr.Error())
@@ -1151,6 +1166,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, streamConfig
 			return
 		}
 		s.sessionManager.SetSlotFailedDuringPlayback(playbackSessionID)
+		s.ClearSearchCaches()
 		if errSess, _ := s.sessionManager.GetSession(playbackSessionID); errSess != nil {
 			errSess.ResetPlaybackStream()
 			if s.availReporter != nil {
@@ -1577,8 +1593,13 @@ func (s *Server) deriveNextSlotID(ctx context.Context, currentID string, stream 
 	if err != nil || list == nil {
 		return "", err
 	}
+	return s.deriveNextSlotIDFromPlaylist(currentID, key, currentIndex, list, stream), nil
+}
+
+func (s *Server) deriveNextSlotIDFromPlaylist(currentID string, key StreamSlotKey, currentIndex int, list *playlistResult, stream *auth.Stream) string {
 	n := len(list.Candidates)
 	useSlotPaths := len(list.SlotPaths) == n
+	isAIOStreams := streamUsesAIOStreamsProfile(stream)
 
 	// If the stream uses the AIOStreams profile and has a failover order, advance through that order.
 	order := []string(nil)
@@ -1607,10 +1628,10 @@ func (s *Server) deriveNextSlotID(ctx context.Context, currentID string, stream 
 					continue
 				}
 				if !s.sessionManager.GetSlotFailedDuringPlayback(entry) {
-					return entry, nil
+					return entry
 				}
 			}
-			return "", nil // exhausted the stream-provided order
+			return "" // exhausted the stream-provided order
 		}
 	}
 
@@ -1621,22 +1642,39 @@ func (s *Server) deriveNextSlotID(ctx context.Context, currentID string, stream 
 			slotPath = list.SlotPaths[i]
 		}
 		if !s.sessionManager.GetSlotFailedDuringPlayback(slotPath) {
-			return slotPath, nil
+			return slotPath
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // switchToNextFallback derives the next fallback slot from the cached play list and returns its session.
 // Returns (nil, "", nil) when there is no next slot, or (nil, "", err) on a resolve error.
 func (s *Server) switchToNextFallback(ctx context.Context, sess *session.Session, stream *auth.Stream) (*session.Session, string, error) {
 	currentID := sess.ID
+	streamID, contentType, id, currentIndex, ok := parseStreamSlotID(currentID)
+	if !ok {
+		return nil, "", nil
+	}
+	key := StreamSlotKey{StreamID: streamID, ContentType: contentType, ID: id}
+	isAIOStreams := streamUsesAIOStreamsProfile(stream)
+	list, err := s.buildPlaylist(ctx, key, isAIOStreams, stream)
+	if err != nil || list == nil {
+		return nil, "", err
+	}
 	for {
-		nextID, err := s.deriveNextSlotID(ctx, currentID, stream)
-		if err != nil || nextID == "" {
-			return nil, "", err
+		nextID := s.deriveNextSlotIDFromPlaylist(currentID, key, currentIndex, list, stream)
+		if nextID == "" {
+			return nil, "", nil
 		}
-		nextSess, err := s.getOrResolveSession(ctx, nextID, stream)
+		nextSess, err := s.sessionManager.GetSession(nextID)
+		if err != nil {
+			_, _, _, nextIndex, nextOK := parseStreamSlotID(nextID)
+			if !nextOK {
+				return nil, "", nil
+			}
+			nextSess, err = s.resolveStreamSlotFromPlaylist(key, nextIndex, list, stream)
+		}
 		if err == nil {
 			return nextSess, nextID, nil
 		}
@@ -1645,7 +1683,12 @@ func (s *Server) switchToNextFallback(ctx context.Context, sess *session.Session
 		}
 		logger.Info("Skipping unresolved fallback slot", "from", currentID, "to", nextID, "err", err)
 		s.sessionManager.SetSlotFailedDuringPlayback(nextID)
+		s.ClearSearchCaches()
 		currentID = nextID
+		_, _, _, currentIndex, ok = parseStreamSlotID(currentID)
+		if !ok {
+			return nil, "", nil
+		}
 	}
 }
 
@@ -1744,6 +1787,14 @@ func (s *Server) recordAttempt(sess *session.Session, success bool, failureReaso
 }
 
 func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, streamConfig *auth.Stream) {
+	if streamConfig == nil || streamConfig.Username != s.config.GetAdminUsername() {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	if debugValue := strings.ToLower(strings.TrimSpace(os.Getenv("STREAMNZB_DEBUG_PLAY"))); debugValue != "1" && debugValue != "true" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
 	nzbPath := r.URL.Query().Get("nzb")
 	if nzbPath == "" {
 		http.Error(w, "Missing 'nzb' query parameter (URL or file path)", http.StatusBadRequest)
