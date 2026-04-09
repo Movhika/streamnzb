@@ -68,7 +68,7 @@ func openDB(dataDir string) (*sql.DB, error) {
 }
 
 func initSchema(db *sql.DB) error {
-	for _, stmt := range []string{kvSchema, nzbAttemptsSchema, nzbAttemptsIndexTried, nzbAttemptsIndexContent, nzbAttemptsIndexStream, nzbAttemptsIndexProvider, nzbAttemptsIndexIndexer} {
+	for _, stmt := range []string{kvSchema, nzbAttemptsSchema, nzbAttemptsIndexTried, nzbAttemptsIndexContent} {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("schema: %w", err)
 		}
@@ -85,7 +85,15 @@ func initSchema(db *sql.DB) error {
 	if err := migrateNzbAttemptsStreamName(db); err != nil {
 		return err
 	}
-	return migrateNzbAttemptsProviderName(db)
+	if err := migrateNzbAttemptsProviderName(db); err != nil {
+		return err
+	}
+	for _, stmt := range []string{nzbAttemptsIndexStream, nzbAttemptsIndexProvider, nzbAttemptsIndexIndexer} {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("schema: %w", err)
+		}
+	}
+	return nil
 }
 
 // migrateNzbAttemptsPreload adds preload column for existing DBs (no-op if already present).
