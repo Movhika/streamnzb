@@ -14,11 +14,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
+	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/env"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/media/nzb"
+	"streamnzb/pkg/release"
 )
 
 const (
@@ -152,12 +155,14 @@ func (c *Client) refreshUsageFromManager() *indexer.UsageData {
 }
 
 func (c *Client) Ping() error {
-	if err := c.requestLimiter.Wait(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
+	defer cancel()
+	if err := c.requestLimiter.Wait(ctx); err != nil {
 		return err
 	}
 
 	testQuery := "dune"
-	_, err := c.searchInternal(testQuery, "", "", "", false)
+	_, err := c.searchInternal(ctx, testQuery, "", "", false, "", false)
 	if err != nil {
 		return fmt.Errorf("easynews credentials invalid: %w", err)
 	}
@@ -168,17 +173,19 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if err := c.checkAPILimit(); err != nil {
 		return nil, err
 	}
-	if err := c.requestLimiter.Wait(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
+	defer cancel()
+	if err := c.requestLimiter.Wait(ctx); err != nil {
 		return nil, err
 	}
 
-	query := strings.TrimSpace(req.Query)
+	query := prepareEasynewsQuery(req.Query, req.SearchMode, req.OptionalOverrides)
 	logger.Debug("Easynews search query", "indexer", c.name, "query", query, "cat", req.Cat, "season", req.Season, "episode", req.Episode)
 
 	season := req.Season
 	episode := req.Episode
 
-	results, err := c.searchInternal(query, season, episode, req.Cat, false)
+	results, err := c.searchInternal(ctx, query, season, episode, req.UseSeasonEpisodeParams, req.Cat, false)
 	if err != nil {
 		return nil, fmt.Errorf("easynews search failed: %w", err)
 	}
@@ -215,10 +222,39 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}, nil
 }
 
+func prepareEasynewsQuery(baseQuery, searchMode string, overrides *config.IndexerSearchConfig) string {
+	query := normalizeEasynewsQuery(baseQuery)
+	extraTerms := ""
+	if overrides != nil && overrides.ExtraSearchTerms != nil {
+		extraTerms = strings.TrimSpace(*overrides.ExtraSearchTerms)
+	}
+	if extraTerms != "" {
+		if strings.EqualFold(strings.TrimSpace(searchMode), "id") {
+			if query != "" {
+				query = extraTerms + " " + query
+			} else {
+				query = extraTerms
+			}
+		} else {
+			if query != "" {
+				query = query + " " + extraTerms
+			} else {
+				query = extraTerms
+			}
+		}
+	}
+	return query
+}
+
 func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
 		return nil, err
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	defer cancel()
 	if err := c.requestLimiter.Wait(ctx); err != nil {
 		return nil, err
 	}
@@ -238,7 +274,7 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 		return nil, fmt.Errorf("invalid payload token: %w", err)
 	}
 
-	nzbData, err := c.downloadNZBInternal(payload)
+	nzbData, err := c.downloadNZBInternal(ctx, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download NZB: %w", err)
 	}
@@ -261,7 +297,45 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	return nzbData, nil
 }
 
-func (c *Client) searchInternal(query, season, episode, category string, strictMode bool) ([]easynewsResult, error) {
+func normalizeEasynewsQuery(query string) string {
+	query = strings.TrimSpace(release.NormalizeTitleForFilename(query))
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range query {
+		switch {
+		case unicode.IsLetter(r), unicode.IsNumber(r):
+			b.WriteRune(r)
+			lastSpace = false
+		case unicode.IsSpace(r):
+			if !lastSpace {
+				b.WriteRune(' ')
+				lastSpace = true
+			}
+		default:
+			if !lastSpace {
+				b.WriteRune(' ')
+				lastSpace = true
+			}
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func buildEasynewsGPSQuery(query, season, episode string, useSeasonEpisodeParams bool, category string) string {
+	query = normalizeEasynewsQuery(query)
+	if !strings.HasPrefix(category, "5") || !useSeasonEpisodeParams || season == "" || episode == "" {
+		return query
+	}
+	seasonNum, seasonErr := strconv.Atoi(season)
+	episodeNum, episodeErr := strconv.Atoi(episode)
+	suffix := fmt.Sprintf("S%sE%s", season, episode)
+	if seasonErr == nil && episodeErr == nil {
+		suffix = fmt.Sprintf("S%02dE%02d", seasonNum, episodeNum)
+	}
+	return fmt.Sprintf("%s %s", query, suffix)
+}
+
+func (c *Client) searchInternal(ctx context.Context, query, season, episode string, useSeasonEpisodeParams bool, category string, strictMode bool) ([]easynewsResult, error) {
 	params := url.Values{}
 	params.Set("fly", "2")
 	params.Set("sb", "1")
@@ -271,27 +345,15 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 	params.Set("chxu", "1")
 	params.Set("chxgx", "1")
 	params.Set("st", "basic")
-	params.Set("gps", query)
+	params.Set("gps", buildEasynewsGPSQuery(query, season, episode, useSeasonEpisodeParams, category))
 	params.Set("vv", "1")
 	params.Set("safeO", "0")
 	params.Set("s1", "relevance")
 	params.Set("s1d", "-")
 	params.Add("fty[]", "VIDEO")
 
-	if category == "2000" {
-
-	} else if category == "5000" {
-
-		if season != "" && episode != "" {
-			params.Set("gps", fmt.Sprintf("%s S%sE%s", query, season, episode))
-		}
-	}
-
 	searchURL := fmt.Sprintf("%s/2.0/search/solr-search/?%s", easynewsBaseURL, params.Encode())
 	logger.Debug("Easynews search request", "indexer", c.name, "url", searchURL, "gps", params.Get("gps"))
-
-	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
-	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
@@ -324,7 +386,7 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 	return results, nil
 }
 
-func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, error) {
+func (c *Client) downloadNZBInternal(ctx context.Context, payload map[string]interface{}) ([]byte, error) {
 	hash, _ := payload["hash"].(string)
 	filename, _ := payload["filename"].(string)
 	ext, _ := payload["ext"].(string)
@@ -343,9 +405,6 @@ func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, er
 	for key, value := range nzbEntries {
 		form.Set(key, value)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
-	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", easynewsBaseURL+"/2.0/api/dl-nzb", strings.NewReader(form.Encode()))
 	if err != nil {

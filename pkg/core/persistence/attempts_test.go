@@ -122,3 +122,37 @@ func TestRecordAttemptPersistsServedFile(t *testing.T) {
 		t.Fatal("expected preload row to be resolved")
 	}
 }
+
+func TestDeleteAttemptsBeforeRemovesOlderRows(t *testing.T) {
+	mgr := newTestStateManager(t)
+
+	nowMs := time.Now().UnixMilli()
+	_, err := mgr.db.Exec(`INSERT INTO nzb_attempts (tried_at, stream_name, content_type, content_id, content_title, indexer_name, release_title, release_url, release_size, served_file, success, failure_reason, slot_path, preload)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0),
+		       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		nowMs-(100*24*time.Hour).Milliseconds(), "StreamOld", "movie", "tt-old", "Old Movie", "Indexer", "Old Release", "", 0, "", 0, "EOF", "slot-old",
+		nowMs-(5*24*time.Hour).Milliseconds(), "StreamNew", "movie", "tt-new", "New Movie", "Indexer", "New Release", "", 0, "", 1, "", "slot-new",
+	)
+	if err != nil {
+		t.Fatalf("insert attempts: %v", err)
+	}
+
+	deleted, err := mgr.DeleteAttemptsBefore(time.Now().AddDate(0, 0, -30))
+	if err != nil {
+		t.Fatalf("DeleteAttemptsBefore: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1", deleted)
+	}
+
+	list, err := mgr.ListAttempts(ListAttemptsOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAttempts: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected one remaining attempt, got %d", len(list))
+	}
+	if list[0].ContentID != "tt-new" {
+		t.Fatalf("remaining attempt content_id = %q, want %q", list[0].ContentID, "tt-new")
+	}
+}

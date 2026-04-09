@@ -151,7 +151,7 @@ type Config struct {
 
 	TVDBAPIKey string `json:"tvdb_api_key,omitempty"`
 
-	Devices map[string]*DeviceEntry `json:"devices,omitempty"`
+	Streams map[string]*StreamEntry `json:"streams,omitempty"`
 
 	MovieSearchQueries  []SearchQueryConfig `json:"movie_search_queries,omitempty"`
 	SeriesSearchQueries []SearchQueryConfig `json:"series_search_queries,omitempty"`
@@ -164,6 +164,9 @@ type Config struct {
 	// KeepLogFiles is how many log files to keep (current streamnzb.log + rotated streamnzb-*.log). Default 9.
 	KeepLogFiles int `json:"keep_log_files,omitempty"`
 
+	// NZBHistoryRetentionDays controls how many days NZB attempt history is kept. Default 90.
+	NZBHistoryRetentionDays int `json:"nzb_history_retention_days,omitempty"`
+
 	// AvailNZBMode controls how the AvailNZB integration behaves.
 	// "" or "full"        – fetch availability status AND report playback results (default).
 	// "status_only"       – fetch availability status but never report back (leeching).
@@ -172,10 +175,10 @@ type Config struct {
 
 	LoadedPath string `json:"-"`
 
-	ResetLegacyDeviceState bool `json:"-"`
+	ResetLegacyStreamState bool `json:"-"`
 }
 
-type DeviceEntry struct {
+type StreamEntry struct {
 	Username            string                         `json:"username"`
 	Token               string                         `json:"token"`
 	Order               int                            `json:"order,omitempty"`
@@ -377,16 +380,17 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		AddonPort:     7000,
-		AddonBaseURL:  "http://localhost:7000",
-		LogLevel:      "INFO",
-		AdminUsername: "admin",
-		ProxyPort:     119,
-		ProxyHost:     "0.0.0.0",
-		ProxyEnabled:  true,
-		MemoryLimitMB: 512,
-		KeepLogFiles:  9,
-		LoadedPath:    configPath,
+		AddonPort:               7000,
+		AddonBaseURL:            "http://localhost:7000",
+		LogLevel:                "INFO",
+		AdminUsername:           "admin",
+		ProxyPort:               119,
+		ProxyHost:               "0.0.0.0",
+		ProxyEnabled:            true,
+		MemoryLimitMB:           512,
+		KeepLogFiles:            9,
+		NZBHistoryRetentionDays: 90,
+		LoadedPath:              configPath,
 	}
 
 	if err := cfg.LoadFile(configPath); err != nil {
@@ -401,13 +405,13 @@ func Load() (*Config, error) {
 	needSave := false
 	streamModelUpgrade := cfg.ConfigVersion < StreamModelConfigVersion
 	if streamModelUpgrade {
-		if len(cfg.Devices) > 0 {
-			logger.Warn("Resetting legacy stream entries from config for stream-model upgrade", "count", len(cfg.Devices), "from_version", cfg.ConfigVersion, "to_version", CurrentConfigVersion)
+		if len(cfg.Streams) > 0 {
+			logger.Warn("Resetting legacy stream entries from config for stream-model upgrade", "count", len(cfg.Streams), "from_version", cfg.ConfigVersion, "to_version", CurrentConfigVersion)
 		} else {
 			logger.Info("Applying stream-model upgrade defaults", "from_version", cfg.ConfigVersion, "to_version", CurrentConfigVersion)
 		}
-		cfg.Devices = make(map[string]*DeviceEntry)
-		cfg.ResetLegacyDeviceState = true
+		cfg.Streams = make(map[string]*StreamEntry)
+		cfg.ResetLegacyStreamState = true
 		needSave = true
 	}
 	if cfg.ConfigVersion < CurrentConfigVersion {
@@ -416,6 +420,10 @@ func Load() (*Config, error) {
 	}
 	if cfg.KeepLogFiles < 1 {
 		cfg.KeepLogFiles = 9
+	}
+	if cfg.NZBHistoryRetentionDays < 1 {
+		cfg.NZBHistoryRetentionDays = 90
+		needSave = true
 	}
 
 	overrides, keys := env.ReadConfigOverrides()
@@ -532,10 +540,10 @@ func (c *Config) ensureSeriesSearchQuery(query SearchQueryConfig) bool {
 }
 
 func (c *Config) ensureDefaultMigratedStream() bool {
-	if c.Devices == nil {
-		c.Devices = make(map[string]*DeviceEntry)
+	if c.Streams == nil {
+		c.Streams = make(map[string]*StreamEntry)
 	}
-	if _, exists := c.Devices[defaultMigratedStreamID]; exists {
+	if _, exists := c.Streams[defaultMigratedStreamID]; exists {
 		return false
 	}
 	token, err := generateConfigToken()
@@ -543,7 +551,7 @@ func (c *Config) ensureDefaultMigratedStream() bool {
 		logger.Warn("Failed to generate token for migrated default stream", "err", err)
 		return false
 	}
-	c.Devices[defaultMigratedStreamID] = &DeviceEntry{
+	c.Streams[defaultMigratedStreamID] = &StreamEntry{
 		Username:            defaultMigratedStreamID,
 		Token:               token,
 		Order:               1,
@@ -605,14 +613,23 @@ func allSearchQueryNames(queries []SearchQueryConfig) []string {
 }
 
 func (c *Config) LoadFile(path string) error {
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(c); err != nil {
+
+	type configAlias Config
+	var raw struct {
+		configAlias
+		LegacyDevices map[string]*StreamEntry `json:"devices"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+
+	*c = Config(raw.configAlias)
+	if c.Streams == nil && raw.LegacyDevices != nil {
+		c.Streams = raw.LegacyDevices
 	}
 	return nil
 }

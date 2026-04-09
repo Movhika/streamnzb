@@ -80,6 +80,7 @@ func (r *Reporter) report(sess *session.Session, available bool) {
 		}
 		meta := ReportMeta{ReleaseName: sess.ReportReleaseName(), Size: sess.ReportSize()}
 		if ids := sess.ContentIDs; ids != nil {
+			meta.TmdbID = ids.TmdbID
 
 			if ids.TvdbID != "" && (ids.Season > 0 || ids.Episode > 0) {
 				meta.TvdbID = ids.TvdbID
@@ -93,7 +94,7 @@ func (r *Reporter) report(sess *session.Session, available bool) {
 				meta.Episode = ids.Episode
 			}
 		}
-		if meta.ImdbID == "" && meta.TvdbID == "" {
+		if meta.ImdbID == "" && meta.TmdbID == "" && meta.TvdbID == "" {
 			return
 		}
 		if meta.ReleaseName == "" {

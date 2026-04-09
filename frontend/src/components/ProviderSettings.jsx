@@ -153,21 +153,21 @@ function firstFieldErrorMessage(fieldErrors, fallback) {
   return first || fallback
 }
 
-function mapDevicesByUsername(devices) {
-  return (Array.isArray(devices) ? devices : []).reduce((acc, device) => {
-    if (!device?.username) return acc
-    acc[device.username] = device
+function mapStreamsByUsername(streams) {
+  return (Array.isArray(streams) ? streams : []).reduce((acc, stream) => {
+    if (!stream?.username) return acc
+    acc[stream.username] = stream
     return acc
   }, {})
 }
 
-function assignedStreamsForProvider(devicesByName, providerName) {
+function assignedStreamsForProvider(streamsByName, providerName) {
   const target = normalizeName(providerName)
-  if (!target || !devicesByName) return []
-  return Object.values(devicesByName)
+  if (!target || !streamsByName) return []
+  return Object.values(streamsByName)
     .filter(Boolean)
-    .filter((device) => Array.isArray(device.provider_selections) && device.provider_selections.some((name) => normalizeName(name) === target))
-    .map((device) => device.username)
+    .filter((stream) => Array.isArray(stream.provider_selections) && stream.provider_selections.some((name) => normalizeName(name) === target))
+    .map((stream) => stream.username)
 }
 
 function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatus, title, description, saveLabel, existingNames = [], existingProviders = [], editing = false }) {
@@ -466,7 +466,7 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
   )
 }
 
-export function ProviderSettings({ fields = [], append, remove, replace, onPersist, onClearStatus, onStatus, stats, devicesByName = {} }) {
+export function ProviderSettings({ fields = [], append, remove, replace, onPersist, onClearStatus, onStatus, stats, streamsByName = {} }) {
   const providers = fields
   const [editingIndex, setEditingIndex] = useState(null)
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -543,10 +543,10 @@ export function ProviderSettings({ fields = [], append, remove, replace, onPersi
     if (!provider) return
     let assignedStreams = []
     try {
-      const liveDevices = await apiFetch('/api/streams')
-      assignedStreams = assignedStreamsForProvider(mapDevicesByUsername(liveDevices), provider.name)
+      const liveStreams = await apiFetch('/api/streams')
+      assignedStreams = assignedStreamsForProvider(mapStreamsByUsername(liveStreams), provider.name)
     } catch {
-      assignedStreams = assignedStreamsForProvider(devicesByName, provider.name)
+      assignedStreams = assignedStreamsForProvider(streamsByName, provider.name)
     }
     if (assignedStreams.length > 0) {
       setDeleteBlockedName(provider.name || provider.host || '')

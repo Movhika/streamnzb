@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
@@ -350,5 +351,89 @@ func TestLimitChecksRefreshDailyUsageAfterRollover(t *testing.T) {
 	}
 	if err := client.checkDownloadLimit(); err != nil {
 		t.Fatalf("checkDownloadLimit() error = %v, want nil after rollover refresh", err)
+	}
+}
+
+func TestSearchTVTextModeIncludesSeasonEpisodeParamsWhenEnabled(t *testing.T) {
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{Searching: indexer.CapsSearching{TVSearch: true}}
+
+	_, err := client.Search(indexer.SearchRequest{
+		Cat:                    "5000",
+		Query:                  "The Last of Us",
+		Season:                 "1",
+		Episode:                "2",
+		UseSeasonEpisodeParams: true,
+		SearchMode:             "text",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if got := gotQuery.Get("t"); got != "search" {
+		t.Fatalf("t = %q, want %q", got, "search")
+	}
+	if got := gotQuery.Get("q"); got != "The Last of Us" {
+		t.Fatalf("q = %q, want %q", got, "The Last of Us")
+	}
+	if got := gotQuery.Get("season"); got != "1" {
+		t.Fatalf("season = %q, want %q", got, "1")
+	}
+	if got := gotQuery.Get("ep"); got != "2" {
+		t.Fatalf("ep = %q, want %q", got, "2")
+	}
+}
+
+func TestSearchTVIDModeKeepsTVSearchParams(t *testing.T) {
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{Searching: indexer.CapsSearching{TVSearch: true}}
+
+	_, err := client.Search(indexer.SearchRequest{
+		Cat:                    "5000",
+		TVDBID:                 "121361",
+		Season:                 "1",
+		Episode:                "2",
+		UseSeasonEpisodeParams: true,
+		SearchMode:             "id",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if got := gotQuery.Get("t"); got != "tvsearch" {
+		t.Fatalf("t = %q, want %q", got, "tvsearch")
+	}
+	if got := gotQuery.Get("tvdbid"); got != "121361" {
+		t.Fatalf("tvdbid = %q, want %q", got, "121361")
+	}
+	if got := gotQuery.Get("season"); got != "1" {
+		t.Fatalf("season = %q, want %q", got, "1")
+	}
+	if got := gotQuery.Get("ep"); got != "2" {
+		t.Fatalf("ep = %q, want %q", got, "2")
 	}
 }

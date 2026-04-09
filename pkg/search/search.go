@@ -3,7 +3,7 @@ package search
 import (
 	"fmt"
 	"strconv"
-	"sync"
+	"strings"
 
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
@@ -54,90 +54,18 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 	if idx == nil {
 		return nil, nil
 	}
+	_ = cfg
 
-	runIDSearch := req.ForceIDSearch || (req.Query == "" && len(req.PerIndexerQuery) == 0 && (req.IMDbID != "" || req.TVDBID != "" || req.TMDBID != ""))
-	var idReq indexer.SearchRequest
-	if runIDSearch {
-		idReq = req
-		if !idReq.ForceIDSearch {
-			idReq.Query = ""
-		}
-		idReq.PerIndexerQuery = nil
-	}
+	runIDSearch := strings.EqualFold(strings.TrimSpace(req.SearchMode), "id")
+	searchReq := req
 
-	var textReq *indexer.SearchRequest
 	filterQuery := req.FilterQuery
 	if filterQuery == "" {
 		filterQuery = BuildFilterQuery(tmdbClient, req, contentType, contentIDs, imdbForText, tmdbForText)
 	}
 
-	usePerIndexerQuery := len(req.PerIndexerQuery) > 0
-
-	if usePerIndexerQuery {
-		textReq = &indexer.SearchRequest{
-			Cat:                    req.Cat,
-			Limit:                  req.Limit,
-			IMDbID:                 req.IMDbID,
-			TMDBID:                 req.TMDBID,
-			TVDBID:                 req.TVDBID,
-			EffectiveByIndexer:     req.EffectiveByIndexer,
-			PerIndexerQuery:        req.PerIndexerQuery,
-			UseSeasonEpisodeParams: req.UseSeasonEpisodeParams,
-			ForceIDSearch:          false,
-			IndexerMode:            req.IndexerMode,
-			StreamLabel:            req.StreamLabel,
-			RequestLabel:           req.RequestLabel,
-		}
-		if req.UseSeasonEpisodeParams {
-			textReq.Season = req.Season
-			textReq.Episode = req.Episode
-		}
-	} else if !req.ForceIDSearch && tmdbClient != nil && cfg != nil {
-		var textQuery string
-		includeYear := true
-		searchTitleLanguage := cfg.GetSearchTitleLanguage()
-		if contentType == "movie" {
-			if searchTitleLanguage != "" {
-				if q, err := tmdbClient.GetMovieTitleForSearch(contentIDs.ImdbID, req.TMDBID, searchTitleLanguage, includeYear, false); err == nil {
-					textQuery = q
-				}
-			} else if includeYear {
-				if t, y, err := tmdbClient.GetMovieTitleAndYear(contentIDs.ImdbID, req.TMDBID); err == nil {
-					if y != "" {
-						textQuery = t + " " + y
-					} else {
-						textQuery = t
-					}
-				}
-			} else {
-				if t, err := tmdbClient.GetMovieTitle(contentIDs.ImdbID, req.TMDBID); err == nil {
-					textQuery = t
-				}
-			}
-		} else if req.Season != "" && req.Episode != "" {
-			if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil {
-				textQuery = name
-			}
-		}
-		if textQuery != "" {
-			textReq = &indexer.SearchRequest{
-				Query:                  textQuery,
-				Cat:                    req.Cat,
-				Limit:                  req.Limit,
-				IMDbID:                 req.IMDbID,
-				TMDBID:                 req.TMDBID,
-				TVDBID:                 req.TVDBID,
-				UseSeasonEpisodeParams: req.UseSeasonEpisodeParams,
-				ForceIDSearch:          false,
-				IndexerMode:            req.IndexerMode,
-				StreamLabel:            req.StreamLabel,
-				RequestLabel:           req.RequestLabel,
-			}
-			if req.UseSeasonEpisodeParams {
-				textReq.Season = req.Season
-				textReq.Episode = req.Episode
-			}
-		}
+	if !runIDSearch && strings.TrimSpace(req.Query) != "" {
+		searchReq.SearchMode = "text"
 	}
 
 	filterAggregator := func(base indexer.Indexer, request indexer.SearchRequest, textMode bool) indexer.Indexer {
@@ -151,20 +79,11 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 			if request.EffectiveByIndexer != nil {
 				overrides = request.EffectiveByIndexer[idxr.Name()]
 			}
-			if textMode && request.PerIndexerQuery != nil && len(request.PerIndexerQuery[idxr.Name()]) == 0 {
-				continue
-			}
 			reqCopy := request
 			reqCopy.EffectiveByIndexer = nil
-			reqCopy.PerIndexerQuery = nil
 			reqCopy.OptionalOverrides = overrides
-			if textMode {
-				if queries := request.PerIndexerQuery[idxr.Name()]; len(queries) > 0 {
-					reqCopy.Query = queries[0]
-				} else if reqCopy.Query == "" {
-					reqCopy.Query = "__prepared_text_query__"
-				}
-				reqCopy.ForceIDSearch = false
+			if textMode && reqCopy.Query != "" {
+				reqCopy.SearchMode = "text"
 			}
 			if indexer.ShouldSkipIndexerForRequest(reqCopy, overrides) {
 				continue
@@ -181,121 +100,59 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 	// inside the Aggregator.Search method as a fallback, but we prefilter here so only
 	// relevant indexers participate in each request path.
 
-	var idResp *indexer.SearchResponse
-	var idErr error
-	var textReleases []*release.Release
-	var textErr error
-	var wg sync.WaitGroup
+	idxForMode := filterAggregator(idx, searchReq, !runIDSearch)
+	if idxForMode == nil {
+		return nil, nil
+	}
 
-	if runIDSearch {
-		idIdx := filterAggregator(idx, idReq, false)
-		if idIdx != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				idResp, idErr = idIdx.Search(idReq)
-			}()
-		} else {
-			idResp = &indexer.SearchResponse{}
+	resp, err := idxForMode.Search(searchReq)
+	if err != nil {
+		mode := "text"
+		if runIDSearch {
+			mode = "id"
 		}
-	}
-
-	if textReq != nil {
-		textIdx := filterAggregator(idx, *textReq, true)
-		if textIdx != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if resp, err := textIdx.Search(*textReq); err == nil {
-					indexer.NormalizeSearchResponse(resp)
-					textReleases = resp.Releases
-				} else {
-					textErr = err
-				}
-			}()
-		} else {
-			textReleases = nil
-		}
-	}
-
-	wg.Wait()
-
-	if idErr != nil {
-		return nil, fmt.Errorf("indexer search failed: %w", idErr)
-	}
-	if textErr != nil {
-		logger.Warn("Stream text search failed",
+		logger.Warn("Stream search failed",
 			"stream", req.StreamLabel,
 			"request", req.RequestLabel,
-			"err", textErr,
+			"mode", mode,
+			"err", err,
 		)
+		return nil, fmt.Errorf("%s search failed for stream=%s request=%s: %w", mode, req.StreamLabel, req.RequestLabel, err)
 	}
-	if idResp != nil {
-		indexer.NormalizeSearchResponse(idResp)
-	}
+	indexer.NormalizeSearchResponse(resp)
 
-	var idReleases []*release.Release
-	if idResp != nil {
-		idReleases = idResp.Releases
-	}
-
-	combined := make([]*release.Release, 0, len(idReleases)+len(textReleases))
-	for _, rel := range idReleases {
+	rawReleases := resp.Releases
+	var releases []*release.Release
+	for _, rel := range rawReleases {
 		if rel != nil {
-			rel.QuerySource = "id"
-			combined = append(combined, rel)
-		}
-	}
-	for _, rel := range textReleases {
-		if rel != nil {
-			rel.QuerySource = "text"
-			combined = append(combined, rel)
+			if runIDSearch {
+				rel.QuerySource = "id"
+			} else {
+				rel.QuerySource = "text"
+			}
+			releases = append(releases, rel)
 		}
 	}
 
-	merged := MergeAndDedupeSearchResults(combined)
+	if filterQuery != "" && !req.DisableResultFiltering {
+		releases = FilterResults(releases, contentType, filterQuery, req.Season, req.Episode)
+	}
+
 	switch {
-	case len(textReleases) > 0 && len(idReleases) > 0:
-		logger.Debug("Search request finished",
-			"stream", req.StreamLabel,
-			"request", req.RequestLabel,
-			"mode", "id+text",
-			"final_results", len(merged),
-			"id_results", len(idReleases),
-			"text_results", len(textReleases),
-		)
-	case len(textReleases) > 0:
+	case !runIDSearch:
 		logger.Debug("Search request finished",
 			"stream", req.StreamLabel,
 			"request", req.RequestLabel,
 			"mode", "text",
-			"final_results", len(merged),
-			"raw_results", len(textReleases),
-		)
-	case len(idReleases) > 0:
-		logger.Debug("Search request finished",
-			"stream", req.StreamLabel,
-			"request", req.RequestLabel,
-			"mode", "id",
-			"final_results", len(merged),
-			"raw_results", len(idReleases),
+			"raw_results", len(rawReleases),
 		)
 	default:
 		logger.Debug("Search request finished",
 			"stream", req.StreamLabel,
 			"request", req.RequestLabel,
-			"mode", func() string {
-				if req.ForceIDSearch {
-					return "id"
-				}
-				return "text"
-			}(),
-			"final_results", 0,
+			"mode", "id",
+			"raw_results", len(rawReleases),
 		)
 	}
-
-	if filterQuery != "" {
-		merged = FilterResults(merged, contentType, filterQuery, req.Season, req.Episode)
-	}
-	return merged, nil
+	return releases, nil
 }

@@ -37,6 +37,64 @@ func TestBuildSeriesQueriesWithOptionsCanOmitYear(t *testing.T) {
 	}
 }
 
+func TestBuildMovieQueriesFromMetadataAddsGermanTransliterationVariant(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		MovieDetails: &tmdb.MovieDetails{
+			Title:            "The Lion King",
+			OriginalTitle:    "The Lion King",
+			OriginalLanguage: "en",
+			ReleaseDate:      "1994-06-15",
+		},
+		MovieTranslations: &tmdb.MovieTranslationsResponse{
+			Translations: []tmdb.MovieTranslationEntry{
+				{
+					ISO639_1:  "de",
+					ISO3166_1: "DE",
+					Data: tmdb.MovieTranslationData{
+						Title: "König der Löwen",
+					},
+				},
+			},
+		},
+	}
+
+	got := buildMovieQueriesFromMetadata(metadata, "de-DE", false)
+	want := []string{"Koenig der Loewen"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildMovieQueriesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildSeriesQueriesFromMetadataAddsGermanTransliterationVariant(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "The Lion King",
+			OriginalName:     "The Lion King",
+			OriginalLanguage: "en",
+			FirstAirDate:     "1994-09-10",
+		},
+		TVTranslations: &tmdb.TVTranslationsResponse{
+			Translations: []tmdb.TVTranslationEntry{
+				{
+					ISO639_1:  "de",
+					ISO3166_1: "DE",
+					Data: tmdb.TVTranslationData{
+						Name: "König der Löwen",
+					},
+				},
+			},
+		},
+	}
+
+	got := buildSeriesQueriesFromMetadata(metadata, "de-DE", false, "1", "2", false)
+	want := []string{"Koenig der Loewen S01E02"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSeriesQueriesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
 func TestBuildSearchParamsFromBaseSeriesIDQueryModeMovesSeasonEpisodeIntoQuery(t *testing.T) {
 	srv := &Server{config: &config.Config{}}
 	base := &SearchParams{
@@ -59,14 +117,14 @@ func TestBuildSearchParamsFromBaseSeriesIDQueryModeMovesSeasonEpisodeIntoQuery(t
 		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
 	}
 
-	if !params.Req.ForceIDSearch {
-		t.Fatal("expected ForceIDSearch to be enabled")
+	if params.Req.SearchMode != "id" {
+		t.Fatalf("expected SearchMode to be id, got %q", params.Req.SearchMode)
 	}
 	if params.Req.Query != "S01E04" {
 		t.Fatalf("expected S/E query suffix, got %q", params.Req.Query)
 	}
-	if params.Req.Season != "" || params.Req.Episode != "" {
-		t.Fatalf("expected season/episode params to be cleared, got season=%q episode=%q", params.Req.Season, params.Req.Episode)
+	if params.Req.Season != "1" || params.Req.Episode != "4" {
+		t.Fatalf("expected season/episode params to be preserved, got season=%q episode=%q", params.Req.Season, params.Req.Episode)
 	}
 }
 
@@ -92,14 +150,70 @@ func TestBuildSearchParamsFromBaseSeriesTextQueryModeKeepsSeasonEpisodeForLaterD
 		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
 	}
 
-	if params.Req.ForceIDSearch {
-		t.Fatal("expected text mode to keep ForceIDSearch disabled")
+	if params.Req.SearchMode != "text" {
+		t.Fatalf("expected SearchMode to be text, got %q", params.Req.SearchMode)
 	}
 	if params.Req.Query != "" {
 		t.Fatalf("expected query to stay empty before text query expansion, got %q", params.Req.Query)
 	}
 	if params.Req.Season != "1" || params.Req.Episode != "4" {
 		t.Fatalf("expected base season/episode to remain available, got season=%q episode=%q", params.Req.Season, params.Req.Episode)
+	}
+}
+
+func TestBuildSearchParamsFromBaseTextModeUsesRequestLanguageNotPerIndexerOverrides(t *testing.T) {
+	srv := &Server{config: &config.Config{
+		Indexers: []config.IndexerConfig{
+			{Name: "IndexerA", SearchTitleLanguage: "de"},
+			{Name: "IndexerB", SearchTitleLanguage: "en"},
+			{Name: "Easynews", Type: "easynews", SearchTitleLanguage: "fr"},
+		},
+	}}
+	base := &SearchParams{
+		ContentType: "movie",
+		ID:          "tt0110357",
+		Req: indexer.SearchRequest{
+			IMDbID: "tt0110357",
+			Cat:    "2000",
+			Limit:  1000,
+		},
+		Metadata: &resolvedSearchMetadata{
+			MovieDetails: &tmdb.MovieDetails{
+				Title:            "The Lion King",
+				OriginalTitle:    "The Lion King",
+				OriginalLanguage: "en",
+				ReleaseDate:      "1994-06-15",
+			},
+			MovieTranslations: &tmdb.MovieTranslationsResponse{
+				Translations: []tmdb.MovieTranslationEntry{
+					{
+						ISO639_1:  "de",
+						ISO3166_1: "DE",
+						Data: tmdb.MovieTranslationData{
+							Title: "König der Löwen",
+						},
+					},
+				},
+			},
+		},
+		MovieTitleQueries:  make(map[string][]string),
+		SeriesTitleQueries: make(map[string][]string),
+	}
+
+	params, err := srv.buildSearchParamsFromBase(base, &config.SearchQueryConfig{
+		SearchMode:              "text",
+		SearchTitleLanguage:     "de-DE",
+		IncludeYearInTextSearch: boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
+	}
+
+	if params.Req.Query != "Koenig der Loewen" {
+		t.Fatalf("expected request-level localized query, got %q", params.Req.Query)
+	}
+	if params.Req.FilterQuery != "Koenig der Loewen" {
+		t.Fatalf("expected filter query to match request query, got %q", params.Req.FilterQuery)
 	}
 }
 
@@ -147,12 +261,6 @@ func TestHasPreparedTextQueries(t *testing.T) {
 	if !hasPreparedTextQueries(indexer.SearchRequest{FilterQuery: "Invincible S01E04"}) {
 		t.Fatal("expected filter query to count as prepared text query")
 	}
-	if !hasPreparedTextQueries(indexer.SearchRequest{PerIndexerQuery: map[string][]string{"NzbPlanet": {"Invincible 2021"}}}) {
-		t.Fatal("expected per-indexer query to count as prepared text query")
-	}
-	if hasPreparedTextQueries(indexer.SearchRequest{PerIndexerQuery: map[string][]string{"NzbPlanet": {"", "   "}}}) {
-		t.Fatal("expected blank per-indexer queries not to count as prepared text query")
-	}
 }
 
 func TestHasUsableResolvedMetadata(t *testing.T) {
@@ -187,15 +295,15 @@ func TestBuildRawSearchResultShortCircuitsWhenMetadataCannotBeResolved(t *testin
 		SeriesSearchQueries: []string{"TVQuery01"},
 	}
 
-	raw, err := srv.buildRawSearchResult(t.Context(), "tv", "stremevent_866", stream)
+	raw, err := srv.buildRawSearchResult(t.Context(), "series", "stremevent_866", stream)
 	if err != nil {
 		t.Fatalf("buildRawSearchResult() error = %v", err)
 	}
 	if raw == nil {
 		t.Fatal("expected zero-result raw search result, got nil")
 	}
-	if len(raw.IndexerReleases) != 0 || len(raw.AvailReleases) != 0 {
-		t.Fatalf("expected no releases after metadata short-circuit, got indexer=%d avail=%d", len(raw.IndexerReleases), len(raw.AvailReleases))
+	if len(raw.IndexerReleases) != 0 {
+		t.Fatalf("expected no releases after metadata short-circuit, got indexer=%d", len(raw.IndexerReleases))
 	}
 }
 

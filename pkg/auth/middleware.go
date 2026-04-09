@@ -11,19 +11,9 @@ type contextKey string
 
 const userContextKey contextKey = "user"
 
-func DeviceFromContext(r *http.Request) (*Device, bool) {
-	device, ok := r.Context().Value(userContextKey).(*Device)
-	return device, ok
-}
-
-// StreamFromContext returns the authenticated stream from the request context.
 func StreamFromContext(r *http.Request) (*Stream, bool) {
-	stream, ok := r.Context().Value(userContextKey).(*Device)
+	stream, ok := r.Context().Value(userContextKey).(*Stream)
 	return stream, ok
-}
-
-func ContextWithDevice(ctx context.Context, device *Device) context.Context {
-	return context.WithValue(ctx, userContextKey, device)
 }
 
 // ContextWithStream stores the authenticated stream in the context.
@@ -31,7 +21,7 @@ func ContextWithStream(ctx context.Context, stream *Stream) context.Context {
 	return context.WithValue(ctx, userContextKey, stream)
 }
 
-func AuthMiddleware(deviceManager *DeviceManager, getAdminUsername, getAdminToken func() string) func(http.Handler) http.Handler {
+func AuthMiddleware(streamManager *StreamManager, getAdminUsername, getAdminToken func() string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			adminUsername := ""
@@ -42,14 +32,14 @@ func AuthMiddleware(deviceManager *DeviceManager, getAdminUsername, getAdminToke
 			if getAdminToken != nil {
 				adminToken = getAdminToken()
 			}
-			var device *Device
+			var stream *Stream
 			var err error
 
 			cookie, err := r.Cookie("auth_session")
 			if err == nil && cookie != nil {
-				device, err = deviceManager.AuthenticateToken(cookie.Value, adminUsername, adminToken)
+				stream, err = streamManager.AuthenticateToken(cookie.Value, adminUsername, adminToken)
 				if err == nil {
-					ctx := context.WithValue(r.Context(), userContextKey, device)
+					ctx := context.WithValue(r.Context(), userContextKey, stream)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -69,9 +59,9 @@ func AuthMiddleware(deviceManager *DeviceManager, getAdminUsername, getAdminToke
 				parts := strings.SplitN(authHeader, " ", 2)
 				if len(parts) == 2 && parts[0] == "Bearer" {
 					token := parts[1]
-					device, err = deviceManager.AuthenticateToken(token, adminUsername, adminToken)
+					stream, err = streamManager.AuthenticateToken(token, adminUsername, adminToken)
 					if err == nil {
-						ctx := context.WithValue(r.Context(), userContextKey, device)
+						ctx := context.WithValue(r.Context(), userContextKey, stream)
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
 					}
@@ -80,9 +70,9 @@ func AuthMiddleware(deviceManager *DeviceManager, getAdminUsername, getAdminToke
 
 			token := r.URL.Query().Get("token")
 			if token != "" {
-				device, err = deviceManager.AuthenticateToken(token, adminUsername, adminToken)
+				stream, err = streamManager.AuthenticateToken(token, adminUsername, adminToken)
 				if err == nil {
-					ctx := context.WithValue(r.Context(), userContextKey, device)
+					ctx := context.WithValue(r.Context(), userContextKey, stream)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}

@@ -54,10 +54,11 @@ type playbackLease struct {
 }
 
 type Session struct {
-	ID    string
-	NZB   *nzb.NZB
-	Files []*loader.File
-	File  *loader.File
+	ID         string
+	NZB        *nzb.NZB
+	Files      []*loader.File
+	File       *loader.File
+	StreamName string
 
 	Blueprint           interface{}
 	CreatedAt           time.Time
@@ -79,6 +80,7 @@ type Session struct {
 	// ContentType and ContentID are the request context (e.g. "movie"/"series" and "tt123" or "tmdb:123:1:2") for NZB attempt history.
 	ContentType          string
 	ContentID            string
+	ContentTitle         string
 	selectedPlaybackFile string
 
 	downloadURL string
@@ -181,7 +183,7 @@ func (s *Session) HasPreviouslyServed() bool {
 // before being evicted even if EndPlayback was never called (e.g. stuck connection).
 const MaxPlaybackDuration = 6 * time.Hour
 
-// FailoverOrderTTL is how long device failover order entries are kept before expiry in cleanup().
+// FailoverOrderTTL is how long stream failover order entries are kept before expiry in cleanup().
 const FailoverOrderTTL = 24 * time.Hour
 
 // PostPlaybackEvictTTL is how long a session stays in memory after playback ends (ActivePlays=0)
@@ -470,6 +472,7 @@ func (m *Manager) Shutdown() {
 
 type AvailReportMeta struct {
 	ImdbID  string
+	TmdbID  string
 	TvdbID  string
 	Season  int
 	Episode int
@@ -567,11 +570,11 @@ func buildLoaderFiles(ctx context.Context, ownerID string, contentFiles []*nzb.F
 	return loaderFiles
 }
 
-func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *release.Release, idx indexer.Indexer, contentIDs *AvailReportMeta, contentType, contentID string) (*Session, error) {
-	return m.CreateDeferredSessionWithFetcher(sessionID, downloadURL, rel, idx, contentIDs, contentType, contentID, nil, nil)
+func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *release.Release, idx indexer.Indexer, contentIDs *AvailReportMeta, contentType, contentID, contentTitle, streamName string) (*Session, error) {
+	return m.CreateDeferredSessionWithFetcher(sessionID, downloadURL, rel, idx, contentIDs, contentType, contentID, contentTitle, streamName, nil, nil)
 }
 
-func (m *Manager) CreateDeferredSessionWithFetcher(sessionID, downloadURL string, rel *release.Release, idx indexer.Indexer, contentIDs *AvailReportMeta, contentType, contentID string, segmentFetcher loader.SegmentFetcher, providerHosts []string) (*Session, error) {
+func (m *Manager) CreateDeferredSessionWithFetcher(sessionID, downloadURL string, rel *release.Release, idx indexer.Indexer, contentIDs *AvailReportMeta, contentType, contentID, contentTitle, streamName string, segmentFetcher loader.SegmentFetcher, providerHosts []string) (*Session, error) {
 	logger.Trace("session CreateDeferredSession start", "id", sessionID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -587,11 +590,13 @@ func (m *Manager) CreateDeferredSessionWithFetcher(sessionID, downloadURL string
 	ctx, cancel := context.WithCancel(context.Background())
 	session := &Session{
 		ID:             sessionID,
+		StreamName:     streamName,
 		NZB:            nil,
 		Release:        rel,
 		ContentIDs:     contentIDs,
 		ContentType:    contentType,
 		ContentID:      contentID,
+		ContentTitle:   contentTitle,
 		downloadURL:    downloadURL,
 		indexer:        idx,
 		CreatedAt:      time.Now(),
@@ -686,38 +691,38 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	return s.NZB, nil
 }
 
-func failoverOrderMapKey(deviceToken, streamKey string) string {
+func failoverOrderMapKey(streamToken, streamKey string) string {
 	if streamKey == "" {
-		return deviceToken
+		return streamToken
 	}
-	return deviceToken + "|" + streamKey
+	return streamToken + "|" + streamKey
 }
 
-func (m *Manager) SetDeviceFailoverOrder(deviceToken, streamKey string, order []string) {
+func (m *Manager) SetStreamFailoverOrder(streamToken, streamKey string, order []string) {
 	if len(order) == 0 {
 		return
 	}
 	cp := make([]string, len(order))
 	copy(cp, order)
-	m.failoverOrder.Store(failoverOrderMapKey(deviceToken, streamKey), &failoverOrderEntry{
+	m.failoverOrder.Store(failoverOrderMapKey(streamToken, streamKey), &failoverOrderEntry{
 		order:     cp,
 		expiresAt: time.Now().Add(FailoverOrderTTL),
 	})
 }
 
-// GetDeviceFailoverOrder returns the stored failover order for this device and stream key.
-// It tries key-specific storage first, then falls back to device-only (legacy) if streamKey is set.
+// GetStreamFailoverOrder returns the stored failover order for this stream token and stream key.
+// It tries key-specific storage first, then falls back to token-only (legacy) if streamKey is set.
 // Returns nil if the entry is missing or expired.
-func (m *Manager) GetDeviceFailoverOrder(deviceToken, streamKey string) []string {
+func (m *Manager) GetStreamFailoverOrder(streamToken, streamKey string) []string {
 	now := time.Now()
 	if streamKey != "" {
-		if val, ok := m.failoverOrder.Load(failoverOrderMapKey(deviceToken, streamKey)); ok && val != nil {
+		if val, ok := m.failoverOrder.Load(failoverOrderMapKey(streamToken, streamKey)); ok && val != nil {
 			if ent, ok := val.(*failoverOrderEntry); ok && ent != nil && now.Before(ent.expiresAt) {
 				return ent.order
 			}
 		}
 	}
-	val, ok := m.failoverOrder.Load(deviceToken)
+	val, ok := m.failoverOrder.Load(streamToken)
 	if !ok || val == nil {
 		return nil
 	}

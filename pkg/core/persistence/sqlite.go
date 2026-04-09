@@ -26,6 +26,8 @@ const (
 	nzbAttemptsSchema = `CREATE TABLE IF NOT EXISTS nzb_attempts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		tried_at INTEGER NOT NULL,
+		stream_name TEXT,
+		provider_name TEXT,
 		content_type TEXT NOT NULL,
 		content_id TEXT NOT NULL,
 		content_title TEXT,
@@ -40,8 +42,11 @@ const (
 		preload INTEGER NOT NULL DEFAULT 0
 	);`
 
-	nzbAttemptsIndexTried   = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_tried_at ON nzb_attempts(tried_at DESC);`
-	nzbAttemptsIndexContent = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_content ON nzb_attempts(content_type, content_id);`
+	nzbAttemptsIndexTried    = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_tried_at ON nzb_attempts(tried_at DESC);`
+	nzbAttemptsIndexContent  = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_content ON nzb_attempts(content_type, content_id);`
+	nzbAttemptsIndexStream   = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_stream_name ON nzb_attempts(stream_name);`
+	nzbAttemptsIndexProvider = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_provider_name ON nzb_attempts(provider_name);`
+	nzbAttemptsIndexIndexer  = `CREATE INDEX IF NOT EXISTS idx_nzb_attempts_indexer_name ON nzb_attempts(indexer_name);`
 )
 
 func openDB(dataDir string) (*sql.DB, error) {
@@ -74,7 +79,21 @@ func initSchema(db *sql.DB) error {
 	if err := migrateNzbAttemptsServedFile(db); err != nil {
 		return err
 	}
-	return migrateNzbAttemptsIndexerName(db)
+	if err := migrateNzbAttemptsIndexerName(db); err != nil {
+		return err
+	}
+	if err := migrateNzbAttemptsStreamName(db); err != nil {
+		return err
+	}
+	if err := migrateNzbAttemptsProviderName(db); err != nil {
+		return err
+	}
+	for _, stmt := range []string{nzbAttemptsIndexStream, nzbAttemptsIndexProvider, nzbAttemptsIndexIndexer} {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("schema: %w", err)
+		}
+	}
+	return nil
 }
 
 // migrateNzbAttemptsPreload adds preload column for existing DBs (no-op if already present).
@@ -98,6 +117,22 @@ func migrateNzbAttemptsIndexerName(db *sql.DB) error {
 	_, err := db.Exec(`ALTER TABLE nzb_attempts ADD COLUMN indexer_name TEXT`)
 	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("migrate nzb_attempts.indexer_name: %w", err)
+	}
+	return nil
+}
+
+func migrateNzbAttemptsStreamName(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE nzb_attempts ADD COLUMN stream_name TEXT`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate nzb_attempts.stream_name: %w", err)
+	}
+	return nil
+}
+
+func migrateNzbAttemptsProviderName(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE nzb_attempts ADD COLUMN provider_name TEXT`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate nzb_attempts.provider_name: %w", err)
 	}
 	return nil
 }

@@ -47,6 +47,7 @@ type ReportRequest struct {
 	ProviderURL     string `json:"provider_url"`
 	Status          bool   `json:"status"`
 	ImdbID          string `json:"imdb_id,omitempty"`
+	TmdbID          string `json:"tmdb_id,omitempty"`
 	TvdbID          string `json:"tvdb_id,omitempty"`
 	Season          int    `json:"season,omitempty"`
 	Episode         int    `json:"episode,omitempty"`
@@ -257,6 +258,7 @@ type ReportMeta struct {
 	Size            int64
 	CompressionType string
 	ImdbID          string
+	TmdbID          string
 	TvdbID          string
 	Season          int
 	Episode         int
@@ -477,6 +479,14 @@ func isRegisterKeyIPAlreadyHasKeyMessage(message string) bool {
 	return hasAlready && hasIP && hasKey
 }
 
+func isAPIKeyMissingMessage(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "x-api-key") && strings.Contains(normalized, "required")
+}
+
 func registerKeyIPAlreadyHasKeyErr(message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -605,6 +615,7 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 		CompressionType: meta.CompressionType,
 		ProviderURL:     providerURL,
 		Status:          status,
+		TmdbID:          meta.TmdbID,
 	}
 
 	if meta.TvdbID != "" && (meta.Season > 0 || meta.Episode > 0) {
@@ -614,12 +625,12 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 	} else if meta.ImdbID != "" {
 		body.ImdbID = meta.ImdbID
 	}
-	if body.ImdbID == "" && body.TvdbID == "" {
-		logger.Debug("AvailNZB report skipped", "reason", "no imdb_id or tvdb_id in meta", "url", releaseURL)
+	if body.ImdbID == "" && body.TmdbID == "" && body.TvdbID == "" {
+		logger.Debug("AvailNZB report skipped", "reason", "no imdb_id, tmdb_id or tvdb_id in meta", "url", releaseURL)
 		return nil
 	}
 
-	logger.Debug("AvailNZB report", "url", releaseURL, "release_name", body.ReleaseName, "provider", providerURL, "status", status, "imdb_id", body.ImdbID, "tvdb_id", body.TvdbID, "season", body.Season, "episode", body.Episode)
+	logger.Debug("AvailNZB report", "url", releaseURL, "release_name", body.ReleaseName, "provider", providerURL, "status", status, "imdb_id", body.ImdbID, "tmdb_id", body.TmdbID, "tvdb_id", body.TvdbID, "season", body.Season, "episode", body.Episode)
 
 	reqBody, err := json.Marshal(body)
 	if err != nil {
@@ -787,6 +798,20 @@ func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			logger.Error("AvailNZB GetStatus unexpected status and failed to read error body", "status", resp.StatusCode, "url", releaseURL, "err", readErr)
+			return nil, fmt.Errorf("availnzb status: unexpected status code: %d", resp.StatusCode)
+		}
+		message := decodeAPIErrorMessage(body)
+		if resp.StatusCode == http.StatusUnauthorized && isAPIKeyMissingMessage(message) {
+			logger.Error("AvailNZB GetStatus unexpected status", "status", resp.StatusCode, "url", releaseURL, "api_key_missing", true)
+			return nil, fmt.Errorf("availnzb status: unexpected status code: %d: api key missing", resp.StatusCode)
+		}
+		if message != "" {
+			logger.Error("AvailNZB GetStatus unexpected status", "status", resp.StatusCode, "url", releaseURL, "message", message)
+			return nil, fmt.Errorf("availnzb status: unexpected status code: %d: %s", resp.StatusCode, message)
+		}
 		logger.Error("AvailNZB GetStatus unexpected status", "status", resp.StatusCode, "url", releaseURL)
 		return nil, fmt.Errorf("availnzb status: unexpected status code: %d", resp.StatusCode)
 	}
@@ -807,7 +832,7 @@ type releasesResponseJSON struct {
 	Releases []releaseItemJSON `json:"releases"`
 }
 
-func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, indexers []string, providers []string) (*ReleasesResult, error) {
+func (c *Client) GetReleases(imdbID string, tmdbID string, tvdbID string, season, episode int, indexers []string, providers []string) (*ReleasesResult, error) {
 	if c.BaseURL == "" {
 		logger.Trace("AvailNZB GetReleases skipped", "reason", "no base URL")
 		return nil, nil
@@ -815,12 +840,16 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 	apiKey := c.GetAPIKey()
 
 	var path string
-	if tvdbID != "" && (season > 0 || episode > 0) {
+	if tmdbID != "" && (season > 0 || episode > 0) {
+		path = fmt.Sprintf("%s/status/tmdb/%s/%d/%d", apiPath, url.PathEscape(tmdbID), season, episode)
+	} else if tvdbID != "" && (season > 0 || episode > 0) {
 		path = fmt.Sprintf("%s/status/tvdb/%s/%d/%d", apiPath, url.PathEscape(tvdbID), season, episode)
+	} else if tmdbID != "" {
+		path = apiPath + "/status/tmdb/" + url.PathEscape(tmdbID)
 	} else if imdbID != "" {
 		path = apiPath + "/status/imdb/" + url.PathEscape(imdbID)
 	} else {
-		return nil, fmt.Errorf("availnzb releases: need imdb_id or tvdb_id+season+episode")
+		return nil, fmt.Errorf("availnzb releases: need tmdb_id, imdb_id, or tvdb_id+season+episode")
 	}
 	params := url.Values{}
 	if len(indexers) > 0 {
@@ -834,7 +863,7 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 		reqURL += "?" + params.Encode()
 	}
 
-	logger.Debug("AvailNZB GetReleases", "imdb_id", imdbID, "tvdb_id", tvdbID, "season", season, "episode", episode, "indexers", len(indexers), "providers", len(providers))
+	logger.Debug("AvailNZB GetReleases", "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "season", season, "episode", episode, "indexers", len(indexers), "providers", len(providers))
 
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
@@ -845,13 +874,27 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		logger.Error("AvailNZB GetReleases request failed", "err", err, "imdb_id", imdbID, "tvdb_id", tvdbID)
+		logger.Error("AvailNZB GetReleases request failed", "err", err, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logger.Error("AvailNZB GetReleases unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tvdb_id", tvdbID)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			logger.Error("AvailNZB GetReleases unexpected status and failed to read error body", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "err", readErr)
+			return nil, fmt.Errorf("availnzb releases: unexpected status code: %d", resp.StatusCode)
+		}
+		message := decodeAPIErrorMessage(body)
+		if resp.StatusCode == http.StatusUnauthorized && isAPIKeyMissingMessage(message) {
+			logger.Error("AvailNZB GetReleases unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "api_key_missing", true)
+			return nil, fmt.Errorf("availnzb releases: unexpected status code: %d: api key missing", resp.StatusCode)
+		}
+		if message != "" {
+			logger.Error("AvailNZB GetReleases unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "message", message)
+			return nil, fmt.Errorf("availnzb releases: unexpected status code: %d: %s", resp.StatusCode, message)
+		}
+		logger.Error("AvailNZB GetReleases unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID)
 		return nil, fmt.Errorf("availnzb releases: unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -886,7 +929,7 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 			availableCount++
 		}
 	}
-	logger.Debug("AvailNZB GetReleases", "count", raw.Count, "available", availableCount, "imdb_id", imdbID, "tvdb_id", tvdbID)
+	logger.Debug("AvailNZB GetReleases finished", "raw_results", raw.Count, "available_results", availableCount, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID)
 	return &ReleasesResult{ImdbID: raw.ImdbID, Count: raw.Count, Releases: releases}, nil
 }
 

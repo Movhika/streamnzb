@@ -2,7 +2,6 @@ package search
 
 import (
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -220,24 +219,33 @@ func FilterResults(releases []*release.Release, contentType, filterQuery, season
 	return out
 }
 
+func dedupeReleaseKey(rel *release.Release) string {
+	if rel == nil {
+		return ""
+	}
+	if rel.DetailsURL != "" {
+		return "details:" + rel.DetailsURL
+	}
+	if rel.GUID != "" {
+		return "guid:" + rel.GUID
+	}
+	return ""
+}
+
 func MergeAndDedupeSearchResults(releases []*release.Release) []*release.Release {
-	sort.SliceStable(releases, func(i, j int) bool {
-		return releases[i].QuerySource == "id" && releases[j].QuerySource != "id"
-	})
-	seenTitle := make(map[string]bool)
+	seen := make(map[string]bool)
 	var result []*release.Release
 	for _, rel := range releases {
 		if rel == nil {
 			continue
 		}
-		normTitle := release.NormalizeTitleForDedup(rel.Title)
-		if normTitle == "" {
+		key := dedupeReleaseKey(rel)
+		if key != "" && seen[key] {
 			continue
 		}
-		if seenTitle[normTitle] {
-			continue
+		if key != "" {
+			seen[key] = true
 		}
-		seenTitle[normTitle] = true
 		result = append(result, rel)
 	}
 	return result

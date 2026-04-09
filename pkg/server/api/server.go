@@ -247,7 +247,7 @@ func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {
 }
 
 func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, indexers indexer.Indexer,
-	validator *validation.Checker, triage *triage.Service, avail *availnzb.Client, availNZBIndexerHosts []string,
+	validator *validation.Checker, triage *triage.Service, avail *availnzb.Client, availNZBIndexerHosts map[string]string,
 	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client) {
 	comp := &app.Components{
 		Config:               cfg,
@@ -310,16 +310,17 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/check", s.handleAuthCheck)
+	mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	mux.HandleFunc("/api/info", s.handleInfo)
 
 	authMiddleware := auth.StreamAuthMiddleware(s.streamManager, func() string { return s.config.GetAdminUsername() }, func() string { return s.config.AdminToken })
 	mux.Handle("/api/ws", authMiddleware(http.HandlerFunc(s.handleWebSocket)))
 	mux.Handle("/api/config", authMiddleware(http.HandlerFunc(s.handleConfig)))
 	mux.Handle("/api/cache/clear", authMiddleware(http.HandlerFunc(s.handleClearCache)))
-	mux.Handle("/api/devices", authMiddleware(http.HandlerFunc(s.handleDevices)))
-	mux.Handle("/api/devices/", authMiddleware(http.HandlerFunc(s.handleDevices)))
-	mux.Handle("/api/streams", authMiddleware(http.HandlerFunc(s.handleDevices)))
-	mux.Handle("/api/streams/", authMiddleware(http.HandlerFunc(s.handleDevices)))
+	mux.Handle("/api/devices", authMiddleware(http.HandlerFunc(s.handleManagedStreams)))
+	mux.Handle("/api/devices/", authMiddleware(http.HandlerFunc(s.handleManagedStreams)))
+	mux.Handle("/api/streams", authMiddleware(http.HandlerFunc(s.handleManagedStreams)))
+	mux.Handle("/api/streams/", authMiddleware(http.HandlerFunc(s.handleManagedStreams)))
 	mux.Handle("/api/indexer/caps", authMiddleware(http.HandlerFunc(s.handleGetIndexerCaps)))
 	mux.Handle("/api/indexer/caps/refresh", authMiddleware(http.HandlerFunc(s.handleRefreshIndexerCaps)))
 	mux.Handle("/api/availnzb/status", authMiddleware(http.HandlerFunc(s.handleAvailNZBStatus)))
@@ -329,7 +330,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/tmdb/search", authMiddleware(http.HandlerFunc(s.handleTMDBSearch)))
 	mux.Handle("/api/tmdb/tv/", authMiddleware(http.HandlerFunc(s.handleTMDBTV)))
 	mux.Handle("/api/search/streams", authMiddleware(http.HandlerFunc(s.handleStreams)))
-	mux.Handle("/api/search/streams/avail", authMiddleware(http.HandlerFunc(s.handleStreamsAvail)))
 	mux.Handle("/api/search/releases", authMiddleware(http.HandlerFunc(s.handleSearchReleases)))
 
 	mux.Handle("/api/logs/download", authMiddleware(http.HandlerFunc(s.handleDownloadLogs)))

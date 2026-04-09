@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"streamnzb/pkg/auth"
+	"streamnzb/pkg/core/logger"
 )
 
 type LoginRequest struct {
@@ -93,16 +95,40 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	stream, ok := auth.StreamFromContext(r)
+	cookiePresent := false
+	bearerPresent := false
+	authViaCookie := false
 	if !ok {
 
 		cookie, err := r.Cookie("auth_session")
 		if err == nil && cookie != nil {
+			cookiePresent = true
 			stream, err = s.streamManager.AuthenticateToken(cookie.Value, s.config.GetAdminUsername(), s.config.AdminToken)
 			if err == nil {
+				logger.Debug("Auth check authenticated", "via", "cookie")
+				authViaCookie = true
 				ok = true
 			}
 		}
 	}
+
+	if !ok {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "" {
+			bearerPresent = true
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && parts[0] == "Bearer" {
+				var err error
+				stream, err = s.streamManager.AuthenticateToken(parts[1], s.config.GetAdminUsername(), s.config.AdminToken)
+				if err == nil {
+					logger.Debug("Auth check authenticated", "via", "bearer")
+					ok = true
+				}
+			}
+		}
+	}
+
+	logger.Debug("Auth check evaluated", "ok", ok, "cookie_present", cookiePresent, "bearer_present", bearerPresent)
 
 	if ok {
 		var mustChangePassword bool
@@ -113,6 +139,9 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 			"authenticated":        true,
 			"username":             stream.Username,
 			"must_change_password": mustChangePassword,
+		}
+		if !authViaCookie {
+			out["token"] = stream.Token
 		}
 		if s.strmServer != nil {
 			out["version"] = s.strmServer.Version()
@@ -126,6 +155,24 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 			"authenticated": false,
 		})
 	}
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_session",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {

@@ -195,7 +195,7 @@ func TestGetOrDownloadNZBSelectsRequestedEpisode(t *testing.T) {
 		{Subject: "Show.S01E05.1080p.mkv", Segments: []nzb.Segment{{ID: "<b>", Bytes: 50}}},
 	}})
 	idx := &fakeIndexer{data: data}
-	s, err := m.CreateDeferredSession("sess-lazy", "https://example.invalid/get?nzb=1&apikey=test", nil, idx, &AvailReportMeta{Season: 1, Episode: 5}, "series", "tmdb:1:1:5")
+	s, err := m.CreateDeferredSession("sess-lazy", "https://example.invalid/get?nzb=1&apikey=test", nil, idx, &AvailReportMeta{Season: 1, Episode: 5}, "series", "tmdb:1:1:5", "", "")
 	if err != nil {
 		t.Fatalf("CreateDeferredSession returned error: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestGetOrDownloadNZBKeepsBroadCandidatesWhenEpisodeMatchUnknown(t *testing.
 		{Subject: "Altered.Carbon.Release.B.part02.rar", Segments: []nzb.Segment{{ID: "<d>", Bytes: 410}}},
 	}})
 	idx := &fakeIndexer{data: data}
-	s, err := m.CreateDeferredSession("sess-broad-lazy", "https://example.invalid/get?nzb=1&apikey=test", nil, idx, &AvailReportMeta{Season: 2, Episode: 1}, "series", "tmdb:1:2:1")
+	s, err := m.CreateDeferredSession("sess-broad-lazy", "https://example.invalid/get?nzb=1&apikey=test", nil, idx, &AvailReportMeta{Season: 2, Episode: 1}, "series", "tmdb:1:2:1", "", "")
 	if err != nil {
 		t.Fatalf("CreateDeferredSession returned error: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestGetOrDownloadNZBDownloadsKeylessURL(t *testing.T) {
 		Segments: []nzb.Segment{{ID: "<a>", Bytes: 60}},
 	}}})
 	idx := &fakeIndexer{data: data, typeName: "newznab"}
-	s, err := m.CreateDeferredSession("sess-keyless", "https://nzbfinder.ws/api?t=get&id=abc123", nil, idx, nil, "movie", "tt123")
+	s, err := m.CreateDeferredSession("sess-keyless", "https://nzbfinder.ws/api?t=get&id=abc123", nil, idx, nil, "movie", "tt123", "", "")
 	if err != nil {
 		t.Fatalf("CreateDeferredSession returned error: %v", err)
 	}

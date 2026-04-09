@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/indexer"
@@ -100,5 +101,151 @@ func TestLimitChecksRefreshDailyUsageAfterRollover(t *testing.T) {
 	}
 	if err := client.checkDownloadLimit(); err != nil {
 		t.Fatalf("checkDownloadLimit() error = %v, want nil after rollover refresh", err)
+	}
+}
+
+func TestBuildEasynewsGPSQuery(t *testing.T) {
+	tests := []struct {
+		name                   string
+		query                  string
+		season                 string
+		episode                string
+		useSeasonEpisodeParams bool
+		category               string
+		want                   string
+	}{
+		{
+			name:                   "tv param mode appends season and episode",
+			query:                  "The Last of Us",
+			season:                 "1",
+			episode:                "2",
+			useSeasonEpisodeParams: true,
+			category:               "5000",
+			want:                   "The Last of Us S01E02",
+		},
+		{
+			name:                   "tv query mode keeps prepared query unchanged",
+			query:                  "The Last of Us S01E02",
+			season:                 "1",
+			episode:                "2",
+			useSeasonEpisodeParams: false,
+			category:               "5000",
+			want:                   "The Last of Us S01E02",
+		},
+		{
+			name:                   "movie query unchanged",
+			query:                  "The Age of Adaline 2015",
+			season:                 "1",
+			episode:                "2",
+			useSeasonEpisodeParams: true,
+			category:               "2000",
+			want:                   "The Age of Adaline 2015",
+		},
+		{
+			name:                   "all 5xxx categories are treated as tv",
+			query:                  "The King Who Never Was",
+			season:                 "1",
+			episode:                "1",
+			useSeasonEpisodeParams: true,
+			category:               "5030",
+			want:                   "The King Who Never Was S01E01",
+		},
+		{
+			name:                   "normalizes german punctuation and umlauts",
+			query:                  "Bube, Dame, König, grAS",
+			useSeasonEpisodeParams: false,
+			category:               "5000",
+			want:                   "Bube Dame Koenig grAS",
+		},
+		{
+			name:                   "normalizes original punctuation",
+			query:                  "Lock, Stock & Two Smoking Barrels",
+			useSeasonEpisodeParams: false,
+			category:               "2000",
+			want:                   "Lock Stock Two Smoking Barrels",
+		},
+		{
+			name:                   "normalizes colon punctuation",
+			query:                  "Avatar: Fire and Ash",
+			useSeasonEpisodeParams: false,
+			category:               "2000",
+			want:                   "Avatar Fire and Ash",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildEasynewsGPSQuery(tt.query, tt.season, tt.episode, tt.useSeasonEpisodeParams, tt.category); got != tt.want {
+				t.Fatalf("buildEasynewsGPSQuery() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeEasynewsQuery(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"Bube, Dame, König, grAS", "Bube Dame Koenig grAS"},
+		{"Lock, Stock & Two Smoking Barrels", "Lock Stock Two Smoking Barrels"},
+		{"Avatar: Fire and Ash", "Avatar Fire and Ash"},
+	}
+
+	for _, tt := range tests {
+		if got := normalizeEasynewsQuery(tt.in); got != tt.want {
+			t.Fatalf("normalizeEasynewsQuery(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestPrepareEasynewsQueryIncludesExtraSearchTerms(t *testing.T) {
+	overrideTerms := "GERMAN"
+	uhdTerms := "2160p"
+	punctuatedTerms := "x265-GER"
+
+	tests := []struct {
+		name             string
+		baseQuery        string
+		searchMode       string
+		overrides        *config.IndexerSearchConfig
+		wantPreparedText string
+	}{
+		{
+			name:             "text search appends override extra terms",
+			baseQuery:        "Avatar Fire and Ash",
+			searchMode:       "text",
+			overrides:        &config.IndexerSearchConfig{ExtraSearchTerms: &uhdTerms},
+			wantPreparedText: "Avatar Fire and Ash 2160p",
+		},
+		{
+			name:             "id search prepends override extra terms",
+			baseQuery:        "S01E01",
+			searchMode:       "id",
+			overrides:        &config.IndexerSearchConfig{ExtraSearchTerms: &overrideTerms},
+			wantPreparedText: "GERMAN S01E01",
+		},
+		{
+			name:             "without override leaves query unchanged",
+			baseQuery:        "Lock Stock Two Smoking Barrels",
+			searchMode:       "text",
+			overrides:        nil,
+			wantPreparedText: "Lock Stock Two Smoking Barrels",
+		},
+		{
+			name:             "extra terms are not normalized",
+			baseQuery:        "Bube, Dame, König, grAS",
+			searchMode:       "text",
+			overrides:        &config.IndexerSearchConfig{ExtraSearchTerms: &punctuatedTerms},
+			wantPreparedText: "Bube Dame Koenig grAS x265-GER",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := prepareEasynewsQuery(tt.baseQuery, tt.searchMode, tt.overrides); got != tt.wantPreparedText {
+				t.Fatalf("prepareEasynewsQuery() = %q, want %q", got, tt.wantPreparedText)
+			}
+		})
 	}
 }

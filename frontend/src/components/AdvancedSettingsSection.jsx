@@ -12,16 +12,20 @@ import { apiFetch } from "@/api"
 import { cn } from "@/lib/utils"
 
 const CARD_FIELDS = {
-  admin: ['log_level', 'keep_log_files'],
+  admin: ['log_level', 'keep_log_files', 'nzb_history_retention_days'],
   memory: ['memory_limit_mb'],
   availnzb: ['availnzb_api_key', 'availnzb_mode'],
   metadata: ['tmdb_api_key', 'tvdb_api_key'],
 }
 
 function pickInitialValues(values = {}) {
+  const parsedRetentionDays = values.nzb_history_retention_days == null
+    ? 90
+    : Number(values.nzb_history_retention_days)
   return {
     log_level: values.log_level ?? 'INFO',
     keep_log_files: Number(values.keep_log_files ?? 9) || 9,
+    nzb_history_retention_days: Number.isFinite(parsedRetentionDays) ? parsedRetentionDays : 90,
     memory_limit_mb: Number(values.memory_limit_mb ?? 512),
     availnzb_api_key: values.availnzb_api_key ?? '',
     availnzb_mode: values.availnzb_mode ?? '',
@@ -40,9 +44,9 @@ function EnvOverrideIndicator({ show, message = 'Overwritten by environment vari
     <TooltipProvider delayDuration={100}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex items-center text-amber-600 hover:text-amber-700 align-middle" aria-label={message}>
+          <button type="button" className="inline-flex items-center text-amber-600 hover:text-amber-700 align-middle" aria-label={message}>
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          </span>
+          </button>
         </TooltipTrigger>
         <TooltipContent side="top" align="start">{message}</TooltipContent>
       </Tooltip>
@@ -245,35 +249,50 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="rounded-md border border-border/60">
-                  <FormField control={control} name="log_level" render={({ field }) => (
-                    <FormItem className="rounded-none border-0 p-3">
-                      <div className="flex items-center justify-between gap-4">
-                        <FormLabel className="text-sm font-medium flex items-center gap-1.5">Log Level <EnvOverrideIndicator show={envOverrides.includes('log_level')} /></FormLabel>
-                        <FormControl>
-                          <select className={fieldClassName('log_level', 'flex h-9 w-40 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2')} {...field}>
-                            <option value="DEBUG">DEBUG</option>
-                            <option value="INFO">INFO</option>
-                            <option value="WARN">WARN</option>
-                            <option value="ERROR">ERROR</option>
-                          </select>
-                        </FormControl>
-                      </div>
-                      <FormDescription className="mt-3">Controls how verbose StreamNZB logging should be.</FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
-                  <FormField control={control} name="keep_log_files" render={({ field }) => (
-                    <FormItem className="relative rounded-none border-0 p-3">
-                      <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-                      <div className="flex items-center justify-between gap-4">
-                        <FormLabel className="text-sm font-medium flex items-center gap-1.5">Keep log files <EnvOverrideIndicator show={envOverrides.includes('keep_log_files')} /></FormLabel>
-                        <FormControl><Input type="number" min={1} max={50} className={fieldClassName('keep_log_files', 'h-9 w-28')} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; field.onChange(v === '' ? 9 : Math.min(50, Math.max(1, Number(v) || 9))) }} /></FormControl>
-                      </div>
-                      <FormDescription className="mt-3">Number of log files to keep. Oldest rotated logs are purged on restart.</FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
+                <div className="space-y-4">
+                  <div className="rounded-md border border-border/60">
+                    <FormField control={control} name="log_level" render={({ field }) => (
+                      <FormItem className="rounded-none border-0 p-3">
+                        <div className="flex items-center justify-between gap-4">
+                          <FormLabel className="text-sm font-medium flex items-center gap-1.5">Log Level <EnvOverrideIndicator show={envOverrides.includes('log_level')} /></FormLabel>
+                          <FormControl>
+                            <select className={fieldClassName('log_level', 'flex h-9 w-40 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2')} {...field}>
+                              <option value="DEBUG">DEBUG</option>
+                              <option value="INFO">INFO</option>
+                              <option value="WARN">WARN</option>
+                              <option value="ERROR">ERROR</option>
+                            </select>
+                          </FormControl>
+                        </div>
+                        <FormDescription className="mt-3">Controls how verbose StreamNZB logging should be.</FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                    <FormField control={control} name="keep_log_files" render={({ field }) => (
+                      <FormItem className="relative rounded-none border-0 p-3">
+                        <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
+                        <div className="flex items-center justify-between gap-4">
+                          <FormLabel className="text-sm font-medium flex items-center gap-1.5">Keep log files <EnvOverrideIndicator show={envOverrides.includes('keep_log_files')} /></FormLabel>
+                          <FormControl><Input type="number" min={1} max={50} className={fieldClassName('keep_log_files', 'h-9 w-28')} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; field.onChange(v === '' ? 9 : Math.min(50, Math.max(1, Number(v) || 9))) }} /></FormControl>
+                        </div>
+                        <FormDescription className="mt-3">Number of log files to keep. Oldest rotated logs are purged on restart.</FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </div>
+
+                  <div className="rounded-md border border-border/60">
+                    <FormField control={control} name="nzb_history_retention_days" render={({ field }) => (
+                      <FormItem className="rounded-none border-0 p-3">
+                        <div className="flex items-center justify-between gap-4">
+                          <FormLabel className="text-sm font-medium">NZB history retention (days)</FormLabel>
+                          <FormControl><Input type="number" min={0} max={3650} className={fieldClassName('nzb_history_retention_days', 'h-9 w-28')} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; const next = Number(v); field.onChange(v === '' ? 90 : Math.min(3650, Math.max(0, Number.isNaN(next) ? 90 : next))) }} /></FormControl>
+                        </div>
+                        <FormDescription className="mt-3">Delete NZB history entries older than this many days on startup.</FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </div>
                 </div>
               </CardContent>
             </Card>

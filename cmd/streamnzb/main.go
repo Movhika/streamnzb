@@ -129,31 +129,36 @@ func main() {
 	}
 
 	{
-		if !cfg.ResetLegacyDeviceState && len(cfg.Devices) == 0 {
-			var stateDevices map[string]*auth.Device
-			if found, _ := stateMgr.Get("devices", &stateDevices); found && len(stateDevices) > 0 {
-				cfg.Devices = make(map[string]*config.DeviceEntry)
-				for k, d := range stateDevices {
-					if d == nil {
+		if !cfg.ResetLegacyStreamState {
+			var stateStreams map[string]*auth.Stream
+			if found, _ := stateMgr.Get("devices", &stateStreams); found && len(stateStreams) > 0 {
+				if cfg.Streams == nil {
+					cfg.Streams = make(map[string]*config.StreamEntry)
+				}
+				for k, stream := range stateStreams {
+					if stream == nil {
 						continue
 					}
-					ov := d.IndexerOverrides
+					if _, exists := cfg.Streams[k]; exists {
+						continue
+					}
+					ov := stream.IndexerOverrides
 					if ov == nil {
 						ov = make(map[string]config.IndexerSearchConfig)
 					}
-					cfg.Devices[k] = &config.DeviceEntry{
-						Username:         d.Username,
-						Token:            d.Token,
+					cfg.Streams[k] = &config.StreamEntry{
+						Username:         stream.Username,
+						Token:            stream.Token,
 						IndexerOverrides: ov,
 					}
 				}
 				if err := cfg.Save(); err != nil {
-					logger.Warn("Failed to save config after devices migration", "err", err)
+					logger.Warn("Failed to save config after streams migration", "err", err)
 				} else {
 					stateMgr.Delete("devices")
 					stateMgr.Delete("users")
 					_ = stateMgr.Flush()
-					logger.Info("Migrated devices from state.json to config.json")
+					logger.Info("Migrated streams from state.json to config.json")
 				}
 			}
 		}
@@ -187,7 +192,7 @@ func main() {
 	logger.Info("Session manager initialized", "ttl", 30*time.Minute)
 
 	saveConfig := func() error { return cfg.Save() }
-	deviceManager, err := auth.NewDeviceManagerFromConfig(cfg, saveConfig)
+	streamManager, err := auth.NewStreamManagerFromConfig(cfg, saveConfig)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize device manager: %v", err))
 	}
@@ -203,7 +208,7 @@ func main() {
 		AvailNZBIndexerHosts: comp.AvailNZBIndexerHosts,
 		TMDBClient:           comp.TMDBClient,
 		TVDBClient:           comp.TVDBClient,
-		StreamManager:        deviceManager,
+		StreamManager:        streamManager,
 		Version:              Version,
 		AttemptRecorder:      stateMgr,
 	})
@@ -211,7 +216,7 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize Stremio server: %v", err))
 	}
 
-	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, application, availNZBUrl, availNZBAPIKey, effectiveTMDBKey, effectiveTVDBKey)
+	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, streamManager, application, availNZBUrl, availNZBAPIKey, effectiveTMDBKey, effectiveTVDBKey)
 	apiServer.SetIndexerCaps(comp.IndexerCaps)
 	apiServer.SetAttemptLister(stateMgr)
 	if cfg.AvailNZBMode != "disabled" && strings.TrimSpace(availNZBAPIKey) == "" && strings.TrimSpace(availNZBUrl) != "" {
@@ -272,7 +277,7 @@ func main() {
 	addr := fmt.Sprintf(":%d", comp.Config.AddonPort)
 
 	logger.Info("Stremio addon server starting", "base_url", comp.Config.AddonBaseURL, "port", comp.Config.AddonPort)
-	logger.Info("Note: Access requires device authentication tokens")
+	logger.Info("Note: Access requires stream authentication tokens")
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("server failed: %w", err))
