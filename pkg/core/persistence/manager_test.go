@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -102,5 +103,83 @@ func TestMigration(t *testing.T) {
 
 	if _, err := os.Stat(usagePath); !os.IsNotExist(err) {
 		t.Error("usage.json should have been deleted after migration")
+	}
+}
+
+func TestGetManagerMergesMisplacedSiblingDatabase(t *testing.T) {
+	logger.Init("DEBUG")
+	rootDir := t.TempDir()
+	dataDir := filepath.Join(rootDir, "data")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatalf("mkdir data dir: %v", err)
+	}
+
+	sourceDB, err := sql.Open("sqlite", filepath.Join(rootDir, dbFilename))
+	if err != nil {
+		t.Fatalf("open source db: %v", err)
+	}
+	t.Cleanup(func() { _ = sourceDB.Close() })
+	if _, err := sourceDB.Exec(`CREATE TABLE kv (
+		key TEXT PRIMARY KEY,
+		value BLOB NOT NULL,
+		updated_at INTEGER
+	);`); err != nil {
+		t.Fatalf("create kv: %v", err)
+	}
+	if _, err := sourceDB.Exec(`CREATE TABLE nzb_attempts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		tried_at INTEGER NOT NULL,
+		content_type TEXT NOT NULL,
+		content_id TEXT NOT NULL,
+		content_title TEXT,
+		release_title TEXT NOT NULL,
+		release_url TEXT,
+		release_size INTEGER,
+		served_file TEXT,
+		success INTEGER NOT NULL,
+		failure_reason TEXT,
+		slot_path TEXT,
+		preload INTEGER NOT NULL DEFAULT 0,
+		indexer_name TEXT
+	);`); err != nil {
+		t.Fatalf("create attempts: %v", err)
+	}
+	if _, err := sourceDB.Exec(`INSERT INTO nzb_attempts
+		(tried_at, content_type, content_id, content_title, release_title, release_url, release_size, served_file, success, failure_reason, slot_path, preload, indexer_name)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		1740000000000, "movie", "tt123", "Example", "Example.Release", "https://example.invalid", 1234, "movie.mkv", 1, "", "slot-1", 0, "Indexer"); err != nil {
+		t.Fatalf("insert attempt: %v", err)
+	}
+	if err := setKV(sourceDB, "provider_usage", []byte(`{"example":1}`)); err != nil {
+		t.Fatalf("insert kv: %v", err)
+	}
+
+	globalManager = nil
+	mgr, err := GetManager(dataDir)
+	if err != nil {
+		t.Fatalf("GetManager: %v", err)
+	}
+
+	list, err := mgr.ListAttempts(ListAttemptsOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAttempts: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 merged attempt, got %d", len(list))
+	}
+	if got := list[0].ReleaseTitle; got != "Example.Release" {
+		t.Fatalf("ReleaseTitle = %q, want %q", got, "Example.Release")
+	}
+
+	var providerUsage map[string]int
+	found, err := mgr.Get("provider_usage", &providerUsage)
+	if err != nil {
+		t.Fatalf("Get(provider_usage): %v", err)
+	}
+	if !found {
+		t.Fatal("expected provider_usage to be merged")
+	}
+	if providerUsage["example"] != 1 {
+		t.Fatalf("provider_usage = %#v", providerUsage)
 	}
 }
