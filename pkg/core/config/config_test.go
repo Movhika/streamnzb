@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -143,5 +145,36 @@ func TestApplyStreamModelUpgradeDefaultsCreatesQueriesAndDefaultStream(t *testin
 
 	if cfg.applyStreamModelUpgradeDefaults() {
 		t.Fatalf("expected second upgrade application to be a no-op")
+	}
+}
+
+func TestLoadFilePreservesLoadedPath(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"addon_port":7001}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg := &Config{}
+	if err := cfg.LoadFile(configPath); err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	if cfg.LoadedPath != configPath {
+		t.Fatalf("LoadedPath = %q, want %q", cfg.LoadedPath, configPath)
+	}
+}
+
+func TestSaveFileUpdatesLoadedPath(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
+
+	cfg := &Config{AddonPort: 7001}
+	if err := cfg.SaveFile(configPath); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+
+	if cfg.LoadedPath != configPath {
+		t.Fatalf("LoadedPath = %q, want %q", cfg.LoadedPath, configPath)
 	}
 }

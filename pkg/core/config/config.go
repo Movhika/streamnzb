@@ -631,6 +631,7 @@ func (c *Config) LoadFile(path string) error {
 	if c.Streams == nil && raw.LegacyDevices != nil {
 		c.Streams = raw.LegacyDevices
 	}
+	c.LoadedPath = path
 	return nil
 }
 
@@ -725,7 +726,11 @@ func (c *Config) SaveFile(path string) error {
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(c)
+	if err := encoder.Encode(c); err != nil {
+		return err
+	}
+	c.LoadedPath = path
+	return nil
 }
 
 func keySet(list []string, s string) bool {
