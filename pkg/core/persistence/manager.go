@@ -44,17 +44,14 @@ func GetManager(dataDir string) (*StateManager, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate state: %w", err)
 	}
-	if err := mergeMisplacedDatabases(db, dataDir); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("merge misplaced databases: %w", err)
-	}
+	mergeMisplacedDatabases(db, dataDir)
 
 	m := &StateManager{db: db}
 	globalManager = m
 	return m, nil
 }
 
-func mergeMisplacedDatabases(target *sql.DB, dataDir string) error {
+func mergeMisplacedDatabases(target *sql.DB, dataDir string) {
 	for _, sourcePath := range misplacedDatabasePaths(dataDir) {
 		mergedAttempts, mergedKV, err := mergeDatabaseFile(target, sourcePath)
 		if err != nil {
@@ -63,9 +60,17 @@ func mergeMisplacedDatabases(target *sql.DB, dataDir string) error {
 		}
 		if mergedAttempts > 0 || mergedKV > 0 {
 			logger.Info("Merged misplaced sqlite database", "path", sourcePath, "attempts", mergedAttempts, "kv", mergedKV)
+			if err := archiveMergedDatabase(sourcePath); err != nil {
+				logger.Warn("Failed to archive merged sqlite database", "path", sourcePath, "err", err)
+			}
 		}
 	}
-	return nil
+}
+
+func archiveMergedDatabase(sourcePath string) error {
+	archivedPath := sourcePath + ".merged"
+	_ = os.Remove(archivedPath)
+	return os.Rename(sourcePath, archivedPath)
 }
 
 func misplacedDatabasePaths(dataDir string) []string {

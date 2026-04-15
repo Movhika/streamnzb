@@ -118,7 +118,6 @@ func TestGetManagerMergesMisplacedSiblingDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open source db: %v", err)
 	}
-	t.Cleanup(func() { _ = sourceDB.Close() })
 	if _, err := sourceDB.Exec(`CREATE TABLE kv (
 		key TEXT PRIMARY KEY,
 		value BLOB NOT NULL,
@@ -153,6 +152,9 @@ func TestGetManagerMergesMisplacedSiblingDatabase(t *testing.T) {
 	if err := setKV(sourceDB, "provider_usage", []byte(`{"example":1}`)); err != nil {
 		t.Fatalf("insert kv: %v", err)
 	}
+	if err := sourceDB.Close(); err != nil {
+		t.Fatalf("close source db: %v", err)
+	}
 
 	globalManager = nil
 	mgr, err := GetManager(dataDir)
@@ -181,5 +183,12 @@ func TestGetManagerMergesMisplacedSiblingDatabase(t *testing.T) {
 	}
 	if providerUsage["example"] != 1 {
 		t.Fatalf("provider_usage = %#v", providerUsage)
+	}
+
+	if _, err := os.Stat(filepath.Join(rootDir, dbFilename)); !os.IsNotExist(err) {
+		t.Fatalf("expected misplaced db to be archived, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(rootDir, dbFilename+".merged")); err != nil {
+		t.Fatalf("expected archived misplaced db to exist: %v", err)
 	}
 }
