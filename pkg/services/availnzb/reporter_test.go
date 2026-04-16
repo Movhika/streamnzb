@@ -1,8 +1,10 @@
 package availnzb
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -134,5 +136,61 @@ func TestReportGoodAllowsRetryAfterSkippedAttempt(t *testing.T) {
 	}
 	if reportCalls != 1 {
 		t.Fatalf("expected one successful report call after retry, got %d", reportCalls)
+	}
+}
+
+func TestReportBadFallsBackToAttemptedProviderHosts(t *testing.T) {
+	var (
+		mu          sync.Mutex
+		reportCalls int
+		gotProvider string
+		decodeErr   error
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reportCalls++
+		mu.Unlock()
+		var body ReportRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			mu.Lock()
+			decodeErr = err
+			mu.Unlock()
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		gotProvider = body.ProviderURL
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-key")
+	reporter := NewReporter(client, nil)
+
+	sess := &session.Session{
+		ID:      "sess-bad-fallback",
+		Release: &release.Release{Title: "Example.Release.2026", DetailsURL: "https://example.invalid/details/123", Size: 1234},
+		ContentIDs: &session.AvailReportMeta{
+			ImdbID: "tt1234567",
+		},
+	}
+	sess.RecordAttemptedProviderHost("news-a.example.net")
+	sess.RecordAttemptedProviderHost("news-b.example.net")
+
+	outcome := reporter.ReportBad(sess, "EOF")
+	if outcome.Status != "sent" {
+		t.Fatalf("expected sent outcome, got %+v", outcome)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if decodeErr != nil {
+		t.Fatalf("decode report body: %v", decodeErr)
+	}
+	if reportCalls != 1 {
+		t.Fatalf("expected one report call, got %d", reportCalls)
+	}
+	if gotProvider != "news-a.example.net,news-b.example.net" {
+		t.Fatalf("provider = %q, want %q", gotProvider, "news-a.example.net,news-b.example.net")
 	}
 }

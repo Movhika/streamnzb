@@ -84,6 +84,36 @@ func TestIndexerConfigEffectiveTimeoutHonorsExplicitOverride(t *testing.T) {
 	}
 }
 
+func TestConfigEffectivePlaybackStartupTimeoutDefaults(t *testing.T) {
+	cfg := &Config{}
+
+	if got := cfg.EffectivePlaybackStartupTimeoutSeconds(); got != DefaultPlaybackStartupTimeoutSeconds {
+		t.Fatalf("EffectivePlaybackStartupTimeoutSeconds() = %d, want %d", got, DefaultPlaybackStartupTimeoutSeconds)
+	}
+	if got := cfg.EffectivePlaybackStartupTimeout(); got != time.Duration(DefaultPlaybackStartupTimeoutSeconds)*time.Second {
+		t.Fatalf("EffectivePlaybackStartupTimeout() = %v", got)
+	}
+}
+
+func TestConfigEffectivePlaybackStartupTimeoutHonorsExplicitOverride(t *testing.T) {
+	cfg := &Config{PlaybackStartupTimeoutSeconds: 12}
+
+	if got := cfg.EffectivePlaybackStartupTimeoutSeconds(); got != 12 {
+		t.Fatalf("EffectivePlaybackStartupTimeoutSeconds() = %d, want 12", got)
+	}
+	if got := cfg.EffectivePlaybackStartupTimeout(); got != 12*time.Second {
+		t.Fatalf("EffectivePlaybackStartupTimeout() = %v, want %v", got, 12*time.Second)
+	}
+}
+
+func TestConfigEffectivePlaybackStartupTimeoutRejectsOutOfRangeValues(t *testing.T) {
+	cfg := &Config{PlaybackStartupTimeoutSeconds: 61}
+
+	if got := cfg.EffectivePlaybackStartupTimeoutSeconds(); got != DefaultPlaybackStartupTimeoutSeconds {
+		t.Fatalf("EffectivePlaybackStartupTimeoutSeconds() = %d, want %d", got, DefaultPlaybackStartupTimeoutSeconds)
+	}
+}
+
 func TestApplyStreamModelUpgradeDefaultsCreatesQueriesAndDefaultStream(t *testing.T) {
 	cfg := &Config{
 		Providers: []Provider{
