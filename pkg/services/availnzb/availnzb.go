@@ -514,6 +514,14 @@ func isAPIKeyMissingMessage(message string) bool {
 	return strings.Contains(normalized, "x-api-key") && strings.Contains(normalized, "required")
 }
 
+func isAPIKeyTemporarilyAssignedMessage(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "temporarily assigned to another ip")
+}
+
 func registerKeyIPAlreadyHasKeyErr(message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -691,6 +699,20 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			logger.Error("AvailNZB report unexpected status and failed to read error body", "status", resp.StatusCode, "url", releaseURL, "err", readErr)
+			return fmt.Errorf("availnzb report: unexpected status code: %d", resp.StatusCode)
+		}
+		message := decodeAPIErrorMessage(body)
+		if resp.StatusCode == http.StatusForbidden && isAPIKeyTemporarilyAssignedMessage(message) {
+			logger.Warn("AvailNZB report blocked by temporary IP lease", "status", resp.StatusCode, "url", releaseURL, "reason", message)
+			return fmt.Errorf("availnzb report: unexpected status code: %d: api key temporarily assigned to another ip", resp.StatusCode)
+		}
+		if message != "" {
+			logger.Error("AvailNZB report unexpected status", "status", resp.StatusCode, "url", releaseURL, "message", message)
+			return fmt.Errorf("availnzb report: unexpected status code: %d: %s", resp.StatusCode, message)
+		}
 		logger.Error("AvailNZB report unexpected status", "status", resp.StatusCode, "url", releaseURL)
 		return fmt.Errorf("availnzb report: unexpected status code: %d", resp.StatusCode)
 	}
@@ -791,6 +813,18 @@ func (c *Client) GetMe() (*MeResponse, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		logger.Error("AvailNZB GetMe unexpected status", "status", resp.StatusCode)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("availnzb me: unexpected status code: %d", resp.StatusCode)
+		}
+		message := decodeAPIErrorMessage(body)
+		if resp.StatusCode == http.StatusForbidden && isAPIKeyTemporarilyAssignedMessage(message) {
+			logger.Warn("AvailNZB GetMe blocked by temporary IP lease", "status", resp.StatusCode, "reason", message)
+			return nil, fmt.Errorf("availnzb me: unexpected status code: %d: api key temporarily assigned to another ip", resp.StatusCode)
+		}
+		if message != "" {
+			return nil, fmt.Errorf("availnzb me: unexpected status code: %d: %s", resp.StatusCode, message)
+		}
 		return nil, fmt.Errorf("availnzb me: unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -845,6 +879,10 @@ func (c *Client) GetStatus(releaseURL string) (*StatusResponse, error) {
 		if resp.StatusCode == http.StatusUnauthorized && isAPIKeyMissingMessage(message) {
 			logger.Error("AvailNZB GetStatus unexpected status", "status", resp.StatusCode, "url", releaseURL, "api_key_missing", true)
 			return nil, fmt.Errorf("availnzb status: unexpected status code: %d: api key missing", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusForbidden && isAPIKeyTemporarilyAssignedMessage(message) {
+			logger.Warn("AvailNZB GetStatus blocked by temporary IP lease", "status", resp.StatusCode, "url", releaseURL, "reason", message)
+			return nil, fmt.Errorf("availnzb status: unexpected status code: %d: api key temporarily assigned to another ip", resp.StatusCode)
 		}
 		if message != "" {
 			logger.Error("AvailNZB GetStatus unexpected status", "status", resp.StatusCode, "url", releaseURL, "message", message)
@@ -927,6 +965,10 @@ func (c *Client) GetReleases(imdbID string, tmdbID string, tvdbID string, season
 		if resp.StatusCode == http.StatusUnauthorized && isAPIKeyMissingMessage(message) {
 			logger.Error("AvailNZB GetReleases unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "api_key_missing", true)
 			return nil, fmt.Errorf("availnzb releases: unexpected status code: %d: api key missing", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusForbidden && isAPIKeyTemporarilyAssignedMessage(message) {
+			logger.Warn("AvailNZB GetReleases blocked by temporary IP lease", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "reason", message)
+			return nil, fmt.Errorf("availnzb releases: unexpected status code: %d: api key temporarily assigned to another ip", resp.StatusCode)
 		}
 		if message != "" {
 			logger.Error("AvailNZB GetReleases unexpected status", "status", resp.StatusCode, "imdb_id", imdbID, "tmdb_id", tmdbID, "tvdb_id", tvdbID, "message", message)
