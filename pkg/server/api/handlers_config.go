@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"strings"
 
 	"streamnzb/pkg/auth"
 	"streamnzb/pkg/core/config"
@@ -52,11 +51,6 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	var cfg config.Config
 	if stream != nil && stream.Username == s.config.GetAdminUsername() {
 		cfg = configForAdminAPI(s.config)
-		if strings.TrimSpace(cfg.AvailNZBAPIKey) == "" {
-			s.mu.RLock()
-			cfg.AvailNZBAPIKey = strings.TrimSpace(s.availNZBAPIKey)
-			s.mu.RUnlock()
-		}
 	} else {
 		cfg = redactedConfigForViewer(s.config)
 	}
@@ -108,6 +102,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeSaveStatus(w, "error", "Invalid config data", nil)
 		return
 	}
+	newCfg.AvailNZBMode = config.NormalizeAvailNZBMode(newCfg.AvailNZBMode)
 
 	plan := validationPlanFromPatch(body, currentCfg, &newCfg)
 	fieldErrors := s.validateConfigWithPlan(&newCfg, plan)

@@ -32,7 +32,10 @@ function formatDownloadedMb(mb) {
 
 export function DashboardPage({ stats, chartData, sendCommand, config, availNZBStatus, availNZBStatusLoading, availNZBStatusError }) {
   const [activeSessionToClose, setActiveSessionToClose] = useState(null)
-  const availNZBEnabled = (config?.availnzb_mode || '') !== 'disabled'
+  const availNZBEnabled = (() => {
+    const mode = String(config?.availnzb_mode || 'on').toLowerCase()
+    return mode !== 'off' && mode !== 'disabled'
+  })()
   const indexerUrls = useMemo(() => {
     const urls = new Map()
     ;(config?.indexers || []).forEach((idx) => {

@@ -139,6 +139,17 @@ func (c *Config) EffectivePlaybackStartupTimeout() time.Duration {
 	return time.Duration(c.EffectivePlaybackStartupTimeoutSeconds()) * time.Second
 }
 
+func NormalizeAvailNZBMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "full", "status_only", "on":
+		return "on"
+	case "disabled", "off":
+		return "off"
+	default:
+		return "on"
+	}
+}
+
 type Config struct {
 	ConfigVersion int `json:"config_version,omitempty"`
 
@@ -163,7 +174,7 @@ type Config struct {
 	ProxyAuthPass string `json:"proxy_auth_pass"`
 
 	AvailNZBURL    string `json:"-"`
-	AvailNZBAPIKey string `json:"availnzb_api_key,omitempty"`
+	AvailNZBAPIKey string `json:"-"`
 
 	TMDBAPIKey         string `json:"tmdb_api_key,omitempty"`
 	IndexerQueryHeader string `json:"indexer_query_header,omitempty"`
@@ -192,9 +203,8 @@ type Config struct {
 	PlaybackStartupTimeoutSeconds int `json:"playback_startup_timeout_seconds,omitempty"`
 
 	// AvailNZBMode controls how the AvailNZB integration behaves.
-	// "" or "full"        – fetch availability status AND report playback results (default).
-	// "status_only"       – fetch availability status but never report back (leeching).
-	// "disabled"          – disable AvailNZB entirely (no GET, no POST).
+	// "on"  - fetch availability status and report playback results.
+	// "off" - disable AvailNZB entirely (no GET, no POST).
 	AvailNZBMode string `json:"availnzb_mode,omitempty"`
 
 	LoadedPath string `json:"-"`
@@ -453,6 +463,10 @@ func Load() (*Config, error) {
 	}
 	if normalized := normalizePlaybackStartupTimeoutSeconds(cfg.PlaybackStartupTimeoutSeconds); normalized != cfg.PlaybackStartupTimeoutSeconds {
 		cfg.PlaybackStartupTimeoutSeconds = normalized
+		needSave = true
+	}
+	if normalizedMode := NormalizeAvailNZBMode(cfg.AvailNZBMode); normalizedMode != cfg.AvailNZBMode {
+		cfg.AvailNZBMode = normalizedMode
 		needSave = true
 	}
 

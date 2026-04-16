@@ -189,8 +189,8 @@ func TestRegisterKeyPostsAppNameAndDecodesResponse(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %q, want %q", r.Method, http.MethodPost)
 		}
-		if r.URL.Path != "/api/v1/keys" {
-			t.Fatalf("path = %q, want %q", r.URL.Path, "/api/v1/keys")
+		if r.URL.Path != "/api/v1/keys/roll_key" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/api/v1/keys/roll_key")
 		}
 		var req KeyCreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -201,7 +201,7 @@ func TestRegisterKeyPostsAppNameAndDecodesResponse(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"id":"app-1","name":"StreamNZB","token":"new-token","recovery_secret":"recover-1","created_at":"2026-03-09T12:34:56Z"}`))
+		_, _ = w.Write([]byte(`{"id":"app-1","name":"StreamNZB","token":"new-token","created_at":"2026-03-09T12:34:56Z"}`))
 	}))
 	defer server.Close()
 
@@ -215,7 +215,7 @@ func TestRegisterKeyPostsAppNameAndDecodesResponse(t *testing.T) {
 	if got == nil {
 		t.Fatal("RegisterKey returned nil response")
 	}
-	if got.Token != "new-token" || got.RecoverySecret != "recover-1" {
+	if got.Token != "new-token" {
 		t.Fatalf("unexpected response: %+v", got)
 	}
 }
@@ -226,7 +226,7 @@ func TestRegisterKeyDecodesNumericID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"id":456,"name":"StreamNZB","token":"new-token","recovery_secret":"recover-1","created_at":"2026-03-09T12:34:56Z"}`))
+		_, _ = w.Write([]byte(`{"id":456,"name":"StreamNZB","token":"new-token","created_at":"2026-03-09T12:34:56Z"}`))
 	}))
 	defer server.Close()
 
@@ -316,12 +316,19 @@ func TestResolveAPIKeyReturnsExplicitOverride(t *testing.T) {
 	}
 }
 
-func TestResolveAPIKeyReturnsStoredLegacyKey(t *testing.T) {
+func TestResolveAPIKeyReturnsStoredKeyWhenHealthy(t *testing.T) {
 	t.Parallel()
 
 	store := &stubKeyStore{raw: map[string][]byte{apiKeyStateKey: []byte(`"stored-token"`)}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("unexpected registration request")
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/me" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("X-API-Key"); got != "stored-token" {
+			t.Fatalf("X-API-Key = %q, want %q", got, "stored-token")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"app-1","name":"StreamNZB","is_active":true,"app_source":"self_service","trust_level":"trusted","trust_score":97.5,"report_count":7,"public_report_count":2,"verified_report_count":5,"quarantined_report_count":1,"rolled_back_report_count":0,"last_report_at":null,"last_rollback_at":null}`))
 	}))
 	defer server.Close()
 
@@ -334,6 +341,143 @@ func TestResolveAPIKeyReturnsStoredLegacyKey(t *testing.T) {
 	}
 	if store.setCalls != 0 {
 		t.Fatalf("setCalls = %d, want 0", store.setCalls)
+	}
+}
+
+func TestResolveAPIKeyScenarios(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                string
+		stored              string
+		meStatus            int
+		recoverStatus       int
+		registerStatus      int
+		registerBody        string
+		recoverBody         string
+		wantToken           string
+		wantRecoverCalls    int
+		wantRegisterCalls   int
+		wantRecoverHasToken bool
+	}{
+		{
+			name:              "No key, roll new key",
+			stored:            "",
+			recoverStatus:     http.StatusUnauthorized,
+			registerStatus:    http.StatusCreated,
+			registerBody:      `{"id":"2","name":"StreamNZB","token":"rolled-token","created_at":"2026-03-09T13:00:00Z"}`,
+			wantToken:         "rolled-token",
+			wantRecoverCalls:  1,
+			wantRegisterCalls: 1,
+		},
+		{
+			name:                "Key wrong ip, reroll",
+			stored:              "old-token",
+			meStatus:            http.StatusUnauthorized,
+			recoverStatus:       http.StatusOK,
+			recoverBody:         `{"id":"9","name":"StreamNZB","token":"recovered-token","is_active":true,"rotated_at":"2026-03-09T13:10:00Z"}`,
+			wantToken:           "recovered-token",
+			wantRecoverCalls:    1,
+			wantRecoverHasToken: true,
+		},
+		{
+			name:              "Wrong key ip, reroll",
+			stored:            "bad-key",
+			meStatus:          http.StatusUnauthorized,
+			recoverStatus:     http.StatusUnauthorized,
+			registerStatus:    http.StatusForbidden,
+			registerBody:      `{"error":"This IP already has a key"}`,
+			recoverBody:       `{"id":"11","name":"StreamNZB","token":"ip-recovered-token","is_active":true,"rotated_at":"2026-03-09T13:11:00Z"}`,
+			wantToken:         "ip-recovered-token",
+			wantRecoverCalls:  2,
+			wantRegisterCalls: 0,
+		},
+		{
+			name:                "wrong key wrong ip, roll new key",
+			stored:              "bad-key",
+			meStatus:            http.StatusUnauthorized,
+			recoverStatus:       http.StatusUnauthorized,
+			registerStatus:      http.StatusCreated,
+			registerBody:        `{"id":"3","name":"StreamNZB","token":"new-roll-token","created_at":"2026-03-09T13:20:00Z"}`,
+			wantToken:           "new-roll-token",
+			wantRecoverCalls:    2,
+			wantRegisterCalls:   1,
+			wantRecoverHasToken: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			store := &stubKeyStore{raw: map[string][]byte{}}
+			if tt.stored != "" {
+				store.raw[apiKeyStateKey] = []byte(`"` + tt.stored + `"`)
+			}
+
+			recoverCalls := 0
+			registerCalls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
+					status := tt.meStatus
+					if status == 0 {
+						status = http.StatusOK
+					}
+					w.WriteHeader(status)
+					if status == http.StatusOK {
+						_, _ = w.Write([]byte(`{"id":"app-1","name":"StreamNZB","is_active":true,"app_source":"self_service","trust_level":"trusted","trust_score":97.5,"report_count":7,"public_report_count":2,"verified_report_count":5,"quarantined_report_count":1,"rolled_back_report_count":0,"last_report_at":null,"last_rollback_at":null}`))
+					} else {
+						_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+					}
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/keys/recover":
+					recoverCalls++
+					body := map[string]string{}
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					hasToken := body["token"] != ""
+					if tt.wantRecoverHasToken && recoverCalls == 1 && !hasToken {
+						t.Fatalf("expected first recover request token in body")
+					}
+					status := tt.recoverStatus
+					if status == 0 {
+						status = http.StatusOK
+					}
+					if tt.name == "Wrong key ip, reroll" && recoverCalls == 2 && !hasToken {
+						status = http.StatusOK
+					}
+					w.WriteHeader(status)
+					if status == http.StatusOK {
+						_, _ = w.Write([]byte(tt.recoverBody))
+					} else {
+						_, _ = w.Write([]byte(`{"error":"recover failed"}`))
+					}
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/keys/roll_key":
+					registerCalls++
+					status := tt.registerStatus
+					if status == 0 {
+						status = http.StatusCreated
+					}
+					w.WriteHeader(status)
+					_, _ = w.Write([]byte(tt.registerBody))
+				default:
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			got, err := ResolveAPIKey(store, server.URL, "", DefaultAppName)
+			if err != nil {
+				t.Fatalf("ResolveAPIKey: %v", err)
+			}
+			if got != tt.wantToken {
+				t.Fatalf("ResolveAPIKey() = %q, want %q", got, tt.wantToken)
+			}
+			if recoverCalls != tt.wantRecoverCalls {
+				t.Fatalf("recoverCalls = %d, want %d", recoverCalls, tt.wantRecoverCalls)
+			}
+			if registerCalls != tt.wantRegisterCalls {
+				t.Fatalf("registerCalls = %d, want %d", registerCalls, tt.wantRegisterCalls)
+			}
+		})
 	}
 }
 
@@ -364,17 +508,26 @@ func TestResolveAPIKeyRegistersAndPersistsWhenMissing(t *testing.T) {
 	store := &stubKeyStore{raw: map[string][]byte{}}
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		var req KeyCreateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("Decode request: %v", err)
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/keys/recover" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"recover failed"}`))
+			return
 		}
-		if req.Name != DefaultAppName {
-			t.Fatalf("name = %q, want %q", req.Name, DefaultAppName)
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/keys/roll_key" {
+			callCount++
+			var req KeyCreateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("Decode request: %v", err)
+			}
+			if req.Name != DefaultAppName {
+				t.Fatalf("name = %q, want %q", req.Name, DefaultAppName)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":2,"name":"StreamNZB","token":"registered-token","created_at":"2026-03-09T13:00:00Z"}`))
+			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"id":2,"name":"StreamNZB","token":"registered-token","recovery_secret":"recover-2","created_at":"2026-03-09T13:00:00Z"}`))
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
 
@@ -395,7 +548,7 @@ func TestResolveAPIKeyRegistersAndPersistsWhenMissing(t *testing.T) {
 	} else if !found {
 		t.Fatal("persisted key not found")
 	}
-	if saved.ID != "2" || saved.Token != "registered-token" || saved.RecoverySecret != "recover-2" {
+	if saved.ID != "2" || saved.Token != "registered-token" {
 		t.Fatalf("unexpected persisted state: %+v", saved)
 	}
 }
@@ -426,33 +579,5 @@ func TestClientSetAPIKeyIsUsedBySubsequentRequests(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("GetMe returned nil response")
-	}
-}
-
-func TestLoadStoredRecoverySecretReturnsPersistedValue(t *testing.T) {
-	t.Parallel()
-
-	store := &stubKeyStore{raw: map[string][]byte{apiKeyStateKey: []byte(`{"token":"stored-token","recovery_secret":"recover-2"}`)}}
-
-	got, err := LoadStoredRecoverySecret(store)
-	if err != nil {
-		t.Fatalf("LoadStoredRecoverySecret: %v", err)
-	}
-	if got != "recover-2" {
-		t.Fatalf("LoadStoredRecoverySecret() = %q, want %q", got, "recover-2")
-	}
-}
-
-func TestLoadStoredRecoverySecretReturnsEmptyForLegacyKeyState(t *testing.T) {
-	t.Parallel()
-
-	store := &stubKeyStore{raw: map[string][]byte{apiKeyStateKey: []byte(`"stored-token"`)}}
-
-	got, err := LoadStoredRecoverySecret(store)
-	if err != nil {
-		t.Fatalf("LoadStoredRecoverySecret: %v", err)
-	}
-	if got != "" {
-		t.Fatalf("LoadStoredRecoverySecret() = %q, want empty string", got)
 	}
 }

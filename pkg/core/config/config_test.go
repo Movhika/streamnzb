@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -206,5 +207,30 @@ func TestSaveFileUpdatesLoadedPath(t *testing.T) {
 
 	if cfg.LoadedPath != configPath {
 		t.Fatalf("LoadedPath = %q, want %q", cfg.LoadedPath, configPath)
+	}
+}
+
+func TestSaveFileDoesNotPersistAvailNZBAPIKey(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
+
+	cfg := &Config{
+		AddonPort:      7001,
+		AvailNZBAPIKey: "secret-should-not-be-written",
+	}
+	if err := cfg.SaveFile(configPath); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	content := string(raw)
+	if strings.Contains(content, "availnzb_api_key") {
+		t.Fatalf("config.json should not contain availnzb_api_key, got: %s", content)
+	}
+	if strings.Contains(content, "secret-should-not-be-written") {
+		t.Fatalf("config.json should not contain AvailNZBAPIKey value")
 	}
 }

@@ -82,18 +82,15 @@ func NewServer(opts *ServerOptions) (*Server, error) {
 	}
 	availNZBMode := ""
 	if opts.Config != nil {
-		availNZBMode = opts.Config.AvailNZBMode
+		availNZBMode = config.NormalizeAvailNZBMode(opts.Config.AvailNZBMode)
 	}
 	var resolvedAvailClient *availnzb.Client
-	if availNZBMode != "disabled" {
+	if availNZBMode != "off" {
 		resolvedAvailClient = opts.AvailClient
 	}
 	var availReporter *availnzb.Reporter
 	if resolvedAvailClient != nil {
 		availReporter = availnzb.NewReporter(resolvedAvailClient, opts.Validator)
-		if availNZBMode == "status_only" {
-			availReporter.Disabled = true
-		}
 	}
 	s := &Server{
 		manifest:             NewManifest(version),
@@ -182,17 +179,14 @@ func (s *Server) Reload(opts *ServerOptions) {
 	s.triageService = opts.TriageService
 	reloadMode := ""
 	if opts.Config != nil {
-		reloadMode = opts.Config.AvailNZBMode
+		reloadMode = config.NormalizeAvailNZBMode(opts.Config.AvailNZBMode)
 	}
-	if reloadMode == "disabled" {
+	if reloadMode == "off" {
 		s.availClient = nil
 		s.availReporter = nil
 	} else if opts.AvailClient != nil {
 		s.availClient = opts.AvailClient
 		s.availReporter = availnzb.NewReporter(opts.AvailClient, opts.Validator)
-		if reloadMode == "status_only" {
-			s.availReporter.Disabled = true
-		}
 		go func(client *availnzb.Client) {
 			if err := client.RefreshBackbones(); err != nil {
 				logger.Debug("AvailNZB backbones refresh", "source", "stremio_reload", "err", err)

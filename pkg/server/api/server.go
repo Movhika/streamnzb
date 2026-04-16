@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -50,8 +49,6 @@ type Server struct {
 	logCh         chan string
 	attemptLister *persistence.StateManager
 	availNZBStore availnzb.KeyStore
-
-	availNZBRegistrationInFlight bool
 }
 
 type Client struct {
@@ -171,13 +168,7 @@ func (s *Server) syncLiveAvailNZBAPIKey(apiKey string) {
 }
 
 func (s *Server) ensureAvailNZBReadyForReload(newCfg *config.Config) {
-	if newCfg == nil || newCfg.AvailNZBMode == "disabled" {
-		return
-	}
-
-	explicitKey := strings.TrimSpace(newCfg.AvailNZBAPIKey)
-	if explicitKey != "" {
-		s.syncLiveAvailNZBAPIKey(explicitKey)
+	if newCfg == nil || config.NormalizeAvailNZBMode(newCfg.AvailNZBMode) == "off" {
 		return
 	}
 
@@ -192,65 +183,14 @@ func (s *Server) ensureAvailNZBReadyForReload(newCfg *config.Config) {
 		return
 	}
 
-	resolvedKey, err := availnzb.ResolveStartupAPIKey(store, availNZBURL, "")
+	resolvedKey, err := availnzb.ResolveAPIKey(store, availNZBURL, "", availnzb.DefaultAppName)
 	if err != nil {
 		logger.Warn("AvailNZB key bootstrap during reload failed", "err", err)
 		return
 	}
 	if resolvedKey != "" {
 		s.syncLiveAvailNZBAPIKey(resolvedKey)
-		return
 	}
-
-	s.startDeferredAvailNZBRegistration(newCfg.AvailNZBMode)
-}
-
-func (s *Server) startDeferredAvailNZBRegistration(mode string) {
-	s.mu.Lock()
-	if s.availNZBRegistrationInFlight {
-		s.mu.Unlock()
-		return
-	}
-	availNZBURL := strings.TrimSpace(s.availNZBURL)
-	store := s.availNZBStore
-	if availNZBURL == "" || store == nil {
-		s.mu.Unlock()
-		return
-	}
-	s.availNZBRegistrationInFlight = true
-	s.mu.Unlock()
-
-	logger.Info("AvailNZB API key registration deferred", "mode", mode)
-
-	go func() {
-		defer func() {
-			s.mu.Lock()
-			s.availNZBRegistrationInFlight = false
-			s.mu.Unlock()
-		}()
-
-		registeredKey, err := availnzb.RegisterAndPersistAPIKey(store, availNZBURL, availnzb.DefaultAppName)
-		if err != nil {
-			if errors.Is(err, availnzb.ErrRegisterKeyIPAlreadyHasKey) {
-				return
-			}
-			logger.Warn("AvailNZB background key registration failed", "err", err)
-			return
-		}
-
-		s.syncLiveAvailNZBAPIKey(registeredKey)
-
-		if s.app != nil {
-			current := s.app.Components()
-			if current != nil && current.AvailClient != nil {
-				if err := current.AvailClient.RefreshBackbones(); err != nil {
-					logger.Debug("AvailNZB backbones refresh", "source", "background_registration", "err", err)
-				}
-			}
-		}
-
-		logger.Info("AvailNZB background key registration completed")
-	}()
 }
 
 func (s *Server) ReloadFromComponents(comp *app.Components, fullReload bool) {

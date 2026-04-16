@@ -127,19 +127,36 @@ type KeyCreateRequest struct {
 }
 
 type KeyCreateResponse struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Token          string `json:"token"`
-	RecoverySecret string `json:"recovery_secret"`
-	CreatedAt      string `json:"created_at"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Token     string `json:"token"`
+	CreatedAt string `json:"created_at"`
 }
 
 type RecoverKeyResponse struct {
-	ID        int64  `json:"id"`
+	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Token     string `json:"token"`
 	IsActive  bool   `json:"is_active"`
 	RotatedAt string `json:"rotated_at"`
+}
+
+func (r *RecoverKeyResponse) UnmarshalJSON(data []byte) error {
+	type recoverKeyResponseAlias RecoverKeyResponse
+	var raw struct {
+		recoverKeyResponseAlias
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	id, err := decodeFlexibleString(raw.ID)
+	if err != nil {
+		return fmt.Errorf("decode recover key response id: %w", err)
+	}
+	*r = RecoverKeyResponse(raw.recoverKeyResponseAlias)
+	r.ID = id
+	return nil
 }
 
 type apiErrorResponse struct {
@@ -168,11 +185,10 @@ func (k *KeyCreateResponse) UnmarshalJSON(data []byte) error {
 }
 
 type apiKeyState struct {
-	ID             string `json:"id,omitempty"`
-	Name           string `json:"name,omitempty"`
-	Token          string `json:"token"`
-	RecoverySecret string `json:"recovery_secret,omitempty"`
-	CreatedAt      string `json:"created_at,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Token     string `json:"token"`
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 func decodeFlexibleString(data json.RawMessage) (string, error) {
@@ -314,15 +330,30 @@ func ResolveStartupAPIKey(store KeyStore, baseURL, explicitKey string) (string, 
 }
 
 func ResolveAPIKey(store KeyStore, baseURL, explicitKey, appName string) (string, error) {
+	if strings.TrimSpace(explicitKey) != "" {
+		return strings.TrimSpace(explicitKey), nil
+	}
 	resolvedKey, err := ResolveStartupAPIKey(store, baseURL, explicitKey)
 	if err != nil {
 		return "", err
 	}
-	if resolvedKey != "" || strings.TrimSpace(baseURL) == "" {
+	if strings.TrimSpace(baseURL) == "" {
 		return resolvedKey, nil
 	}
+	if resolvedKey != "" {
+		client := NewClient(baseURL, resolvedKey)
+		if _, err := client.GetMe(); err == nil {
+			return resolvedKey, nil
+		}
+		logger.Info("AvailNZB stored key validation failed, attempting recovery", "err", err)
+		recovered, recoverErr := recoverAndPersistAPIKey(store, client)
+		if recoverErr == nil && strings.TrimSpace(recovered) != "" {
+			return recovered, nil
+		}
+		logger.Warn("AvailNZB key recovery failed, rotating key", "err", recoverErr)
+	}
 
-	return RegisterAndPersistAPIKey(store, baseURL, appName)
+	return RecoverOrRegisterAndPersistAPIKey(store, baseURL, appName)
 }
 
 func RegisterAndPersistAPIKey(store KeyStore, baseURL, appName string) (string, error) {
@@ -351,11 +382,10 @@ func RegisterAndPersistAPIKey(store KeyStore, baseURL, appName string) (string, 
 	}
 
 	state := apiKeyState{
-		ID:             strings.TrimSpace(created.ID),
-		Name:           strings.TrimSpace(created.Name),
-		Token:          strings.TrimSpace(created.Token),
-		RecoverySecret: strings.TrimSpace(created.RecoverySecret),
-		CreatedAt:      strings.TrimSpace(created.CreatedAt),
+		ID:        strings.TrimSpace(created.ID),
+		Name:      strings.TrimSpace(created.Name),
+		Token:     strings.TrimSpace(created.Token),
+		CreatedAt: strings.TrimSpace(created.CreatedAt),
 	}
 	if err := store.Set(apiKeyStateKey, state); err != nil {
 		return "", fmt.Errorf("availnzb key bootstrap: failed to persist API key: %w", err)
@@ -363,6 +393,29 @@ func RegisterAndPersistAPIKey(store KeyStore, baseURL, appName string) (string, 
 
 	logger.Info("Registered new AvailNZB API key", "name", state.Name, "id", state.ID)
 	return state.Token, nil
+}
+
+func RecoverOrRegisterAndPersistAPIKey(store KeyStore, baseURL, appName string) (string, error) {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return "", fmt.Errorf("availnzb recover/register: no base URL configured")
+	}
+	if store == nil {
+		return "", fmt.Errorf("availnzb key bootstrap: store is required")
+	}
+	if strings.TrimSpace(appName) == "" {
+		appName = DefaultAppName
+	}
+
+	client := NewClient(baseURL, "")
+	recovered, recoverErr := recoverAndPersistAPIKey(store, client)
+	if recoverErr == nil && strings.TrimSpace(recovered) != "" {
+		logger.Info("Recovered AvailNZB API key before rolling a new app key")
+		return recovered, nil
+	}
+	logger.Info("AvailNZB key recovery failed, rolling new key", "err", recoverErr)
+
+	return RegisterAndPersistAPIKey(store, baseURL, appName)
 }
 
 func recoverAndPersistAPIKey(store KeyStore, client *Client) (string, error) {
@@ -375,7 +428,7 @@ func recoverAndPersistAPIKey(store KeyStore, client *Client) (string, error) {
 	}
 
 	state := apiKeyState{
-		ID:    fmt.Sprintf("%d", recovered.ID),
+		ID:    strings.TrimSpace(recovered.ID),
 		Name:  strings.TrimSpace(recovered.Name),
 		Token: strings.TrimSpace(recovered.Token),
 	}
@@ -407,32 +460,6 @@ func loadStoredAPIKey(store KeyStore) (string, error) {
 	}
 
 	return "", fmt.Errorf("availnzb key bootstrap: failed to read stored API key: %w", err)
-}
-
-func LoadStoredRecoverySecret(store KeyStore) (string, error) {
-	if store == nil {
-		return "", nil
-	}
-
-	var state apiKeyState
-	found, err := store.Get(apiKeyStateKey, &state)
-	if err == nil {
-		if found {
-			return strings.TrimSpace(state.RecoverySecret), nil
-		}
-		return "", nil
-	}
-
-	var legacy string
-	legacyFound, legacyErr := store.Get(apiKeyStateKey, &legacy)
-	if legacyErr == nil {
-		if legacyFound {
-			return "", nil
-		}
-		return "", nil
-	}
-
-	return "", fmt.Errorf("availnzb key bootstrap: failed to read stored recovery secret: %w", err)
 }
 
 func decodeAPIErrorMessage(body []byte) string {
@@ -511,7 +538,7 @@ func (c *Client) RegisterKey(name string) (*KeyCreateResponse, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", c.BaseURL+apiPath+"/keys", bytes.NewBuffer(reqBody))
+	req, err := http.NewRequest("POST", c.BaseURL+apiPath+"/keys/roll_key", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, err
 	}
@@ -563,6 +590,14 @@ func (c *Client) RecoverKey() (*RecoverKeyResponse, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if token := strings.TrimSpace(c.GetAPIKey()); token != "" {
+		body, err := json.Marshal(map[string]string{"token": token})
+		if err != nil {
+			return nil, err
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -588,6 +623,9 @@ func (c *Client) RecoverKey() (*RecoverKeyResponse, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&recovered); err != nil {
 		logger.Error("AvailNZB RecoverKey decode failed", "err", err)
 		return nil, err
+	}
+	if id := strings.TrimSpace(recovered.ID); id == "" {
+		return nil, fmt.Errorf("availnzb recover: empty id in response")
 	}
 
 	return &recovered, nil

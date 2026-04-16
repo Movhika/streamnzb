@@ -22,7 +22,6 @@ const ADVANCED_TAB_FIELDS = [
   'nzb_history_retention_days',
   'playback_startup_timeout_seconds',
   'memory_limit_mb',
-  'availnzb_api_key',
   'availnzb_mode',
   'tmdb_api_key',
   'tvdb_api_key',

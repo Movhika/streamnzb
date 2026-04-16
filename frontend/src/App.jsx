@@ -154,7 +154,10 @@ function App() {
   }, [theme]);
 
   const isSettingsPage = activePage === 'settings'
-  const availNZBEnabled = (config?.availnzb_mode || '') !== 'disabled'
+  const availNZBEnabled = (() => {
+    const mode = String(config?.availnzb_mode || 'on').toLowerCase()
+    return mode !== 'off' && mode !== 'disabled'
+  })()
 
   const fetchAvailNZBStatus = useCallback(async (force = false) => {
     if (!authenticated || !config || !availNZBEnabled) return

@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
-import { Loader2, Info, AlertTriangle, Eye, EyeOff, Copy, Check, Lock, LockOpen, Save, Paintbrush } from "lucide-react"
+import { Loader2, Info, AlertTriangle, Save, Paintbrush } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -15,7 +15,7 @@ const CARD_FIELDS = {
   admin: ['log_level', 'verbose_nntp_logging', 'keep_log_files', 'nzb_history_retention_days'],
   memory: ['memory_limit_mb'],
   playback: ['playback_startup_timeout_seconds'],
-  availnzb: ['availnzb_api_key', 'availnzb_mode'],
+  availnzb: ['availnzb_mode'],
   metadata: ['tmdb_api_key', 'tvdb_api_key'],
 }
 
@@ -33,15 +33,10 @@ function pickInitialValues(values = {}) {
     nzb_history_retention_days: Number.isFinite(parsedRetentionDays) ? parsedRetentionDays : 90,
     memory_limit_mb: Number(values.memory_limit_mb ?? 512),
     playback_startup_timeout_seconds: Number.isFinite(parsedPlaybackStartupTimeout) ? parsedPlaybackStartupTimeout : 5,
-    availnzb_api_key: values.availnzb_api_key ?? '',
-    availnzb_mode: values.availnzb_mode ?? '',
+    availnzb_mode: values.availnzb_mode ?? 'on',
     tmdb_api_key: values.tmdb_api_key ?? '',
     tvdb_api_key: values.tvdb_api_key ?? '',
   }
-}
-
-function shouldUseManualAvailNZBKeyOverride(values) {
-  return Boolean(String(values?.availnzb_api_key || '').trim())
 }
 
 function EnvOverrideIndicator({ show, message = 'Overwritten by environment variable on restart.' }) {
@@ -80,16 +75,13 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
   const [showClearCacheConfirm, setShowClearCacheConfirm] = useState(false)
   const [showUnlockConfirm, setShowUnlockConfirm] = useState(false)
   const [showRestartConfirm, setShowRestartConfirm] = useState(false)
-  const [showRecoverySecret, setShowRecoverySecret] = useState(false)
-  const [recoverySecretCopied, setRecoverySecretCopied] = useState(false)
-  const [useManualAvailNZBKeyOverride, setUseManualAvailNZBKeyOverride] = useState(shouldUseManualAvailNZBKeyOverride(defaults))
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const [pendingTabChange, setPendingTabChange] = useState('')
   const [showUnsavedHighlights, setShowUnsavedHighlights] = useState(false)
   const dirtyRef = useRef(false)
 
   const form = useForm({ defaultValues: defaults })
-  const { control, handleSubmit, reset, getValues, formState, setValue } = form
+  const { control, handleSubmit, reset, getValues, formState } = form
   const watchedValues = useWatch({ control })
 
   useEffect(() => {
@@ -101,7 +93,6 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
   useEffect(() => {
     reset(defaults)
     setLastSavedValues(defaults)
-    setUseManualAvailNZBKeyOverride(shouldUseManualAvailNZBKeyOverride(defaults))
     dirtyRef.current = false
     onDirtyChange?.(false)
   }, [defaults, onDirtyChange, reset])
@@ -112,7 +103,6 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
     },
     discardChanges() {
       reset(lastSavedValues)
-      setUseManualAvailNZBKeyOverride(shouldUseManualAvailNZBKeyOverride(lastSavedValues))
       dirtyRef.current = false
       onDirtyChange?.(false)
     },
@@ -132,14 +122,10 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
     try {
       const values = getValues()
       const payload = Object.fromEntries(CARD_FIELDS[cardId].map((key) => [key, values[key]]))
-      if (cardId === 'availnzb' && !useManualAvailNZBKeyOverride) {
-        payload.availnzb_api_key = ''
-      }
       await onPersist(payload, cardId)
       const nextValues = { ...lastSavedValues, ...payload }
       setLastSavedValues(nextValues)
       reset(nextValues)
-      setUseManualAvailNZBKeyOverride(shouldUseManualAvailNZBKeyOverride(nextValues))
       dirtyRef.current = false
       onDirtyChange?.(false)
       setShowUnsavedHighlights(false)
@@ -191,18 +177,6 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
   const controlSelectClass = "flex h-9 w-full min-w-0 max-w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 overflow-hidden text-ellipsis whitespace-nowrap sm:max-w-[14rem]"
   const labelClass = "min-w-0 text-sm font-medium"
 
-  const handleCopyRecoverySecret = async () => {
-    const recoverySecret = availNZBStatus?.recovery_secret?.trim?.() || ''
-    if (!recoverySecret || !navigator?.clipboard?.writeText) return
-    try {
-      await navigator.clipboard.writeText(recoverySecret)
-      setRecoverySecretCopied(true)
-      window.setTimeout(() => setRecoverySecretCopied(false), 1500)
-    } catch {
-      // ignore clipboard failures
-    }
-  }
-
   const handleClearCacheClick = async () => {
     if (clearingCache) return
     setClearingCache(true)
@@ -213,7 +187,6 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
     }
   }
 
-  const recoverySecret = availNZBStatus?.recovery_secret || ''
   const availNZBStatusMessage = availNZBStatusError || availNZBStatus?.status_error || ''
   const availNZBTrustScore = Number(availNZBStatus?.status?.trust_score)
   const availNZBInfoClass = Number.isFinite(availNZBTrustScore) && availNZBTrustScore < 100
@@ -307,6 +280,84 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
               <CardHeader>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1 max-w-[30rem] space-y-0.5">
+                    <CardTitle>Playback</CardTitle>
+                    <CardDescription>Startup behavior before the first playable response is sent.</CardDescription>
+                  </div>
+                  <div className="shrink-0">{renderSaveButton('playback')}</div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border border-border/60">
+                  <FormField control={control} name="playback_startup_timeout_seconds" render={({ field }) => (
+                    <FormItem className="rounded-none border-0 p-3">
+                      <div className={stackedFieldRowClass}>
+                        <FormLabel className={cn(labelClass, 'sm:flex-1')}>Playback startup timeout (s)</FormLabel>
+                        <FormControl><Input type="number" min={1} max={60} className={fieldClassName('playback_startup_timeout_seconds', `h-9 ${controlMediumClass}`)} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; const next = Number(v); field.onChange(v === '' ? 5 : Math.min(60, Math.max(1, Number.isNaN(next) ? 5 : next))) }} /></FormControl>
+                      </div>
+                      <FormDescription className="mt-3">How long StreamNZB waits for the initial playback probe/open before failing over to the next release. Higher values reduce false startup timeouts but delay failover.</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 max-w-[26rem] space-y-0.5">
+                    <CardTitle>AvailNZB</CardTitle>
+                    <CardDescription>Configure how StreamNZB interacts with AvailNZB.</CardDescription>
+                  </div>
+                  <div className="shrink-0">{renderSaveButton('availnzb')}</div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border border-border/60">
+                  <FormField control={control} name="availnzb_mode" render={({ field }) => (
+                    <FormItem className="rounded-none border-0 p-3">
+                      <div className={stackedFieldRowClass}>
+                        <FormLabel className={cn(labelClass, "flex items-center gap-2 sm:flex-1")}>
+                          <span>AvailNZB mode</span>
+                          <TooltipProvider delayDuration={150}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className={cn("inline-flex cursor-help items-center justify-center", availNZBInfoClass)}>
+                                  <span className="sr-only">AvailNZB scoring info</span>
+                                  <Info className="h-4 w-4" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom" align="start" className="max-w-xs p-3">
+                                <div className="space-y-1 text-xs font-normal">
+                                  <div className="font-medium">{availNZBStatusMessage ? 'AvailNZB status' : 'AvailNZB scoring'}</div>
+                                  <div>"ON" fetches availability data and reports playback results.</div>
+                                  <div>"OFF" skips AvailNZB entirely.</div>
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </FormLabel>
+                        <FormControl>
+                          <select className={fieldClassName('availnzb_mode', controlSelectClass)} {...field}>
+                            <option value="on">ON</option>
+                            <option value="off">OFF</option>
+                          </select>
+                        </FormControl>
+                      </div>
+                      <FormDescription className="mt-3">Controls whether StreamNZB uses AvailNZB. API key management is automatic.</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 max-w-[30rem] space-y-0.5">
                     <CardTitle>Memory & Cache</CardTitle>
                     <CardDescription>Runtime memory limits and search cache maintenance.</CardDescription>
                   </div>
@@ -340,151 +391,7 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
                 </div>
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1 max-w-[30rem] space-y-0.5">
-                    <CardTitle>Playback</CardTitle>
-                    <CardDescription>Startup behavior before the first playable response is sent.</CardDescription>
-                  </div>
-                  <div className="shrink-0">{renderSaveButton('playback')}</div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border border-border/60">
-                  <FormField control={control} name="playback_startup_timeout_seconds" render={({ field }) => (
-                    <FormItem className="rounded-none border-0 p-3">
-                      <div className={stackedFieldRowClass}>
-                        <FormLabel className={cn(labelClass, 'sm:flex-1')}>Playback startup timeout (s)</FormLabel>
-                        <FormControl><Input type="number" min={1} max={60} className={fieldClassName('playback_startup_timeout_seconds', `h-9 ${controlMediumClass}`)} {...field} value={field.value ?? ''} onChange={e => { const v = e.target.value; const next = Number(v); field.onChange(v === '' ? 5 : Math.min(60, Math.max(1, Number.isNaN(next) ? 5 : next))) }} /></FormControl>
-                      </div>
-                      <FormDescription className="mt-3">How long StreamNZB waits for the initial playback probe/open before failing over to the next release. Higher values reduce false startup timeouts but delay failover.</FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
-                </div>
-              </CardContent>
-            </Card>
           </div>
-
-          <Card>
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1 max-w-[26rem] space-y-0.5">
-                  <CardTitle>AvailNZB</CardTitle>
-                  <CardDescription>Configure how StreamNZB interacts with AvailNZB.</CardDescription>
-                </div>
-                <div className="shrink-0">{renderSaveButton('availnzb')}</div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-md border border-border/60">
-                <FormField control={control} name="availnzb_api_key" render={({ field }) => (
-                  <FormItem className="rounded-none border-0 p-3">
-                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                      <div className="min-w-0 xl:flex-1">
-                        <div className="flex items-center gap-2">
-                          <FormLabel className="min-w-0 text-sm font-medium flex items-center gap-1.5">AvailNZB API Key <EnvOverrideIndicator show={envOverrides.includes('availnzb_api_key')} /></FormLabel>
-                          <TooltipProvider delayDuration={100}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="icon"
-                                  className="h-7 w-7 shrink-0"
-                                  onClick={() => {
-                                    if (useManualAvailNZBKeyOverride) {
-                                      setUseManualAvailNZBKeyOverride(false)
-                                      setValue('availnzb_api_key', '', { shouldDirty: true })
-                                      return
-                                    }
-                                    setShowUnlockConfirm(true)
-                                  }}
-                                >
-                                  {useManualAvailNZBKeyOverride ? <LockOpen className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                {useManualAvailNZBKeyOverride ? 'Use automatic key management' : 'Unlock manual override'}
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </div>
-                      </div>
-                      <FormControl>
-                        <div className="w-full xl:max-w-3xl">
-                          {useManualAvailNZBKeyOverride ? (
-                            <PasswordInput className={fieldClassName('availnzb_api_key', 'h-9 w-full font-mono text-xs')} {...field} value={field.value || ''} />
-                          ) : (
-                            <Input value={availNZBStatus?.status?.name ? 'Automatically managed' : 'Managed automatically'} readOnly disabled className="h-9 w-full font-mono text-xs" />
-                          )}
-                        </div>
-                      </FormControl>
-                    </div>
-                    <FormDescription className="mt-3">StreamNZB can manage this key automatically. Use a manual override only if you want to force a specific AvailNZB API key.</FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={control} name="availnzb_mode" render={({ field }) => (
-                  <FormItem className="relative rounded-none border-0 p-3">
-                    <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-                    <div className={stackedFieldRowClass}>
-                      <FormLabel className={cn(labelClass, "flex items-center gap-2 sm:flex-1")}>
-                        <span>AvailNZB mode</span>
-                        <TooltipProvider delayDuration={150}>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className={cn("inline-flex cursor-help items-center justify-center", availNZBInfoClass)}>
-                                <span className="sr-only">AvailNZB scoring info</span>
-                                <Info className="h-4 w-4" />
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom" align="start" className="max-w-xs p-3">
-                              <div className="space-y-1 text-xs font-normal">
-                                <div className="font-medium">{availNZBStatusMessage ? 'AvailNZB status' : 'AvailNZB scoring'}</div>
-                                <div>Only "GET status + POST report" increases your AvailNZB score.</div>
-                                <div>"GET status only" fetches availability data but does not report your playback results back to the community.</div>
-                                <div>"Disabled" skips AvailNZB entirely.</div>
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </FormLabel>
-                      <FormControl>
-                        <select className={fieldClassName('availnzb_mode', controlSelectClass)} {...field}>
-                          <option value="">GET status + POST report</option>
-                          <option value="status_only">GET status only</option>
-                          <option value="disabled">Disabled</option>
-                        </select>
-                      </FormControl>
-                    </div>
-                    <FormDescription className="mt-3">Controls how StreamNZB interacts with AvailNZB.</FormDescription>
-                    {recoverySecret && (
-                      <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm font-medium">Recovery secret</span>
-                          <span className="text-xs text-muted-foreground">{recoverySecretCopied ? 'Copied' : 'Reveal to copy'}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Input type={showRecoverySecret ? 'text' : 'password'} value={recoverySecret} readOnly className="font-mono" />
-                          <Button type="button" variant="outline" size="icon" aria-label={showRecoverySecret ? 'Hide AvailNZB recovery secret' : 'Show AvailNZB recovery secret'} onClick={() => setShowRecoverySecret((current) => !current)}>
-                            {showRecoverySecret ? <EyeOff /> : <Eye />}
-                          </Button>
-                          <Button type="button" variant="outline" size="icon" aria-label="Copy AvailNZB recovery secret" onClick={handleCopyRecoverySecret}>
-                            {recoverySecretCopied ? <Check /> : <Copy />}
-                          </Button>
-                        </div>
-                        <p className="text-xs text-muted-foreground">Save this recovery secret somewhere safe. You can use it to recover the AvailNZB app key later.</p>
-                      </div>
-                    )}
-                    <FormMessage />
-                  </FormItem>
-                )} />
-              </div>
-            </CardContent>
-          </Card>
         </div>
 
         <Card>
@@ -524,19 +431,6 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
           </CardContent>
         </Card>
 
-        <ConfirmDialog
-          open={showUnlockConfirm}
-          onOpenChange={setShowUnlockConfirm}
-          title="Unlock manual override?"
-          description="Do you really want to override the automatically managed AvailNZB key with a manual key?"
-          confirmLabel="Unlock"
-          confirmVariant="destructive"
-          onConfirm={() => {
-            setShowUnlockConfirm(false)
-            setUseManualAvailNZBKeyOverride(true)
-            setShowUnsavedHighlights(true)
-          }}
-        />
         <ConfirmDialog
           open={showRestartConfirm}
           onOpenChange={setShowRestartConfirm}
@@ -578,7 +472,6 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
             setShowDiscardConfirm(false)
             setPendingTabChange('')
             reset(lastSavedValues)
-            setUseManualAvailNZBKeyOverride(shouldUseManualAvailNZBKeyOverride(lastSavedValues))
             dirtyRef.current = false
             onDirtyChange?.(false)
             setShowUnsavedHighlights(false)

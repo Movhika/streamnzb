@@ -6,53 +6,20 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"sync"
 	"testing"
 	"time"
 
 	"streamnzb/pkg/auth"
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
-	"streamnzb/pkg/core/persistence"
 )
 
 func init() {
 	logger.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-var (
-	availNZBStatusTestStateOnce sync.Once
-	availNZBStatusTestStateMgr  *persistence.StateManager
-	availNZBStatusTestStateErr  error
-)
-
-func testAvailNZBStatusStateManager(t *testing.T) *persistence.StateManager {
-	t.Helper()
-
-	availNZBStatusTestStateOnce.Do(func() {
-		tempDir, err := os.MkdirTemp("", "streamnzb-api-availnzb-status-")
-		if err != nil {
-			availNZBStatusTestStateErr = err
-			return
-		}
-		availNZBStatusTestStateMgr, availNZBStatusTestStateErr = persistence.GetManager(tempDir)
-	})
-	if availNZBStatusTestStateErr != nil {
-		t.Fatalf("GetManager: %v", availNZBStatusTestStateErr)
-	}
-	return availNZBStatusTestStateMgr
-}
-
 func TestHandleAvailNZBStatusReturnsStatusForAdmin(t *testing.T) {
 	const apiKey = "secret-key"
-	stateMgr := testAvailNZBStatusStateManager(t)
-	if err := stateMgr.Set("availnzb_api_key", map[string]string{
-		"token":           apiKey,
-		"recovery_secret": "recover-1",
-	}); err != nil {
-		t.Fatalf("Set recovery secret: %v", err)
-	}
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/me" {
@@ -70,7 +37,6 @@ func TestHandleAvailNZBStatusReturnsStatusForAdmin(t *testing.T) {
 		config:         &config.Config{AdminUsername: "admin"},
 		availNZBURL:    upstream.URL,
 		availNZBAPIKey: apiKey,
-		attemptLister:  stateMgr,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/availnzb/status", nil)
@@ -86,9 +52,6 @@ func TestHandleAvailNZBStatusReturnsStatusForAdmin(t *testing.T) {
 	var got availNZBStatusResponse
 	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
 		t.Fatalf("Decode: %v", err)
-	}
-	if got.RecoverySecret != "recover-1" {
-		t.Fatalf("RecoverySecret = %q, want %q", got.RecoverySecret, "recover-1")
 	}
 	if got.Status == nil {
 		t.Fatal("expected status payload")
@@ -101,15 +64,8 @@ func TestHandleAvailNZBStatusReturnsStatusForAdmin(t *testing.T) {
 	}
 }
 
-func TestHandleAvailNZBStatusReturnsRecoverySecretWhenStatusFetchFails(t *testing.T) {
+func TestHandleAvailNZBStatusReturnsErrorWhenStatusFetchFails(t *testing.T) {
 	const apiKey = "secret-key"
-	stateMgr := testAvailNZBStatusStateManager(t)
-	if err := stateMgr.Set("availnzb_api_key", map[string]string{
-		"token":           apiKey,
-		"recovery_secret": "recover-2",
-	}); err != nil {
-		t.Fatalf("Set recovery secret: %v", err)
-	}
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -121,7 +77,6 @@ func TestHandleAvailNZBStatusReturnsRecoverySecretWhenStatusFetchFails(t *testin
 		config:         &config.Config{AdminUsername: "admin"},
 		availNZBURL:    upstream.URL,
 		availNZBAPIKey: apiKey,
-		attemptLister:  stateMgr,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/availnzb/status", nil)
@@ -137,9 +92,6 @@ func TestHandleAvailNZBStatusReturnsRecoverySecretWhenStatusFetchFails(t *testin
 	var got availNZBStatusResponse
 	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
 		t.Fatalf("Decode: %v", err)
-	}
-	if got.RecoverySecret != "recover-2" {
-		t.Fatalf("RecoverySecret = %q, want %q", got.RecoverySecret, "recover-2")
 	}
 	if got.Status != nil {
 		t.Fatalf("expected nil status payload, got %+v", got.Status)
