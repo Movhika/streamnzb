@@ -53,6 +53,77 @@ func TestMergeIndexerSearchExplicitSeriesSearchOverridesWin(t *testing.T) {
 	}
 }
 
+func TestNormalizeSeriesSearchScopeFallsBackToLegacyFlag(t *testing.T) {
+	if got := NormalizeSeriesSearchScope("", ptrBool(false)); got != SeriesSearchScopeEpisodeQuery {
+		t.Fatalf("NormalizeSeriesSearchScope() = %q, want %q", got, SeriesSearchScopeEpisodeQuery)
+	}
+	if got := NormalizeSeriesSearchScope("", ptrBool(true)); got != SeriesSearchScopeEpisodeParam {
+		t.Fatalf("NormalizeSeriesSearchScope() = %q, want %q", got, SeriesSearchScopeEpisodeParam)
+	}
+}
+
+func TestSeriesSearchScopeRequiresValidation(t *testing.T) {
+	if !SeriesSearchScopeRequiresValidation(SeriesSearchScopeSeasonParam) {
+		t.Fatalf("expected season param scope to require validation")
+	}
+	if !SeriesSearchScopeRequiresValidation(SeriesSearchScopeSeasonQuery) {
+		t.Fatalf("expected season query scope to require validation")
+	}
+	if !SeriesSearchScopeRequiresValidation(SeriesSearchScopeNone) {
+		t.Fatalf("expected none scope to require validation")
+	}
+	if SeriesSearchScopeRequiresValidation(SeriesSearchScopeEpisodeParam) {
+		t.Fatalf("did not expect episode param scope to require validation")
+	}
+}
+
+func TestDefaultSearchValidationSettingsMatchExpectedModes(t *testing.T) {
+	cfg := &Config{}
+	if !cfg.applyStreamModelUpgradeDefaults() {
+		t.Fatalf("expected defaults to be applied")
+	}
+
+	if cfg.MovieSearchQueries[0].EnableResultValidation == nil || *cfg.MovieSearchQueries[0].EnableResultValidation {
+		t.Fatalf("expected DefaultMovieText validation disabled")
+	}
+	if cfg.MovieSearchQueries[0].SearchResultLimit != 0 {
+		t.Fatalf("expected DefaultMovieText limit max/0, got %d", cfg.MovieSearchQueries[0].SearchResultLimit)
+	}
+	if cfg.MovieSearchQueries[0].ValidationTitleLanguage != "off" {
+		t.Fatalf("expected DefaultMovieText validation title off, got %q", cfg.MovieSearchQueries[0].ValidationTitleLanguage)
+	}
+	if cfg.MovieSearchQueries[1].EnableResultValidation == nil || !*cfg.MovieSearchQueries[1].EnableResultValidation {
+		t.Fatalf("expected DefaultMovieID validation enabled")
+	}
+	if cfg.MovieSearchQueries[1].SearchResultLimit != 0 {
+		t.Fatalf("expected DefaultMovieID limit max/0, got %d", cfg.MovieSearchQueries[1].SearchResultLimit)
+	}
+	if cfg.MovieSearchQueries[1].ValidationTitleLanguage != "" {
+		t.Fatalf("expected DefaultMovieID validation title original, got %q", cfg.MovieSearchQueries[1].ValidationTitleLanguage)
+	}
+	if cfg.MovieSearchQueries[1].IncludeYearInValidation == nil || *cfg.MovieSearchQueries[1].IncludeYearInValidation {
+		t.Fatalf("expected DefaultMovieID year validation off")
+	}
+	if cfg.SeriesSearchQueries[0].EnableResultValidation == nil || *cfg.SeriesSearchQueries[0].EnableResultValidation {
+		t.Fatalf("expected DefaultTVText validation disabled")
+	}
+	if cfg.SeriesSearchQueries[0].SearchResultLimit != 0 {
+		t.Fatalf("expected DefaultTVText limit max/0, got %d", cfg.SeriesSearchQueries[0].SearchResultLimit)
+	}
+	if cfg.SeriesSearchQueries[1].EnableResultValidation == nil || !*cfg.SeriesSearchQueries[1].EnableResultValidation {
+		t.Fatalf("expected DefaultTVID validation enabled")
+	}
+	if cfg.SeriesSearchQueries[1].SearchResultLimit != 0 {
+		t.Fatalf("expected DefaultTVID limit max/0, got %d", cfg.SeriesSearchQueries[1].SearchResultLimit)
+	}
+	if cfg.SeriesSearchQueries[1].ValidationTitleLanguage != "" {
+		t.Fatalf("expected DefaultTVID validation title original, got %q", cfg.SeriesSearchQueries[1].ValidationTitleLanguage)
+	}
+	if cfg.SeriesSearchQueries[1].IncludeYearInValidation == nil || *cfg.SeriesSearchQueries[1].IncludeYearInValidation {
+		t.Fatalf("expected DefaultTVID year validation off")
+	}
+}
+
 func TestIndexerConfigEffectiveTimeoutDefaults(t *testing.T) {
 	tests := []struct {
 		name string
@@ -140,6 +211,15 @@ func TestApplyStreamModelUpgradeDefaultsCreatesQueriesAndDefaultStream(t *testin
 	}
 	if len(cfg.SeriesSearchQueries) != 2 {
 		t.Fatalf("expected 2 series queries, got %d", len(cfg.SeriesSearchQueries))
+	}
+	if got := NormalizeSeriesSearchScope(cfg.SeriesSearchQueries[0].SeriesSearchScope, cfg.SeriesSearchQueries[0].UseSeasonEpisodeParams); got != SeriesSearchScopeEpisodeQuery {
+		t.Fatalf("expected DefaultTVText scope episode_query, got %q", got)
+	}
+	if cfg.SeriesSearchQueries[0].EnableResultValidation == nil || *cfg.SeriesSearchQueries[0].EnableResultValidation {
+		t.Fatalf("expected DefaultTVText validation disabled")
+	}
+	if got := NormalizeSeriesSearchScope(cfg.SeriesSearchQueries[1].SeriesSearchScope, cfg.SeriesSearchQueries[1].UseSeasonEpisodeParams); got != SeriesSearchScopeEpisodeParam {
+		t.Fatalf("expected DefaultTVID scope episode_param, got %q", got)
 	}
 
 	stream := cfg.Streams[defaultMigratedStreamID]

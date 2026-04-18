@@ -1,0 +1,297 @@
+package search
+
+import (
+	"regexp"
+	"strconv"
+	"strings"
+	"unicode"
+
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/release"
+	"streamnzb/pkg/search/parser"
+)
+
+var seriesValidationSuffixRE = regexp.MustCompile(`(?i)\s+s[0-9]{1,2}(?:e[0-9]{1,3})?$`)
+
+func movieYearMatches(expectYear, gotYear int) bool {
+	if expectYear <= 0 || gotYear <= 0 {
+		return true
+	}
+	return gotYear >= expectYear-1 && gotYear <= expectYear+1
+}
+
+func parseValidationQuery(validationQuery string) (normTitle string, year int) {
+	norm := release.NormalizeTitle(validationQuery)
+	norm = strings.TrimSpace(norm)
+	if norm == "" {
+		return "", 0
+	}
+	for i := len(norm) - 1; i >= 0; i-- {
+		if norm[i] >= '0' && norm[i] <= '9' {
+			continue
+		}
+		if norm[i] == ' ' && i+1 < len(norm) {
+			trailing := strings.TrimSpace(norm[i+1:])
+			if len(trailing) == 4 {
+				if y, err := strconv.Atoi(trailing); err == nil && y >= 1900 && y <= 2100 {
+					return strings.TrimSpace(norm[:i]), y
+				}
+			}
+		}
+		break
+	}
+	return norm, 0
+}
+
+func parseSeriesValidationQuery(validationQuery string) (string, int) {
+	norm := release.NormalizeTitle(validationQuery)
+	norm = strings.TrimSpace(norm)
+	if norm == "" {
+		return "", 0
+	}
+	trimmed := strings.TrimSpace(seriesValidationSuffixRE.ReplaceAllString(norm, ""))
+	if trimmed == "" {
+		trimmed = norm
+	}
+	title, year := parseValidationQuery(trimmed)
+	if title != "" {
+		return title, year
+	}
+	return trimmed, 0
+}
+
+var titleArticles = map[string]bool{"the": true, "a": true, "an": true}
+
+func titleWordsForMatch(s string) []string {
+	if parsed := parser.ParseReleaseTitle(s); parsed != nil {
+		if parsedTitle := strings.TrimSpace(parsed.Title); parsedTitle != "" {
+			s = parsedTitle
+		}
+	}
+	return release.NormalizeTitleWordsForMatch(s)
+}
+
+func fuzzyTitleMatches(expect, gotTitle string) bool {
+	expectWords := titleWordsForMatch(expect)
+	gotWords := titleWordsForMatch(gotTitle)
+	if len(expectWords) == 0 {
+		return true
+	}
+	if len(gotWords) == 0 {
+		return false
+	}
+	if len(gotWords) < len(expectWords) {
+		return false
+	}
+	if len(expectWords) == 1 {
+		return len(gotWords) == 1 && gotWords[0] == expectWords[0]
+	}
+	// Reject when the release title has far more words than expected
+	// (prevents "The Science of Interstellar" matching "Interstellar").
+	if len(gotWords) > len(expectWords)+2 {
+		return false
+	}
+	// Find expectWords as a contiguous block in gotWords.
+	// Words before the block must all be common articles.
+	for i := 0; i <= len(gotWords)-len(expectWords); i++ {
+		match := true
+		for j, w := range expectWords {
+			if gotWords[i+j] != w {
+				match = false
+				break
+			}
+		}
+		if match {
+			for _, pre := range gotWords[:i] {
+				if !titleArticles[pre] {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedTitleMatches(expect, gotTitle string) bool {
+	expectNorm := release.NormalizeTitleForDedup(expect)
+	gotNorm := release.NormalizeTitleForDedup(gotTitle)
+	if gotNorm == "" {
+		return false
+	}
+	if expectNorm == "" {
+		return true
+	}
+	// Exact or prefix match (with optional 4-digit year suffix)
+	if gotNorm == expectNorm {
+		return true
+	}
+	if strings.HasPrefix(gotNorm, expectNorm) {
+		rest := gotNorm[len(expectNorm):]
+		if rest == "" {
+			return true
+		}
+		if len(rest) == 4 {
+			allDigit := true
+			for _, r := range rest {
+				if !unicode.IsDigit(r) {
+					allDigit = false
+					break
+				}
+			}
+			if allDigit {
+				return true
+			}
+		}
+	}
+	// Fall back to fuzzy: every expected word must appear as a word in the release title.
+	return fuzzyTitleMatches(expect, gotTitle)
+}
+
+type ValidationStats struct {
+	RawResults      int
+	FinalResults    int
+	RejectedResults int
+
+	TitleValidationApplied bool
+	YearValidationApplied  bool
+
+	ExpectedTitle   string
+	ExpectedYear    int
+	ExpectedSeason  int
+	ExpectedEpisode int
+
+	AcceptedExactEpisode int
+	AcceptedMultiEpisode int
+	AcceptedSeasonPack   int
+	AcceptedCompletePack int
+	AcceptedSeasonMatch  int
+
+	DroppedTitle          int
+	DroppedEpisodeRequest int
+	DroppedSeason         int
+	DroppedYear           int
+}
+
+func ValidateSearchResults(releases []*release.Release, contentType, validationQuery, season, episode string, enableTitleValidation, enableYearValidation bool) []*release.Release {
+	filtered, _ := ValidateSearchResultsWithStats(releases, contentType, validationQuery, season, episode, enableTitleValidation, enableYearValidation)
+	return filtered
+}
+
+func ValidateSearchResultsWithStats(releases []*release.Release, contentType, validationQuery, season, episode string, enableTitleValidation, enableYearValidation bool) ([]*release.Release, ValidationStats) {
+	stats := ValidationStats{}
+	if contentType != "movie" && contentType != "series" {
+		stats.RawResults = len(releases)
+		stats.FinalResults = len(releases)
+		return releases, stats
+	}
+	expectSeason, _ := strconv.Atoi(season)
+	expectEpisode, _ := strconv.Atoi(episode)
+	stats.ExpectedSeason = expectSeason
+	stats.ExpectedEpisode = expectEpisode
+
+	var expectTitle string
+	var expectYear int
+	if contentType == "movie" {
+		expectTitle, expectYear = parseValidationQuery(validationQuery)
+	} else {
+		expectTitle, expectYear = parseSeriesValidationQuery(validationQuery)
+	}
+	stats.ExpectedTitle = expectTitle
+	stats.ExpectedYear = expectYear
+	stats.TitleValidationApplied = enableTitleValidation && expectTitle != ""
+	stats.YearValidationApplied = enableYearValidation && expectYear > 0
+
+	var out []*release.Release
+	for _, rel := range releases {
+		if rel == nil {
+			continue
+		}
+		stats.RawResults++
+		parsed := parser.ParseReleaseTitle(rel.Title)
+
+		if contentType == "movie" {
+			if stats.TitleValidationApplied && !normalizedTitleMatches(expectTitle, parsed.Title) {
+				stats.DroppedTitle++
+				logger.Trace("ValidateSearchResults dropped: title",
+					"expect_title", expectTitle,
+					"got_title", parsed.Title,
+					"release", rel.Title,
+				)
+				continue
+			}
+		} else {
+			if stats.TitleValidationApplied && !normalizedTitleMatches(expectTitle, parsed.Title) {
+				stats.DroppedTitle++
+				logger.Trace("ValidateSearchResults dropped: title",
+					"expect_title", expectTitle,
+					"got_title", parsed.Title,
+					"release", rel.Title,
+				)
+				continue
+			}
+			if expectEpisode > 0 {
+				if !parsed.MatchesEpisodeRequest(expectSeason, expectEpisode) {
+					stats.DroppedEpisodeRequest++
+					logger.Trace("ValidateSearchResults dropped: episode_request",
+						"expect_season", expectSeason,
+						"expect_episode", expectEpisode,
+						"got_seasons", parsed.Seasons,
+						"got_episodes", parsed.Episodes,
+						"complete", parsed.Complete,
+						"release", rel.Title,
+					)
+					continue
+				}
+			} else if expectSeason > 0 && !parsed.HasSeason(expectSeason) {
+				stats.DroppedSeason++
+				logger.Trace("ValidateSearchResults dropped: season",
+					"expect_season", expectSeason,
+					"got_seasons", parsed.Seasons,
+					"release", rel.Title,
+				)
+				continue
+			}
+		}
+
+		if stats.YearValidationApplied && !movieYearMatches(expectYear, parsed.Year) {
+			stats.DroppedYear++
+			logger.Trace("ValidateSearchResults dropped: year",
+				"expect_year", expectYear,
+				"got_year", parsed.Year,
+				"release", rel.Title,
+			)
+			continue
+		}
+
+		if contentType == "series" {
+			switch {
+			case expectEpisode > 0:
+				switch parsed.EpisodeMatchRank(expectSeason, expectEpisode) {
+				case 4:
+					stats.AcceptedExactEpisode++
+				case 3:
+					stats.AcceptedMultiEpisode++
+				case 2:
+					stats.AcceptedSeasonPack++
+				case 1:
+					stats.AcceptedCompletePack++
+				}
+			case expectSeason > 0:
+				switch {
+				case parsed.IsShowPack():
+					stats.AcceptedCompletePack++
+				case parsed.IsSeasonPack(expectSeason):
+					stats.AcceptedSeasonPack++
+				case parsed.HasSeason(expectSeason):
+					stats.AcceptedSeasonMatch++
+				}
+			}
+		}
+
+		out = append(out, rel)
+	}
+	stats.FinalResults = len(out)
+	stats.RejectedResults = stats.RawResults - stats.FinalResults
+	return out, stats
+}

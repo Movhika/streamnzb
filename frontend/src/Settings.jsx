@@ -8,6 +8,7 @@ import { NetworkSettingsSection } from "@/components/NetworkSettingsSection"
 import { AdvancedSettingsSection } from "@/components/AdvancedSettingsSection"
 import { cn } from "@/lib/utils"
 import { useSettingsState } from './hooks/useSettingsState'
+import { normalizeAvailNZBMode } from './lib/availnzb'
 
 const TABS = [
   { id: 'network', label: 'Network', icon: Network },
@@ -19,15 +20,17 @@ const TABS = [
 
 const ACTIVE_TAB_STORAGE_KEY = 'streamnzb.settings.activeTab'
 
+function normalizeValidationTitleLanguage(value) {
+  if (value == null) return ''
+  return String(value)
+}
+
 function Settings({
   initialConfig,
   sendCommand,
   saveStatus,
   clearSaveStatus,
   isSaving,
-  availNZBStatus,
-  availNZBStatusLoading,
-  availNZBStatusError,
   onRefreshAvailNZBStatus,
   adminToken,
   indexerCaps,
@@ -83,7 +86,7 @@ function Settings({
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
         proxy_enabled: initialConfig.proxy_enabled !== false,
-        availnzb_mode: initialConfig.availnzb_mode ?? 'on',
+        availnzb_mode: normalizeAvailNZBMode(initialConfig.availnzb_mode),
         tmdb_api_key: initialConfig.tmdb_api_key ?? '',
         tvdb_api_key: initialConfig.tvdb_api_key ?? '',
         indexer_query_header: initialConfig.indexer_query_header ?? '',
@@ -125,6 +128,9 @@ function Settings({
           search_result_limit: Number(query.search_result_limit || 0),
           search_title_language: query.search_title_language || '',
           include_year_in_text_search: query.include_year_in_text_search ?? true,
+          enable_result_validation: query.enable_result_validation ?? false,
+          validation_title_language: normalizeValidationTitleLanguage(query.validation_title_language),
+          include_year_in_validation: query.include_year_in_validation ?? false,
         })) || [],
         series_search_queries: initialConfig.series_search_queries?.map((query) => ({
           ...query,
@@ -136,6 +142,10 @@ function Settings({
           search_title_language: query.search_title_language || '',
           include_year_in_text_search: query.include_year_in_text_search ?? true,
           use_season_episode_params: query.use_season_episode_params ?? true,
+          series_search_scope: query.series_search_scope || '',
+          enable_result_validation: query.enable_result_validation ?? false,
+          validation_title_language: normalizeValidationTitleLanguage(query.validation_title_language),
+          include_year_in_validation: query.include_year_in_validation ?? false,
         })) || []
       }
       reset({
@@ -273,9 +283,6 @@ function Settings({
           initialValues={advancedInitialValues}
           envOverrides={envOverrides}
           isSaving={isSaving}
-          availNZBStatus={availNZBStatus}
-          availNZBStatusLoading={availNZBStatusLoading}
-          availNZBStatusError={availNZBStatusError}
           onDirtyChange={handleAdvancedDirtyChange}
           onProceedTabChange={handleAdvancedProceedTabChange}
           onPersist={handleAdvancedPersist}

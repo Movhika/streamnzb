@@ -197,7 +197,7 @@ func metadataOriginalLanguage(metadata *resolvedSearchMetadata, contentType stri
 	return ""
 }
 
-func buildMoviePrimaryQueryFromMetadata(metadata *resolvedSearchMetadata, language string, includeYear bool) string {
+func buildMovieSearchQueryFromMetadata(metadata *resolvedSearchMetadata, language string, includeYear bool) string {
 	if metadata == nil || metadata.MovieDetails == nil {
 		return ""
 	}
@@ -214,7 +214,26 @@ func buildMoviePrimaryQueryFromMetadata(metadata *resolvedSearchMetadata, langua
 	return title
 }
 
-func buildSeriesPrimaryQueryFromMetadata(metadata *resolvedSearchMetadata, language string, includeYear bool, season, episode string, useSeasonEpisodeParams bool) string {
+func buildMovieValidationQueryFromMetadata(metadata *resolvedSearchMetadata, language string, includeYear bool) string {
+	return buildMovieSearchQueryFromMetadata(metadata, language, includeYear)
+}
+
+func appendSeasonQuery(query, season string) string {
+	if season == "" {
+		return strings.TrimSpace(query)
+	}
+	seasonNum, seasonErr := strconv.Atoi(season)
+	suffix := fmt.Sprintf("S%s", season)
+	if seasonErr == nil {
+		suffix = fmt.Sprintf("S%02d", seasonNum)
+	}
+	if strings.TrimSpace(query) == "" {
+		return suffix
+	}
+	return strings.TrimSpace(query) + " " + suffix
+}
+
+func buildSeriesPrimaryQueryFromMetadata(metadata *resolvedSearchMetadata, language string, includeYear bool, season, episode, scope string) string {
 	if metadata == nil || metadata.TVDetails == nil {
 		return ""
 	}
@@ -228,13 +247,30 @@ func buildSeriesPrimaryQueryFromMetadata(metadata *resolvedSearchMetadata, langu
 	if includeYear && len(metadata.TVDetails.FirstAirDate) >= 4 {
 		title = strings.TrimSpace(title + " " + metadata.TVDetails.FirstAirDate[:4])
 	}
-	if !useSeasonEpisodeParams {
+	switch config.NormalizeSeriesSearchScope(scope, nil) {
+	case config.SeriesSearchScopeEpisodeQuery:
 		title = appendSeasonEpisodeQuery(title, season, episode)
+	case config.SeriesSearchScopeSeasonQuery:
+		title = appendSeasonQuery(title, season)
 	}
 	return title
 }
 
-func searchRequestNormalisationLogValues(metadata *resolvedSearchMetadata, contentType, language string, includeYear bool, season, episode string, useSeasonEpisodeParams bool) (string, string, bool) {
+func buildSeriesValidationQueryFromMetadata(metadata *resolvedSearchMetadata, language string, includeYear bool) string {
+	if metadata == nil || metadata.TVDetails == nil {
+		return ""
+	}
+	title := strings.TrimSpace(metadata.TVDetails.Name)
+	if localized := localizedTVTitleForLanguage(metadata.TVTranslations, language); localized != "" {
+		title = localized
+	}
+	if includeYear && len(metadata.TVDetails.FirstAirDate) >= 4 {
+		title = strings.TrimSpace(title + " " + metadata.TVDetails.FirstAirDate[:4])
+	}
+	return strings.TrimSpace(title)
+}
+
+func searchRequestNormalisationLogValues(metadata *resolvedSearchMetadata, contentType, language string, includeYear bool, season, episode, scope string) (string, string, bool) {
 	language = strings.TrimSpace(language)
 	if language == "" {
 		return "", "", false
@@ -247,9 +283,9 @@ func searchRequestNormalisationLogValues(metadata *resolvedSearchMetadata, conte
 
 	var original string
 	if contentType == "movie" {
-		original = buildMoviePrimaryQueryFromMetadata(metadata, language, includeYear)
+		original = buildMovieSearchQueryFromMetadata(metadata, language, includeYear)
 	} else {
-		original = buildSeriesPrimaryQueryFromMetadata(metadata, language, includeYear, season, episode, useSeasonEpisodeParams)
+		original = buildSeriesPrimaryQueryFromMetadata(metadata, language, includeYear, season, episode, scope)
 	}
 	if original == "" {
 		return "", "", false
@@ -266,20 +302,17 @@ func buildMovieQueriesFromMetadata(metadata *resolvedSearchMetadata, language st
 	if metadata == nil || metadata.MovieDetails == nil {
 		return nil
 	}
+	primary := buildMovieSearchQueryFromMetadata(metadata, language, includeYear)
+	if primary == "" {
+		return nil
+	}
 	title := strings.TrimSpace(metadata.MovieDetails.Title)
 	if localized := localizedMovieTitleForLanguage(metadata.MovieTranslations, language); localized != "" {
 		title = localized
 	}
-	if title == "" {
-		return nil
-	}
 	year := ""
 	if includeYear && len(metadata.MovieDetails.ReleaseDate) >= 4 {
 		year = metadata.MovieDetails.ReleaseDate[:4]
-	}
-	primary := strings.TrimSpace(title)
-	if year != "" {
-		primary += " " + year
 	}
 	queries := addSearchQueryVariants(nil, primary)
 
@@ -300,7 +333,7 @@ func buildMovieQueriesFromMetadata(metadata *resolvedSearchMetadata, language st
 	return queries
 }
 
-func buildSeriesQueriesFromMetadata(metadata *resolvedSearchMetadata, language string, includeYear bool, season, episode string, useSeasonEpisodeParams bool) []string {
+func buildSeriesQueriesFromMetadata(metadata *resolvedSearchMetadata, language string, includeYear bool, season, episode, scope string) []string {
 	if metadata == nil || metadata.TVDetails == nil {
 		return nil
 	}
@@ -332,7 +365,8 @@ func buildSeriesQueriesFromMetadata(metadata *resolvedSearchMetadata, language s
 		queries = addSearchQueryVariants(queries, original)
 	}
 
-	if !useSeasonEpisodeParams {
+	switch config.NormalizeSeriesSearchScope(scope, nil) {
+	case config.SeriesSearchScopeEpisodeQuery:
 		withEpisode := make([]string, 0, len(queries)*2)
 		for _, query := range queries {
 			if query == "" {
@@ -341,6 +375,15 @@ func buildSeriesQueriesFromMetadata(metadata *resolvedSearchMetadata, language s
 			withEpisode = addSearchQueryVariants(withEpisode, appendSeasonEpisodeQuery(query, season, episode))
 		}
 		queries = withEpisode
+	case config.SeriesSearchScopeSeasonQuery:
+		withSeason := make([]string, 0, len(queries)*2)
+		for _, query := range queries {
+			if query == "" {
+				continue
+			}
+			withSeason = addSearchQueryVariants(withSeason, appendSeasonQuery(query, season))
+		}
+		queries = withSeason
 	}
 	return queries
 }
@@ -393,6 +436,26 @@ func logStreamConfiguration(streamLabel, contentType string, stream *auth.Stream
 		"indexers", append([]string(nil), stream.IndexerSelections...),
 		"requests", append([]string(nil), selectedQueries...),
 	)
+}
+
+func searchTitleLanguageForLog(language string) string {
+	trimmed := strings.TrimSpace(language)
+	if trimmed == "" {
+		return "original"
+	}
+	return trimmed
+}
+
+func validationTitleLanguageForLog(language string) string {
+	trimmed := strings.TrimSpace(language)
+	switch {
+	case strings.EqualFold(trimmed, "off"):
+		return "off"
+	case trimmed == "":
+		return "original"
+	default:
+		return trimmed
+	}
 }
 
 func newAvailContext(result *availnzb.ReleasesResult, inputResults int) *AvailContext {
@@ -480,9 +543,16 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 			continue
 		}
 		effectiveLimit := profileParams.Req.Limit
-		if searchQuery.SearchResultLimit > 0 {
+		if searchQuery.SearchResultLimit >= 0 {
 			effectiveLimit = searchQuery.SearchResultLimit
 		}
+		scopeForLog := ""
+		if contentType == "series" {
+			scopeForLog = config.NormalizeSeriesSearchScope(profileParams.Req.SeriesSearchScope, nil)
+		}
+		validationEnabledForLog := profileParams.Req.EnableResultValidation
+		titleValidationEnabledForLog := profileParams.Req.EnableTitleValidation
+		yearValidationEnabledForLog := profileParams.Req.EnableYearValidation
 		logger.Debug("Search request config",
 			"stream", streamLabel,
 			"request", searchQuery.Name,
@@ -491,7 +561,12 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 			"id", id,
 			"movie_categories", searchQuery.MovieCategories,
 			"tv_categories", searchQuery.TVCategories,
-			"language", searchQuery.SearchTitleLanguage,
+			"search_title_language", searchTitleLanguageForLog(searchQuery.SearchTitleLanguage),
+			"scope", scopeForLog,
+			"validation_enabled", validationEnabledForLog,
+			"title_validation", titleValidationEnabledForLog,
+			"year_validation", yearValidationEnabledForLog,
+			"validation_title_language", validationTitleLanguageForLog(searchQuery.ValidationTitleLanguage),
 			"extra_terms", searchQuery.ExtraSearchTerms,
 			"limit", effectiveLimit,
 		)
@@ -507,7 +582,7 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 				logIncludeYear,
 				profileParams.Req.Season,
 				profileParams.Req.Episode,
-				profileParams.Req.UseSeasonEpisodeParams,
+				profileParams.Req.SeriesSearchScope,
 			); ok {
 				logger.Debug("Search request normalisation",
 					"stream", streamLabel,
@@ -526,7 +601,6 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 			reqVariant.Limit = effectiveLimit
 			if searchMode != "id" {
 				reqVariant.Query = queryVariant
-				reqVariant.FilterQuery = queryVariant
 			}
 			executedRequests++
 			releases, runErr := search.RunIndexerSearches(s.indexer, tmdbResolver, reqVariant, contentType, profileParams.ContentIDs, profileParams.ImdbForText, profileParams.TmdbForText, s.config)
@@ -719,8 +793,19 @@ func buildSeriesQueriesWithOptions(showName, year string, includeYear bool) []st
 	return []string{showName}
 }
 
+func searchQueryValidationEnabled(contentType string, searchQuery *config.SearchQueryConfig, scope string) bool {
+	enabled := false
+	if searchQuery != nil && searchQuery.EnableResultValidation != nil {
+		enabled = *searchQuery.EnableResultValidation
+	}
+	if contentType == "series" && config.SeriesSearchScopeRequiresValidation(scope) {
+		return true
+	}
+	return enabled
+}
+
 func (s *Server) buildSearchParamsBase(contentType, id string, searchQuery *config.SearchQueryConfig) (*SearchParams, error) {
-	const searchLimit = 1000
+	const searchLimit = 0
 	params := &SearchParams{
 		ContentType:        contentType,
 		ID:                 id,
@@ -729,13 +814,12 @@ func (s *Server) buildSearchParamsBase(contentType, id string, searchQuery *conf
 		Metadata:           &resolvedSearchMetadata{},
 	}
 	req := indexer.SearchRequest{Limit: searchLimit}
-	useSeasonEpisodeParams := true
+	scope := config.SeriesSearchScopeEpisodeParam
 	if searchQuery != nil {
-		if searchQuery.UseSeasonEpisodeParams != nil {
-			useSeasonEpisodeParams = *searchQuery.UseSeasonEpisodeParams
-		}
+		scope = config.NormalizeSeriesSearchScope(searchQuery.SeriesSearchScope, searchQuery.UseSeasonEpisodeParams)
 	}
-	req.UseSeasonEpisodeParams = useSeasonEpisodeParams
+	req.UseSeasonEpisodeParams = config.SeriesSearchScopeUsesSeasonParams(scope)
+	req.SeriesSearchScope = scope
 
 	searchID := id
 	if contentType == "series" && strings.Contains(id, ":") {
@@ -881,33 +965,67 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 	searchMode := ""
 	searchTitleLanguage := ""
 	includeYearInTextSearch := true
-	useSeasonEpisodeParams := true
+	validationTitleLanguage := "off"
+	includeYearInValidation := false
+	scope := config.NormalizeSeriesSearchScope(req.SeriesSearchScope, nil)
 	var queryIndexerConfig *config.IndexerSearchConfig
 	if searchQuery != nil {
 		searchMode = strings.ToLower(strings.TrimSpace(searchQuery.SearchMode))
 		searchTitleLanguage = strings.TrimSpace(searchQuery.SearchTitleLanguage)
+		validationTitleLanguage = strings.TrimSpace(searchQuery.ValidationTitleLanguage)
 		queryIndexerConfig = searchQuery.AsIndexerSearchConfig()
 		if searchQuery.IncludeYearInTextSearch != nil {
 			includeYearInTextSearch = *searchQuery.IncludeYearInTextSearch
 		}
-		if searchQuery.UseSeasonEpisodeParams != nil {
-			useSeasonEpisodeParams = *searchQuery.UseSeasonEpisodeParams
+		if searchQuery.IncludeYearInValidation != nil {
+			includeYearInValidation = *searchQuery.IncludeYearInValidation
 		}
+		scope = config.NormalizeSeriesSearchScope(searchQuery.SeriesSearchScope, searchQuery.UseSeasonEpisodeParams)
 	}
-	req.UseSeasonEpisodeParams = useSeasonEpisodeParams
+	req.SeriesSearchScope = scope
+	req.UseSeasonEpisodeParams = config.SeriesSearchScopeUsesSeasonParams(scope)
+	req.EnableResultValidation = searchQueryValidationEnabled(contentType, searchQuery, scope)
+	req.EnableTitleValidation = false
+	req.EnableYearValidation = false
 	req.SearchMode = "text"
 	req.Query = ""
-	req.FilterQuery = ""
+	if req.EnableResultValidation {
+		titleValidationLanguage := validationTitleLanguage
+		if strings.EqualFold(strings.TrimSpace(titleValidationLanguage), "off") {
+			titleValidationLanguage = ""
+		} else {
+			req.EnableTitleValidation = true
+		}
+		req.EnableYearValidation = includeYearInValidation
+		if req.EnableTitleValidation || req.EnableYearValidation {
+			if contentType == "movie" {
+				req.ValidationQuery = buildMovieValidationQueryFromMetadata(params.Metadata, titleValidationLanguage, includeYearInValidation)
+			} else {
+				req.ValidationQuery = buildSeriesValidationQueryFromMetadata(params.Metadata, titleValidationLanguage, includeYearInValidation)
+			}
+		} else {
+			req.ValidationQuery = ""
+		}
+	} else {
+		req.ValidationQuery = ""
+	}
 	if searchMode == "id" {
 		req.SearchMode = "id"
-		if contentType == "series" && req.Season != "" && req.Episode != "" && !useSeasonEpisodeParams {
-			if seasonNum, err1 := strconv.Atoi(req.Season); err1 == nil {
-				if episodeNum, err2 := strconv.Atoi(req.Episode); err2 == nil {
-					req.Query = fmt.Sprintf("S%02dE%02d", seasonNum, episodeNum)
+		if contentType == "series" {
+			switch scope {
+			case config.SeriesSearchScopeEpisodeQuery:
+				if req.Season != "" && req.Episode != "" {
+					if seasonNum, err1 := strconv.Atoi(req.Season); err1 == nil {
+						if episodeNum, err2 := strconv.Atoi(req.Episode); err2 == nil {
+							req.Query = fmt.Sprintf("S%02dE%02d", seasonNum, episodeNum)
+						}
+					}
+					if req.Query == "" {
+						req.Query = fmt.Sprintf("S%sE%s", req.Season, req.Episode)
+					}
 				}
-			}
-			if req.Query == "" {
-				req.Query = fmt.Sprintf("S%sE%s", req.Season, req.Episode)
+			case config.SeriesSearchScopeSeasonQuery:
+				req.Query = appendSeasonQuery("", req.Season)
 			}
 		}
 	}
@@ -933,7 +1051,7 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 	}
 	if searchMode != "id" {
 		var queries []string
-		cacheKey := fmt.Sprintf("%s|%t|%t", searchTitleLanguage, includeYearInTextSearch, useSeasonEpisodeParams)
+		cacheKey := fmt.Sprintf("%s|%t|%s", searchTitleLanguage, includeYearInTextSearch, scope)
 		if contentType == "movie" {
 			if cached, ok := params.MovieTitleQueries[cacheKey]; ok {
 				queries = cached
@@ -947,16 +1065,17 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 			if cached, ok := params.SeriesTitleQueries[cacheKey]; ok {
 				queries = cached
 			} else {
-				queries = buildSeriesQueriesFromMetadata(params.Metadata, searchTitleLanguage, includeYearInTextSearch, req.Season, req.Episode, useSeasonEpisodeParams)
+				queries = buildSeriesQueriesFromMetadata(params.Metadata, searchTitleLanguage, includeYearInTextSearch, req.Season, req.Episode, scope)
 				if len(queries) > 0 {
 					params.SeriesTitleQueries[cacheKey] = queries
 				}
 			}
+		} else {
+			queries = buildSeriesQueriesWithOptions(metadataDisplayTitle(params.Metadata, contentType), metadataDisplayYear(params.Metadata, contentType), includeYearInTextSearch)
 		}
 		if len(queries) > 0 {
 			params.PreparedQueries = append([]string(nil), queries...)
 			req.Query = queries[0]
-			req.FilterQuery = queries[0]
 		}
 	}
 	return params, nil

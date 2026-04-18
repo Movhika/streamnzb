@@ -32,11 +32,12 @@ const (
 )
 
 type Client struct {
-	username     string
-	password     string
-	name         string
-	client       *http.Client
-	downloadBase string
+	username       string
+	password       string
+	name           string
+	client         *http.Client
+	downloadClient *http.Client
+	downloadBase   string
 
 	apiLimit          int
 	apiUsed           int
@@ -78,6 +79,10 @@ func NewClient(username, password, name string, downloadBase string, apiLimit, d
 		requestLimiter:    indexer.NewRequestLimiter(rateLimitRPS),
 		client: &http.Client{
 			Timeout:   searchTimeout,
+			Transport: transport,
+		},
+		downloadClient: &http.Client{
+			Timeout:   downloadTimeout,
 			Transport: transport,
 		},
 	}
@@ -162,7 +167,7 @@ func (c *Client) Ping() error {
 	}
 
 	testQuery := "dune"
-	_, err := c.searchInternal(ctx, testQuery, "", "", false, "", false)
+	_, err := c.searchInternal(ctx, testQuery, "", "", config.SeriesSearchScopeNone, "", false)
 	if err != nil {
 		return fmt.Errorf("easynews credentials invalid: %w", err)
 	}
@@ -180,12 +185,27 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 
 	query := prepareEasynewsQuery(req.Query, req.SearchMode, req.OptionalOverrides)
-	logger.Debug("Easynews search query", "indexer", c.name, "query", query, "cat", req.Cat, "season", req.Season, "episode", req.Episode)
 
 	season := req.Season
 	episode := req.Episode
+	searchURL := buildEasynewsSearchURL(query, season, episode, req.SeriesSearchScope, req.Cat)
 
-	results, err := c.searchInternal(ctx, query, season, episode, req.UseSeasonEpisodeParams, req.Cat, false)
+	logger.Debug("Search request",
+		"stream", req.StreamLabel,
+		"request", req.RequestLabel,
+		"mode", func() string {
+			if strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") {
+				return "id"
+			}
+			return "text"
+		}(),
+		"indexer", c.name,
+		"type", "easynews",
+		"url", searchURL,
+		"gps", buildEasynewsGPSQuery(query, season, episode, req.SeriesSearchScope, req.Cat),
+	)
+
+	results, err := c.searchInternal(ctx, query, season, episode, req.SeriesSearchScope, req.Cat, false)
 	if err != nil {
 		return nil, fmt.Errorf("easynews search failed: %w", err)
 	}
@@ -321,39 +341,46 @@ func normalizeEasynewsQuery(query string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-func buildEasynewsGPSQuery(query, season, episode string, useSeasonEpisodeParams bool, category string) string {
+func buildEasynewsGPSQuery(query, season, episode, scope, category string) string {
 	query = normalizeEasynewsQuery(query)
-	if !strings.HasPrefix(category, "5") || !useSeasonEpisodeParams || season == "" || episode == "" {
+	if !strings.HasPrefix(category, "5") {
 		return query
 	}
-	seasonNum, seasonErr := strconv.Atoi(season)
-	episodeNum, episodeErr := strconv.Atoi(episode)
-	suffix := fmt.Sprintf("S%sE%s", season, episode)
-	if seasonErr == nil && episodeErr == nil {
-		suffix = fmt.Sprintf("S%02dE%02d", seasonNum, episodeNum)
+	switch config.NormalizeSeriesSearchScope(scope, nil) {
+	case config.SeriesSearchScopeEpisodeParam, config.SeriesSearchScopeEpisodeQuery:
+		if season == "" || episode == "" {
+			return query
+		}
+		seasonNum, seasonErr := strconv.Atoi(season)
+		episodeNum, episodeErr := strconv.Atoi(episode)
+		suffix := fmt.Sprintf("S%sE%s", season, episode)
+		if seasonErr == nil && episodeErr == nil {
+			suffix = fmt.Sprintf("S%02dE%02d", seasonNum, episodeNum)
+		}
+		if strings.HasSuffix(strings.ToLower(query), strings.ToLower(" "+suffix)) || strings.EqualFold(query, suffix) {
+			return query
+		}
+		return fmt.Sprintf("%s %s", query, suffix)
+	case config.SeriesSearchScopeSeasonParam, config.SeriesSearchScopeSeasonQuery:
+		if season == "" {
+			return query
+		}
+		seasonNum, seasonErr := strconv.Atoi(season)
+		suffix := fmt.Sprintf("S%s", season)
+		if seasonErr == nil {
+			suffix = fmt.Sprintf("S%02d", seasonNum)
+		}
+		if strings.HasSuffix(strings.ToLower(query), strings.ToLower(" "+suffix)) || strings.EqualFold(query, suffix) {
+			return query
+		}
+		return fmt.Sprintf("%s %s", query, suffix)
+	default:
+		return query
 	}
-	return fmt.Sprintf("%s %s", query, suffix)
 }
 
-func (c *Client) searchInternal(ctx context.Context, query, season, episode string, useSeasonEpisodeParams bool, category string, strictMode bool) ([]easynewsResult, error) {
-	params := url.Values{}
-	params.Set("fly", "2")
-	params.Set("sb", "1")
-	params.Set("pno", "1")
-	params.Set("pby", strconv.Itoa(maxResultsPerPage))
-	params.Set("u", "1")
-	params.Set("chxu", "1")
-	params.Set("chxgx", "1")
-	params.Set("st", "basic")
-	params.Set("gps", buildEasynewsGPSQuery(query, season, episode, useSeasonEpisodeParams, category))
-	params.Set("vv", "1")
-	params.Set("safeO", "0")
-	params.Set("s1", "relevance")
-	params.Set("s1d", "-")
-	params.Add("fty[]", "VIDEO")
-
-	searchURL := fmt.Sprintf("%s/2.0/search/solr-search/?%s", easynewsBaseURL, params.Encode())
-	logger.Debug("Easynews search request", "indexer", c.name, "url", searchURL, "gps", params.Get("gps"))
+func (c *Client) searchInternal(ctx context.Context, query, season, episode, scope, category string, strictMode bool) ([]easynewsResult, error) {
+	searchURL := buildEasynewsSearchURL(query, season, episode, scope, category)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
@@ -361,7 +388,7 @@ func (c *Client) searchInternal(ctx context.Context, query, season, episode stri
 	}
 
 	req.SetBasicAuth(c.username, c.password)
-	resp, err := c.client.Do(req)
+	resp, err := c.downloadClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("easynews search request failed: %w", err)
 	}
@@ -384,6 +411,26 @@ func (c *Client) searchInternal(ctx context.Context, query, season, episode stri
 	results := c.filterAndMapResults(data, query, season, episode, strictMode)
 
 	return results, nil
+}
+
+func buildEasynewsSearchURL(query, season, episode, scope, category string) string {
+	params := url.Values{}
+	params.Set("fly", "2")
+	params.Set("sb", "1")
+	params.Set("pno", "1")
+	params.Set("pby", strconv.Itoa(maxResultsPerPage))
+	params.Set("u", "1")
+	params.Set("chxu", "1")
+	params.Set("chxgx", "1")
+	params.Set("st", "basic")
+	params.Set("gps", buildEasynewsGPSQuery(query, season, episode, scope, category))
+	params.Set("vv", "1")
+	params.Set("safeO", "0")
+	params.Set("s1", "relevance")
+	params.Set("s1d", "-")
+	params.Add("fty[]", "VIDEO")
+
+	return fmt.Sprintf("%s/2.0/search/solr-search/?%s", easynewsBaseURL, params.Encode())
 }
 
 func (c *Client) downloadNZBInternal(ctx context.Context, payload map[string]interface{}) ([]byte, error) {

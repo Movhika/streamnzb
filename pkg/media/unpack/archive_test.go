@@ -84,3 +84,56 @@ func TestGetMediaStreamForEpisodeFailsWhenRequestedEpisodeMissingFromDirectFiles
 		t.Fatal("expected no stream on missing episode")
 	}
 }
+
+func TestGetMediaStreamRejectsSuspiciousLargestDirectFallback(t *testing.T) {
+	discardTestLogger(t)
+
+	files := []UnpackableFile{
+		&sizedUnpackableFile{
+			memoryUnpackableFile: &memoryUnpackableFile{name: "release.par2", data: []byte("par2")},
+			size:                 90 * 1024 * 1024,
+		},
+		&sizedUnpackableFile{
+			memoryUnpackableFile: &memoryUnpackableFile{name: "0)", data: []byte("bad")},
+			size:                 80 * 1024 * 1024,
+		},
+	}
+
+	stream, name, _, _, err := GetMediaStreamForEpisode(context.Background(), files, nil, "", EpisodeTarget{})
+	if err == nil {
+		if stream != nil {
+			stream.Close()
+		}
+		t.Fatal("expected suspicious direct fallback to be rejected")
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected io.EOF, got %v", err)
+	}
+	if name != "" {
+		t.Fatalf("expected no selected file, got %q", name)
+	}
+	if stream != nil {
+		t.Fatal("expected no stream for suspicious direct fallback")
+	}
+}
+
+func TestGetMediaStreamAllowsPlausibleLargestDirectFallback(t *testing.T) {
+	discardTestLogger(t)
+
+	files := []UnpackableFile{
+		&sizedUnpackableFile{
+			memoryUnpackableFile: &memoryUnpackableFile{name: "abc12345", data: []byte("video")},
+			size:                 80 * 1024 * 1024,
+		},
+	}
+
+	stream, name, _, _, err := GetMediaStreamForEpisode(context.Background(), files, nil, "", EpisodeTarget{})
+	if err != nil {
+		t.Fatalf("expected plausible direct fallback to succeed, got %v", err)
+	}
+	defer stream.Close()
+
+	if name != "abc12345" {
+		t.Fatalf("expected plausible fallback name, got %q", name)
+	}
+}

@@ -64,7 +64,7 @@ func TestFilterResultsSeriesEpisodeRequestAcceptsPacks(t *testing.T) {
 		{Title: "Other.Show.S01E05.1080p.WEB-DL"},
 	}
 
-	filtered := FilterResults(releases, "series", "The Walking Dead S01E05", "1", "5")
+	filtered := ValidateSearchResults(releases, "series", "The Walking Dead S01E05", "1", "5", true, false)
 	got := make([]string, 0, len(filtered))
 	for _, rel := range filtered {
 		if rel != nil {
@@ -84,11 +84,11 @@ func TestFilterResultsSeriesEpisodeRequestAcceptsPacks(t *testing.T) {
 	}
 
 	if len(got) != len(want) {
-		t.Fatalf("FilterResults() returned %d releases, want %d: %v", len(got), len(want), got)
+		t.Fatalf("ValidateSearchResults() returned %d releases, want %d: %v", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("FilterResults()[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
+			t.Fatalf("ValidateSearchResults()[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
 		}
 	}
 }
@@ -102,7 +102,7 @@ func TestFilterResultsSeriesEpisodeRequestRejectsWrongEpisodePacks(t *testing.T)
 		{Title: "The.Walking.Dead.S02.COMPLETE.1080p.WEB-DL"},
 	}
 
-	filtered := FilterResults(releases, "series", "The Walking Dead S01E05", "1", "5")
+	filtered := ValidateSearchResults(releases, "series", "The Walking Dead S01E05", "1", "5", true, false)
 	if len(filtered) != 0 {
 		t.Fatalf("expected no matches, got %d: %+v", len(filtered), filtered)
 	}
@@ -116,7 +116,7 @@ func TestFilterResultsSeriesEpisodeRequestKeepsSTitlesIntact(t *testing.T) {
 		{Title: "Star.Trek.Starfleet.Academy.S01E01.WEBRip.x265-ION265"},
 	}
 
-	filtered := FilterResults(releases, "series", "Star Trek: Strange New Worlds S01E01", "1", "1")
+	filtered := ValidateSearchResults(releases, "series", "Star Trek: Strange New Worlds S01E01", "1", "1", true, false)
 	if len(filtered) != 1 {
 		t.Fatalf("expected 1 match, got %d: %+v", len(filtered), filtered)
 	}
@@ -134,7 +134,7 @@ func TestFilterResultsSeriesEpisodeRequestRejectsSingleWordTitleVariants(t *test
 		{Title: "Batman.Beyond.S01E02.1080p.WEB-DL"},
 	}
 
-	filtered := FilterResults(releases, "series", "Batman S01E02", "1", "2")
+	filtered := ValidateSearchResults(releases, "series", "Batman S01E02", "1", "2", true, false)
 	if len(filtered) != 1 {
 		t.Fatalf("expected 1 match, got %d: %+v", len(filtered), filtered)
 	}
@@ -154,7 +154,7 @@ func TestFilterResultsSeriesEpisodeRequestMatchesPokemonAccentVariants(t *testin
 		{Title: "Pokemon.Origins.S01E01.1080p.WEB-DL"},
 	}
 
-	filtered := FilterResults(releases, "series", "Pokémon S01E01", "1", "1")
+	filtered := ValidateSearchResults(releases, "series", "Pokémon S01E01", "1", "1", true, false)
 	if len(filtered) != 3 {
 		t.Fatalf("expected 3 matches, got %d: %+v", len(filtered), filtered)
 	}
@@ -173,7 +173,7 @@ func TestFilterResultsMovieRejectsNumberedTitleVariants(t *testing.T) {
 		{Title: "The.Hunger.Games.Mockingjay.Part.2.2015.2160p.UHD.BluRay.x265-TERMiNAL"},
 	}
 
-	filtered := FilterResults(releases, "movie", "The Hunger Games: Mockingjay - Part 1 2014", "", "")
+	filtered := ValidateSearchResults(releases, "movie", "The Hunger Games: Mockingjay - Part 1 2014", "", "", true, true)
 	if len(filtered) != 1 {
 		t.Fatalf("expected 1 match, got %d: %+v", len(filtered), filtered)
 	}
@@ -194,7 +194,7 @@ func TestFilterResultsMovieYearRange(t *testing.T) {
 		{Title: "Other.Movie.1994.1080p.BluRay"},
 	}
 
-	filtered := FilterResults(releases, "movie", "Batman 1994", "", "")
+	filtered := ValidateSearchResults(releases, "movie", "Batman 1994", "", "", true, true)
 	got := make([]string, 0, len(filtered))
 	for _, rel := range filtered {
 		if rel != nil {
@@ -210,11 +210,11 @@ func TestFilterResultsMovieYearRange(t *testing.T) {
 	}
 
 	if len(got) != len(want) {
-		t.Fatalf("FilterResults() returned %d releases, want %d: %v", len(got), len(want), got)
+		t.Fatalf("ValidateSearchResults() returned %d releases, want %d: %v", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("FilterResults()[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
+			t.Fatalf("ValidateSearchResults()[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
 		}
 	}
 }
@@ -230,7 +230,7 @@ func TestFilterResultsMovieRejectsWrongIMDBMetadata(t *testing.T) {
 		{Title: "Interstellar.2014.1080p.BluRay.x264-SPARKS"},
 	}
 
-	filtered := FilterResults(releases, "movie", "Interstellar 2014", "", "")
+	filtered := ValidateSearchResults(releases, "movie", "Interstellar 2014", "", "", true, true)
 	if len(filtered) != 2 {
 		t.Fatalf("expected 2 matches, got %d: %+v", len(filtered), filtered)
 	}

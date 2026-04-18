@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/release"
 )
 
 type recordingIndexer struct {
@@ -85,7 +86,7 @@ func TestRunIndexerSearchesTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing
 	}
 }
 
-func TestRunIndexerSearchesSkipsPostFilterWhenDisabled(t *testing.T) {
+func TestRunIndexerSearchesSkipsPostFilterWhenValidationDisabled(t *testing.T) {
 	idx := &staticIndexer{
 		name: "SceneNZBs",
 		resp: &indexer.SearchResponse{
@@ -101,8 +102,8 @@ func TestRunIndexerSearchesSkipsPostFilterWhenDisabled(t *testing.T) {
 		IMDbID:                 "tt0187393",
 		TMDBID:                 "2024",
 		Query:                  "Der Patriot 2000",
-		FilterQuery:            "The Patriot 2000",
-		DisableResultFiltering: true,
+		ValidationQuery:        "The Patriot 2000",
+		EnableResultValidation: false,
 	}
 
 	got, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil)
@@ -110,7 +111,149 @@ func TestRunIndexerSearchesSkipsPostFilterWhenDisabled(t *testing.T) {
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("expected 1 result with post-filter disabled, got %d: %+v", len(got), got)
+		t.Fatalf("expected 1 result with validation disabled, got %d: %+v", len(got), got)
+	}
+}
+
+func TestRunIndexerSearchesAppliesValidationWhenEnabled(t *testing.T) {
+	idx := &staticIndexer{
+		name: "SceneNZBs",
+		resp: &indexer.SearchResponse{
+			Channel: indexer.Channel{
+				Items: []indexer.Item{
+					{Title: "Der.Patriot.2000.German.DL.1080p.BluRay.x264.iNTERNAL-VideoStar", ActualIndexer: "SceneNZBs"},
+				},
+			},
+		},
+	}
+	req := indexer.SearchRequest{
+		Cat:                    "2100",
+		IMDbID:                 "tt0187393",
+		TMDBID:                 "2024",
+		Query:                  "Der Patriot 2000",
+		ValidationQuery:        "The Patriot 2000",
+		EnableResultValidation: true,
+		EnableTitleValidation:  true,
+		EnableYearValidation:   true,
+	}
+
+	got, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil)
+	if err != nil {
+		t.Fatalf("RunIndexerSearches() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected validation to remove mismatched title, got %d: %+v", len(got), got)
+	}
+}
+
+func TestRunIndexerSearchesKeepsEpisodePackValidationWhenTitleValidationOff(t *testing.T) {
+	idx := &staticIndexer{
+		name: "SceneNZBs",
+		resp: &indexer.SearchResponse{
+			Channel: indexer.Channel{
+				Items: []indexer.Item{
+					{Title: "Wrong.Show.S01.COMPLETE.1080p.WEB-DL.x264-GROUP", ActualIndexer: "SceneNZBs"},
+					{Title: "Right.Show.S01.COMPLETE.1080p.WEB-DL.x264-GROUP", ActualIndexer: "SceneNZBs"},
+				},
+			},
+		},
+	}
+	req := indexer.SearchRequest{
+		Cat:                    "5000",
+		Query:                  "Right Show",
+		Season:                 "1",
+		Episode:                "2",
+		ValidationQuery:        "",
+		EnableResultValidation: true,
+		EnableTitleValidation:  false,
+		EnableYearValidation:   false,
+	}
+
+	got, err := RunIndexerSearches(idx, nil, req, "series", nil, "", "", nil)
+	if err != nil {
+		t.Fatalf("RunIndexerSearches() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected both season packs to remain when title validation is off, got %d: %+v", len(got), got)
+	}
+}
+
+func TestValidateSearchResultsWithStatsCountsSeriesEpisodeMatches(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "Right.Show.S01E02.1080p.WEB-DL.x264-GROUP"},
+		{Title: "Right.Show.S01E02E03.1080p.WEB-DL.x264-GROUP"},
+		{Title: "Right.Show.S01.COMPLETE.1080p.WEB-DL.x264-GROUP"},
+		{Title: "Right.Show.COMPLETE.1080p.WEB-DL.x264-GROUP"},
+		{Title: "Right.Show.S01E04.1080p.WEB-DL.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "series", "Right Show S01E02", "1", "2", true, false)
+
+	if len(filtered) != 4 {
+		t.Fatalf("expected 4 accepted results, got %d", len(filtered))
+	}
+	if stats.RawResults != 5 || stats.FinalResults != 4 || stats.RejectedResults != 1 {
+		t.Fatalf("unexpected raw/final/rejected counts: %+v", stats)
+	}
+	if !stats.TitleValidationApplied {
+		t.Fatalf("expected title validation to be applied, got %+v", stats)
+	}
+	if stats.AcceptedExactEpisode != 1 {
+		t.Fatalf("expected 1 exact episode match, got %d", stats.AcceptedExactEpisode)
+	}
+	if stats.AcceptedMultiEpisode != 1 {
+		t.Fatalf("expected 1 multi-episode match, got %d", stats.AcceptedMultiEpisode)
+	}
+	if stats.AcceptedSeasonPack != 1 {
+		t.Fatalf("expected 1 season pack match, got %d", stats.AcceptedSeasonPack)
+	}
+	if stats.AcceptedCompletePack != 1 {
+		t.Fatalf("expected 1 complete pack match, got %d", stats.AcceptedCompletePack)
+	}
+	if stats.DroppedEpisodeRequest != 1 {
+		t.Fatalf("expected 1 episode-request rejection, got %d", stats.DroppedEpisodeRequest)
+	}
+}
+
+func TestValidateSearchResultsWithStatsCountsMovieTitleAndYearDrops(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "The.Patriot.2000.1080p.BluRay.x264-GROUP"},
+		{Title: "The.Patriot.2004.1080p.BluRay.x264-GROUP"},
+		{Title: "Der.Patriot.2000.1080p.BluRay.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "movie", "The Patriot 2000", "", "", true, true)
+
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 accepted movie result, got %d", len(filtered))
+	}
+	if !stats.TitleValidationApplied || !stats.YearValidationApplied {
+		t.Fatalf("expected title and year validation to be applied, got %+v", stats)
+	}
+	if stats.DroppedYear != 1 {
+		t.Fatalf("expected 1 year rejection, got %d", stats.DroppedYear)
+	}
+	if stats.DroppedTitle != 1 {
+		t.Fatalf("expected 1 title rejection, got %d", stats.DroppedTitle)
+	}
+}
+
+func TestValidateSearchResultsWithStatsSkipsYearWhenDisabled(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "The.Patriot.2000.1080p.BluRay.x264-GROUP"},
+		{Title: "The.Patriot.2004.1080p.BluRay.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "movie", "The Patriot 2000", "", "", true, false)
+
+	if len(filtered) != 2 {
+		t.Fatalf("expected both results to remain when year validation is off, got %d", len(filtered))
+	}
+	if stats.YearValidationApplied {
+		t.Fatalf("expected year validation to stay off, got %+v", stats)
+	}
+	if stats.DroppedYear != 0 {
+		t.Fatalf("expected no year rejections, got %d", stats.DroppedYear)
 	}
 }
 

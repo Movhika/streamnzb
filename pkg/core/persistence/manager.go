@@ -224,6 +224,7 @@ func mergeAttemptRows(target, source *sql.DB) (int64, error) {
 		%s,
 		%s,
 		%s,
+		%s,
 		success,
 		%s,
 		%s,
@@ -236,6 +237,7 @@ func mergeAttemptRows(target, source *sql.DB) (int64, error) {
 		colOr("release_url", "''"),
 		colOr("release_size", "0"),
 		colOr("served_file", "''"),
+		colOr("match_type", "''"),
 		colOr("failure_reason", "''"),
 		colOr("slot_path", "''"),
 		colOr("preload", "0"),
@@ -265,6 +267,7 @@ func mergeAttemptRows(target, source *sql.DB) (int64, error) {
 			&a.ReleaseURL,
 			&a.ReleaseSize,
 			&a.ServedFile,
+			&a.MatchType,
 			&success,
 			&a.FailureReason,
 			&a.SlotPath,
@@ -278,10 +281,10 @@ func mergeAttemptRows(target, source *sql.DB) (int64, error) {
 
 		res, err := target.Exec(`INSERT INTO nzb_attempts (
 			tried_at, stream_name, provider_name, content_type, content_id, content_title,
-			indexer_name, release_title, release_url, release_size, served_file, success,
+			indexer_name, release_title, release_url, release_size, served_file, match_type, success,
 			failure_reason, slot_path, preload
 		)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE NOT EXISTS (
 			SELECT 1 FROM nzb_attempts
 			WHERE tried_at = ?
@@ -292,12 +295,13 @@ func mergeAttemptRows(target, source *sql.DB) (int64, error) {
 			  AND COALESCE(slot_path, '') = ?
 			  AND COALESCE(preload, 0) = ?
 			  AND success = ?
+			  AND COALESCE(match_type, '') = ?
 			  AND COALESCE(failure_reason, '') = ?
 		)`,
 			a.TriedAt.UnixMilli(), a.StreamName, a.ProviderName, a.ContentType, a.ContentID, a.ContentTitle,
-			a.IndexerName, a.ReleaseTitle, a.ReleaseURL, a.ReleaseSize, a.ServedFile, boolToInt(a.Success),
+			a.IndexerName, a.ReleaseTitle, a.ReleaseURL, a.ReleaseSize, a.ServedFile, a.MatchType, boolToInt(a.Success),
 			a.FailureReason, a.SlotPath, boolToInt(a.Preload),
-			a.TriedAt.UnixMilli(), a.ContentType, a.ContentID, a.ReleaseTitle, a.ReleaseURL, a.SlotPath, boolToInt(a.Preload), boolToInt(a.Success), a.FailureReason,
+			a.TriedAt.UnixMilli(), a.ContentType, a.ContentID, a.ReleaseTitle, a.ReleaseURL, a.SlotPath, boolToInt(a.Preload), boolToInt(a.Success), a.MatchType, a.FailureReason,
 		)
 		if err != nil {
 			return merged, err

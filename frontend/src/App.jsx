@@ -14,6 +14,7 @@ import { apiFetch } from './api'
 import { AlertCircle, Loader2 } from "lucide-react"
 
 import { useAdminRuntime } from './hooks/useAdminRuntime'
+import { isAvailNZBEnabled } from './lib/availnzb'
 
 function App() {
   const [authChecked, setAuthChecked] = useState(false)
@@ -154,10 +155,7 @@ function App() {
   }, [theme]);
 
   const isSettingsPage = activePage === 'settings'
-  const availNZBEnabled = (() => {
-    const mode = String(config?.availnzb_mode || 'on').toLowerCase()
-    return mode !== 'off' && mode !== 'disabled'
-  })()
+  const availNZBEnabled = isAvailNZBEnabled(config?.availnzb_mode)
 
   const fetchAvailNZBStatus = useCallback(async (force = false) => {
     if (!authenticated || !config || !availNZBEnabled) return
@@ -292,9 +290,6 @@ function App() {
                 saveStatus={saveStatus}
                 clearSaveStatus={clearSaveStatus}
                 isSaving={isSaving}
-                availNZBStatus={availNZBStatus}
-                availNZBStatusLoading={availNZBStatusLoading}
-                availNZBStatusError={availNZBStatusError}
                 onRefreshAvailNZBStatus={() => fetchAvailNZBStatus(true)}
                 adminToken={currentUser && currentUser !== 'legacy' ? authToken : null}
                 indexerCaps={indexerCaps}

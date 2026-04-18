@@ -168,6 +168,12 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
 
   const update = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
   const fieldClass = (key) => fieldErrors[key] ? "border-destructive focus-visible:ring-destructive" : ""
+  const rowClass = "flex flex-col gap-3 min-[360px]:flex-row min-[360px]:items-center min-[360px]:gap-4"
+  const labelClass = "min-w-0 min-[360px]:flex-1"
+  const controlBaseClass = "w-full min-[360px]:ml-auto min-[360px]:shrink-0"
+  const controlWideClass = `${controlBaseClass} min-[360px]:w-[14rem]`
+  const controlNameClass = `${controlBaseClass} flex items-center gap-2 min-[360px]:w-[16.5rem]`
+  const controlNarrowClass = `${controlBaseClass} min-[360px]:w-[9rem]`
 
   const handleSave = async () => {
     const nextFieldErrors = {}
@@ -253,11 +259,11 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         <div className="space-y-4">
           <div className="rounded-md border border-border/60 p-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-              <div className="min-w-0 xl:flex-1">
-                <Label className="text-sm font-medium">Indexer Name</Label>
+            <div className={rowClass}>
+              <div className={labelClass}>
+                <Label className="text-sm font-medium">Name</Label>
               </div>
-              <div className="flex w-full items-center gap-2 xl:max-w-sm">
+              <div className={controlNameClass}>
                 <Input ref={nameInputRef} className={`h-9 ${fieldClass('name')}`} value={draft.name} onChange={(event) => update('name', event.target.value)} placeholder="e.g. NzbPlanet" disabled={editing} />
                 {!editing && (
                   <TooltipProvider delayDuration={100}>
@@ -321,22 +327,22 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
           {!isEasynews && (
             <div className="rounded-md border border-border/60">
               <div className="p-3">
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                  <div className="min-w-0 xl:flex-1">
+                <div className={rowClass}>
+                  <div className={labelClass}>
                     <Label className="text-sm font-medium">URL</Label>
                   </div>
-                  <div className="w-full xl:max-w-sm">
+                  <div className={controlWideClass}>
                     <Input className={`h-9 ${fieldClass('url')}`} value={draft.url} onChange={(event) => update('url', event.target.value)} placeholder="https://api.nzbgeek.info" />
                   </div>
                 </div>
               </div>
               <div className="relative p-3">
                 <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                  <div className="min-w-0 xl:flex-1">
+                <div className={rowClass}>
+                  <div className={labelClass}>
                     <Label className="text-sm font-medium">API Path</Label>
                   </div>
-                  <div className="w-full xl:max-w-sm">
+                  <div className={controlWideClass}>
                     <Input className={`h-9 ${fieldClass('api_path')}`} value={draft.api_path} onChange={(event) => update('api_path', event.target.value)} placeholder="/api" />
                   </div>
                 </div>
@@ -349,11 +355,11 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
               </div>
               <div className="relative p-3">
                 <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                  <div className="min-w-0 xl:flex-1">
+                <div className={rowClass}>
+                  <div className={labelClass}>
                     <Label className="text-sm font-medium">API Key</Label>
                   </div>
-                  <div className="w-full xl:max-w-sm">
+                  <div className={controlWideClass}>
                     <Input className={`h-9 ${fieldClass('api_key')}`} type="password" value={draft.api_key} onChange={(event) => update('api_key', event.target.value)} />
                   </div>
                 </div>
@@ -364,22 +370,22 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
           {isEasynews && (
             <div className="rounded-md border border-border/60">
               <div className="p-3">
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                  <div className="min-w-0 xl:flex-1">
+                <div className={rowClass}>
+                  <div className={labelClass}>
                     <Label className="text-sm font-medium">Username</Label>
                   </div>
-                  <div className="w-full xl:max-w-sm">
+                  <div className={controlWideClass}>
                     <Input className={`h-9 ${fieldClass('username')}`} value={draft.username} onChange={(event) => update('username', event.target.value)} />
                   </div>
                 </div>
               </div>
               <div className="relative p-3">
                 <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                  <div className="min-w-0 xl:flex-1">
+                <div className={rowClass}>
+                  <div className={labelClass}>
                     <Label className="text-sm font-medium">Password</Label>
                   </div>
-                  <div className="w-full xl:max-w-sm">
+                  <div className={controlWideClass}>
                     <Input className={`h-9 ${fieldClass('password')}`} type="password" value={draft.password} onChange={(event) => update('password', event.target.value)} />
                   </div>
                 </div>
@@ -389,44 +395,44 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
 
           <div className="rounded-md border border-border/60">
             <div className="p-3">
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                <div className="min-w-0 xl:flex-1">
+              <div className={rowClass}>
+                <div className={labelClass}>
                   <Label className="text-sm font-medium">Timeout (seconds)</Label>
                 </div>
-                <div className="w-full xl:max-w-[8rem]">
+                <div className={controlNarrowClass}>
                   <Input className={`h-9 ${fieldClass('timeout_seconds')}`} type="number" min={0} value={draft.timeout_seconds === 0 ? '' : draft.timeout_seconds} onChange={(event) => update('timeout_seconds', event.target.value === '' ? 0 : Number(event.target.value))} placeholder={String(getDefaultIndexerTimeoutSeconds(draft.type))} />
                 </div>
               </div>
             </div>
             <div className="relative p-3">
               <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                <div className="min-w-0 xl:flex-1">
+              <div className={rowClass}>
+                <div className={labelClass}>
                   <Label className="text-sm font-medium">Requests/Second</Label>
                 </div>
-                <div className="w-full xl:max-w-[8rem]">
+                <div className={controlNarrowClass}>
                   <Input className={`h-9 ${fieldClass('rate_limit_rps')}`} type="number" min={0} value={draft.rate_limit_rps === 0 ? '' : draft.rate_limit_rps} onChange={(event) => update('rate_limit_rps', event.target.value === '' ? 0 : Number(event.target.value))} placeholder="∞" />
                 </div>
               </div>
             </div>
             <div className="relative p-3">
               <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                <div className="min-w-0 xl:flex-1">
+              <div className={rowClass}>
+                <div className={labelClass}>
                   <Label className="text-sm font-medium">Hits/Day</Label>
                 </div>
-                <div className="w-full xl:max-w-[8rem]">
+                <div className={controlNarrowClass}>
                   <Input className={`h-9 ${fieldClass('api_hits_day')}`} type="number" min={0} value={draft.api_hits_day === 0 ? '' : draft.api_hits_day} onChange={(event) => update('api_hits_day', event.target.value === '' ? 0 : Number(event.target.value))} placeholder="∞" />
                 </div>
               </div>
             </div>
             <div className="relative p-3">
               <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                <div className="min-w-0 xl:flex-1">
+              <div className={rowClass}>
+                <div className={labelClass}>
                   <Label className="text-sm font-medium">DLs/Day</Label>
                 </div>
-                <div className="w-full xl:max-w-[8rem]">
+                <div className={controlNarrowClass}>
                   <Input className={`h-9 ${fieldClass('downloads_day')}`} type="number" min={0} value={draft.downloads_day === 0 ? '' : draft.downloads_day} onChange={(event) => update('downloads_day', event.target.value === '' ? 0 : Number(event.target.value))} placeholder="∞" />
                 </div>
               </div>

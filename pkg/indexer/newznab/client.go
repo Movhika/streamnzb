@@ -355,15 +355,20 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, err
 	}
 
+	c.mu.RLock()
+	caps := c.caps
+	c.mu.RUnlock()
+
 	limit := req.Limit
 	if o := req.OptionalOverrides; o != nil && o.SearchResultLimit > 0 {
 		limit = o.SearchResultLimit
 	}
-	if limit <= 0 {
-		limit = 100
+	maxLimit := 2000
+	if caps != nil && caps.Limits.Max > 0 {
+		maxLimit = caps.Limits.Max
 	}
-	if limit > 1000 {
-		limit = 1000
+	if limit <= 0 {
+		limit = maxLimit
 	}
 
 	params := url.Values{}
@@ -371,10 +376,6 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	params.Set("o", "xml")
 	params.Set("limit", fmt.Sprintf("%d", limit))
 	params.Set("offset", "0")
-
-	c.mu.RLock()
-	caps := c.caps
-	c.mu.RUnlock()
 
 	isMovieSearch := strings.HasPrefix(req.Cat, "2")
 	isTVSearch := strings.HasPrefix(req.Cat, "5")
@@ -409,7 +410,8 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			params.Set("t", "search")
 		}
 	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
-		useTVSearchParams = req.UseSeasonEpisodeParams && (req.Season != "" || req.Episode != "")
+		searchSeason, searchEpisode := config.SeriesSearchScopeSearchTarget(req.SeriesSearchScope, req.Season, req.Episode)
+		useTVSearchParams = config.SeriesSearchScopeUsesSeasonParams(req.SeriesSearchScope) && (searchSeason != "" || searchEpisode != "")
 		if isTextMode {
 			params.Set("t", "search")
 		} else {
@@ -449,11 +451,12 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 
 	if useTVSearchParams {
-		if req.Season != "" {
-			params.Set("season", req.Season)
+		searchSeason, searchEpisode := config.SeriesSearchScopeSearchTarget(req.SeriesSearchScope, req.Season, req.Episode)
+		if searchSeason != "" {
+			params.Set("season", searchSeason)
 		}
-		if req.Episode != "" {
-			params.Set("ep", req.Episode)
+		if searchEpisode != "" {
+			params.Set("ep", searchEpisode)
 		}
 	}
 

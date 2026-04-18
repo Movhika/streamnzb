@@ -37,6 +37,10 @@ export function fieldToTab(fieldName) {
       'disable_string_search',
       'search_result_limit',
       'search_title_language',
+      'series_search_scope',
+      'enable_result_validation',
+      'validation_title_language',
+      'include_year_in_validation',
     ]
     if (searchQueryFields.some((suffix) => fieldName.endsWith(`.${suffix}`))) return 'search_query'
     return 'indexers'

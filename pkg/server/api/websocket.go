@@ -767,6 +767,25 @@ func (s *Server) validateConfigWithPlan(cfg *config.Config, plan configValidatio
 			if mode != "id" && mode != "text" {
 				errors[fmt.Sprintf("%s.%d.search_mode", prefix, i)] = "Search mode must be id or text"
 			}
+			if prefix == "series_search_queries" {
+				scope := config.NormalizeSeriesSearchScope(query.SeriesSearchScope, query.UseSeasonEpisodeParams)
+				switch scope {
+				case config.SeriesSearchScopeEpisodeParam,
+					config.SeriesSearchScopeEpisodeQuery,
+					config.SeriesSearchScopeSeasonParam,
+					config.SeriesSearchScopeSeasonQuery,
+					config.SeriesSearchScopeNone:
+				default:
+					errors[fmt.Sprintf("%s.%d.series_search_scope", prefix, i)] = "TV scope must be episode_param, episode_query, season_param, season_query, or none"
+				}
+				validationEnabled := true
+				if query.EnableResultValidation != nil {
+					validationEnabled = *query.EnableResultValidation
+				}
+				if config.SeriesSearchScopeRequiresValidation(scope) && !validationEnabled {
+					errors[fmt.Sprintf("%s.%d.enable_result_validation", prefix, i)] = "Validation is required for season and none TV scopes"
+				}
+			}
 		}
 	}
 

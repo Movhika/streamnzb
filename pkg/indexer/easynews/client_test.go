@@ -106,76 +106,76 @@ func TestLimitChecksRefreshDailyUsageAfterRollover(t *testing.T) {
 
 func TestBuildEasynewsGPSQuery(t *testing.T) {
 	tests := []struct {
-		name                   string
-		query                  string
-		season                 string
-		episode                string
-		useSeasonEpisodeParams bool
-		category               string
-		want                   string
+		name     string
+		query    string
+		season   string
+		episode  string
+		scope    string
+		category string
+		want     string
 	}{
 		{
-			name:                   "tv param mode appends season and episode",
-			query:                  "The Last of Us",
-			season:                 "1",
-			episode:                "2",
-			useSeasonEpisodeParams: true,
-			category:               "5000",
-			want:                   "The Last of Us S01E02",
+			name:     "tv param mode appends season and episode",
+			query:    "The Last of Us",
+			season:   "1",
+			episode:  "2",
+			scope:    config.SeriesSearchScopeEpisodeParam,
+			category: "5000",
+			want:     "The Last of Us S01E02",
 		},
 		{
-			name:                   "tv query mode keeps prepared query unchanged",
-			query:                  "The Last of Us S01E02",
-			season:                 "1",
-			episode:                "2",
-			useSeasonEpisodeParams: false,
-			category:               "5000",
-			want:                   "The Last of Us S01E02",
+			name:     "tv query mode keeps prepared query unchanged",
+			query:    "The Last of Us S01E02",
+			season:   "1",
+			episode:  "2",
+			scope:    config.SeriesSearchScopeEpisodeQuery,
+			category: "5000",
+			want:     "The Last of Us S01E02",
 		},
 		{
-			name:                   "movie query unchanged",
-			query:                  "The Age of Adaline 2015",
-			season:                 "1",
-			episode:                "2",
-			useSeasonEpisodeParams: true,
-			category:               "2000",
-			want:                   "The Age of Adaline 2015",
+			name:     "movie query unchanged",
+			query:    "The Age of Adaline 2015",
+			season:   "1",
+			episode:  "2",
+			scope:    config.SeriesSearchScopeEpisodeParam,
+			category: "2000",
+			want:     "The Age of Adaline 2015",
 		},
 		{
-			name:                   "all 5xxx categories are treated as tv",
-			query:                  "The King Who Never Was",
-			season:                 "1",
-			episode:                "1",
-			useSeasonEpisodeParams: true,
-			category:               "5030",
-			want:                   "The King Who Never Was S01E01",
+			name:     "all 5xxx categories are treated as tv",
+			query:    "The King Who Never Was",
+			season:   "1",
+			episode:  "1",
+			scope:    config.SeriesSearchScopeEpisodeParam,
+			category: "5030",
+			want:     "The King Who Never Was S01E01",
 		},
 		{
-			name:                   "normalizes german punctuation and umlauts",
-			query:                  "Bube, Dame, König, grAS",
-			useSeasonEpisodeParams: false,
-			category:               "5000",
-			want:                   "Bube Dame Koenig grAS",
+			name:     "normalizes german punctuation and umlauts",
+			query:    "Bube, Dame, König, grAS",
+			scope:    config.SeriesSearchScopeNone,
+			category: "5000",
+			want:     "Bube Dame Koenig grAS",
 		},
 		{
-			name:                   "normalizes original punctuation",
-			query:                  "Lock, Stock & Two Smoking Barrels",
-			useSeasonEpisodeParams: false,
-			category:               "2000",
-			want:                   "Lock Stock Two Smoking Barrels",
+			name:     "normalizes original punctuation",
+			query:    "Lock, Stock & Two Smoking Barrels",
+			scope:    config.SeriesSearchScopeNone,
+			category: "2000",
+			want:     "Lock Stock Two Smoking Barrels",
 		},
 		{
-			name:                   "normalizes colon punctuation",
-			query:                  "Avatar: Fire and Ash",
-			useSeasonEpisodeParams: false,
-			category:               "2000",
-			want:                   "Avatar Fire and Ash",
+			name:     "normalizes colon punctuation",
+			query:    "Avatar: Fire and Ash",
+			scope:    config.SeriesSearchScopeNone,
+			category: "2000",
+			want:     "Avatar Fire and Ash",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := buildEasynewsGPSQuery(tt.query, tt.season, tt.episode, tt.useSeasonEpisodeParams, tt.category); got != tt.want {
+			if got := buildEasynewsGPSQuery(tt.query, tt.season, tt.episode, tt.scope, tt.category); got != tt.want {
 				t.Fatalf("buildEasynewsGPSQuery() = %q, want %q", got, tt.want)
 			}
 		})

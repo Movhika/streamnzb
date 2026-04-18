@@ -98,13 +98,14 @@ func TestRecordAttemptUsesSharedWriteLock(t *testing.T) {
 
 func TestRecordAttemptPersistsServedFile(t *testing.T) {
 	mgr := newTestStateManager(t)
-	mgr.RecordPreloadAttempt(RecordAttemptParams{SlotPath: "slot-pack", ReleaseTitle: "Season pack"})
+	mgr.RecordPreloadAttempt(RecordAttemptParams{SlotPath: "slot-pack", ReleaseTitle: "Season pack", MatchType: "season_pack"})
 
 	wantServedFile := "Altered.Carbon.S02E03.1080p.mkv"
 	mgr.RecordAttempt(RecordAttemptParams{
 		SlotPath:     "slot-pack",
 		ReleaseTitle: "Season pack",
 		ServedFile:   wantServedFile,
+		MatchType:    "season_pack",
 		Success:      true,
 	})
 
@@ -117,6 +118,9 @@ func TestRecordAttemptPersistsServedFile(t *testing.T) {
 	}
 	if got := list[0].ServedFile; got != wantServedFile {
 		t.Fatalf("ServedFile = %q, want %q", got, wantServedFile)
+	}
+	if got := list[0].MatchType; got != "season_pack" {
+		t.Fatalf("MatchType = %q, want %q", got, "season_pack")
 	}
 	if list[0].Preload {
 		t.Fatal("expected preload row to be resolved")
@@ -131,6 +135,7 @@ func TestUpdatePendingAttemptKeepsPreloadAndAddsReason(t *testing.T) {
 		SlotPath:      "slot-pending",
 		ProviderName:  "news.example.net",
 		ServedFile:    "Example.mkv",
+		MatchType:     "multi_episode",
 		FailureReason: "Playback ended too early to classify this release as good.",
 		AvailStatus:   "skipped",
 		AvailReason:   "Playback ended before the good threshold was reached.",
@@ -152,6 +157,9 @@ func TestUpdatePendingAttemptKeepsPreloadAndAddsReason(t *testing.T) {
 	if got := list[0].ServedFile; got != "Example.mkv" {
 		t.Fatalf("ServedFile = %q, want %q", got, "Example.mkv")
 	}
+	if got := list[0].MatchType; got != "multi_episode" {
+		t.Fatalf("MatchType = %q, want %q", got, "multi_episode")
+	}
 	if got := list[0].FailureReason; got != "Playback ended too early to classify this release as good." {
 		t.Fatalf("FailureReason = %q", got)
 	}
@@ -160,6 +168,48 @@ func TestUpdatePendingAttemptKeepsPreloadAndAddsReason(t *testing.T) {
 	}
 	if got := list[0].AvailReason; got != "Playback ended before the good threshold was reached." {
 		t.Fatalf("AvailReason = %q", got)
+	}
+}
+
+func TestResolvePendingAttemptFinalizesWithoutInsertingFallbackRow(t *testing.T) {
+	mgr := newTestStateManager(t)
+	mgr.RecordPreloadAttempt(RecordAttemptParams{SlotPath: "slot-pending-finalize", ReleaseTitle: "Short play"})
+
+	mgr.ResolvePendingAttempt(RecordAttemptParams{
+		SlotPath:      "slot-pending-finalize",
+		FailureReason: "Playback probe ended before the good threshold was reached.",
+		AvailStatus:   "skipped",
+		AvailReason:   "Playback ended before the good threshold was reached.",
+	})
+
+	list, err := mgr.ListAttempts(ListAttemptsOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAttempts: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected one finalized attempt, got %d", len(list))
+	}
+	if list[0].Preload {
+		t.Fatal("expected preload row to be resolved")
+	}
+	if list[0].Success {
+		t.Fatal("expected resolved attempt to remain unsuccessful")
+	}
+	if got := list[0].FailureReason; got != "Playback probe ended before the good threshold was reached." {
+		t.Fatalf("FailureReason = %q", got)
+	}
+
+	mgr.ResolvePendingAttempt(RecordAttemptParams{
+		SlotPath:      "slot-pending-finalize",
+		FailureReason: "should not create another row",
+	})
+
+	list, err = mgr.ListAttempts(ListAttemptsOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAttempts after second finalize: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected second finalize to remain a no-op, got %d rows", len(list))
 	}
 }
 

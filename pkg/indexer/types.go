@@ -43,10 +43,14 @@ type SearchRequest struct {
 	Season                 string
 	Episode                string
 	UseSeasonEpisodeParams bool
+	SeriesSearchScope      string
 	SearchMode             string
 	DisableResultFiltering bool
+	EnableResultValidation bool
+	EnableTitleValidation  bool
+	EnableYearValidation   bool
 	IndexerMode            string
-	FilterQuery            string
+	ValidationQuery        string
 	StreamLabel            string `json:"-"`
 	RequestLabel           string `json:"-"`
 

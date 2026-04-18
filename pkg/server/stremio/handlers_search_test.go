@@ -1,6 +1,7 @@
 package stremio
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -8,7 +9,24 @@ import (
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/services/metadata/tmdb"
+	"streamnzb/pkg/session"
 )
+
+type recordingIndexer struct {
+	lastReq indexer.SearchRequest
+}
+
+func (r *recordingIndexer) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
+	r.lastReq = req
+	return &indexer.SearchResponse{}, nil
+}
+
+func (r *recordingIndexer) Name() string            { return "Recording" }
+func (r *recordingIndexer) GetUsage() indexer.Usage { return indexer.Usage{} }
+func (r *recordingIndexer) Ping() error             { return nil }
+func (r *recordingIndexer) DownloadNZB(_ context.Context, _ string) ([]byte, error) {
+	return nil, nil
+}
 
 func TestBuildSeriesQueriesReturnsGenericShowName(t *testing.T) {
 	got := buildSeriesQueries("Game of Thrones")
@@ -87,7 +105,7 @@ func TestBuildSeriesQueriesFromMetadataAddsGermanTransliterationVariant(t *testi
 		},
 	}
 
-	got := buildSeriesQueriesFromMetadata(metadata, "de-DE", false, "1", "2", false)
+	got := buildSeriesQueriesFromMetadata(metadata, "de-DE", false, "1", "2", config.SeriesSearchScopeEpisodeQuery)
 	want := []string{"Koenig der Loewen S01E02"}
 
 	if !reflect.DeepEqual(got, want) {
@@ -204,6 +222,9 @@ func TestBuildSearchParamsFromBaseTextModeUsesRequestLanguageNotPerIndexerOverri
 		SearchMode:              "text",
 		SearchTitleLanguage:     "de-DE",
 		IncludeYearInTextSearch: boolPtr(false),
+		ValidationTitleLanguage: "de-DE",
+		IncludeYearInValidation: boolPtr(false),
+		EnableResultValidation:  boolPtr(true),
 	})
 	if err != nil {
 		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
@@ -212,8 +233,8 @@ func TestBuildSearchParamsFromBaseTextModeUsesRequestLanguageNotPerIndexerOverri
 	if params.Req.Query != "Koenig der Loewen" {
 		t.Fatalf("expected request-level localized query, got %q", params.Req.Query)
 	}
-	if params.Req.FilterQuery != "Koenig der Loewen" {
-		t.Fatalf("expected filter query to match request query, got %q", params.Req.FilterQuery)
+	if params.Req.ValidationQuery != "König der Löwen" {
+		t.Fatalf("expected validation query to match request query, got %q", params.Req.ValidationQuery)
 	}
 }
 
@@ -233,6 +254,116 @@ func TestBuildSearchParamsBaseNumericIDMapsToTMDBID(t *testing.T) {
 	}
 	if params.ContentIDs.Season != 1 || params.ContentIDs.Episode != 1 {
 		t.Fatalf("expected content IDs to preserve season/episode, got season=%d episode=%d", params.ContentIDs.Season, params.ContentIDs.Episode)
+	}
+}
+
+func TestBuildSearchParamsFromBaseLeavesLegacyValidationOffByDefault(t *testing.T) {
+	srv := &Server{config: &config.Config{}}
+	base := &SearchParams{
+		ContentType: "movie",
+		ID:          "tmdb:123",
+		Req: indexer.SearchRequest{
+			TMDBID: "123",
+			Cat:    "2000",
+			Limit:  1000,
+		},
+		Metadata: &resolvedSearchMetadata{
+			MovieDetails: &tmdb.MovieDetails{
+				Title:            "The Lion King",
+				OriginalTitle:    "The Lion King",
+				OriginalLanguage: "en",
+				ReleaseDate:      "1994-06-15",
+			},
+		},
+		MovieTitleQueries:  make(map[string][]string),
+		SeriesTitleQueries: make(map[string][]string),
+	}
+
+	params, err := srv.buildSearchParamsFromBase(base, &config.SearchQueryConfig{
+		SearchMode: "id",
+	})
+	if err != nil {
+		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
+	}
+
+	if params.Req.EnableResultValidation {
+		t.Fatalf("expected legacy search query validation to stay disabled by default")
+	}
+	if params.Req.ValidationQuery != "" {
+		t.Fatalf("expected no validation query when validation is off, got %q", params.Req.ValidationQuery)
+	}
+}
+
+func TestRunConfiguredSearchRequestsKeepsMetadataValidationQueryForTextSearch(t *testing.T) {
+	rec := &recordingIndexer{}
+	srv := &Server{
+		config: &config.Config{
+			MovieSearchQueries: []config.SearchQueryConfig{
+				{
+					Name:                    "MovieQuery03",
+					SearchMode:              "text",
+					SearchTitleLanguage:     "de-DE",
+					IncludeYearInTextSearch: boolPtr(false),
+					EnableResultValidation:  boolPtr(true),
+					ValidationTitleLanguage: "de-DE",
+					IncludeYearInValidation: boolPtr(true),
+				},
+			},
+		},
+		indexer: rec,
+	}
+
+	params := &SearchParams{
+		ContentType: "movie",
+		ID:          "tmdb:1084242",
+		Req: indexer.SearchRequest{
+			TMDBID: "1084242",
+			IMDbID: "tt26443597",
+			Cat:    "2000",
+			Limit:  1000,
+		},
+		Metadata: &resolvedSearchMetadata{
+			MovieDetails: &tmdb.MovieDetails{
+				Title:            "Zootopia 2",
+				OriginalTitle:    "Zootopia 2",
+				OriginalLanguage: "en",
+				ReleaseDate:      "2025-11-26",
+			},
+			MovieTranslations: &tmdb.MovieTranslationsResponse{
+				Translations: []tmdb.MovieTranslationEntry{
+					{
+						ISO639_1:  "de",
+						ISO3166_1: "DE",
+						Data: tmdb.MovieTranslationData{
+							Title: "Zoomania 2",
+						},
+					},
+				},
+			},
+		},
+		MovieTitleQueries:  make(map[string][]string),
+		SeriesTitleQueries: make(map[string][]string),
+		ContentIDs: &session.AvailReportMeta{
+			ImdbID: "tt26443597",
+			TmdbID: "1084242",
+		},
+	}
+
+	_, executed, err := srv.runConfiguredSearchRequests("movie", "tmdb:1084242", "Stream01", nil, []string{"MovieQuery03"}, params, nil)
+	if err != nil {
+		t.Fatalf("runConfiguredSearchRequests() error = %v", err)
+	}
+	if executed != 1 {
+		t.Fatalf("executedRequests = %d, want 1", executed)
+	}
+	if rec.lastReq.Query != "Zoomania 2" {
+		t.Fatalf("Query = %q, want %q", rec.lastReq.Query, "Zoomania 2")
+	}
+	if rec.lastReq.ValidationQuery != "Zoomania 2 2025" {
+		t.Fatalf("ValidationQuery = %q, want %q", rec.lastReq.ValidationQuery, "Zoomania 2 2025")
+	}
+	if !rec.lastReq.EnableYearValidation {
+		t.Fatal("expected year validation to stay enabled")
 	}
 }
 
@@ -258,8 +389,8 @@ func TestHasPreparedTextQueries(t *testing.T) {
 	if !hasPreparedTextQueries(indexer.SearchRequest{Query: "Invincible"}) {
 		t.Fatal("expected explicit query to count as prepared text query")
 	}
-	if !hasPreparedTextQueries(indexer.SearchRequest{FilterQuery: "Invincible S01E04"}) {
-		t.Fatal("expected filter query to count as prepared text query")
+	if !hasPreparedTextQueries(indexer.SearchRequest{ValidationQuery: "Invincible S01E04"}) {
+		t.Fatal("expected validation query to count as prepared text query")
 	}
 }
 

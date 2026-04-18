@@ -168,6 +168,83 @@ func TestNewznabPagination(t *testing.T) {
 	}
 }
 
+func TestNewznabSearchLimitUsesCapsMaxWhenRequestLimitIsZero(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{Limits: indexer.CapsLimits{Max: 500}}
+
+	_, err := client.Search(indexer.SearchRequest{Limit: 0})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if gotLimit != "500" {
+		t.Fatalf("limit = %q, want %q", gotLimit, "500")
+	}
+}
+
+func TestNewznabSearchLimitFallsBackTo2000WithoutCaps(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+
+	_, err := client.Search(indexer.SearchRequest{Limit: 0})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if gotLimit != "2000" {
+		t.Fatalf("limit = %q, want %q", gotLimit, "2000")
+	}
+}
+
+func TestNewznabSearchLimitKeepsExplicitValueEvenAboveCapsMax(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{Limits: indexer.CapsLimits{Max: 500}}
+
+	_, err := client.Search(indexer.SearchRequest{Limit: 3000})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if gotLimit != "3000" {
+		t.Fatalf("limit = %q, want %q", gotLimit, "3000")
+	}
+}
+
 func TestNewznabPing(t *testing.T) {
 	logger.Init("DEBUG")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

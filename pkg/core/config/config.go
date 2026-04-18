@@ -25,6 +25,11 @@ const (
 	CurrentConfigVersion                   = 2
 	StreamModelConfigVersion               = 2
 	defaultMigratedStreamID                = "default"
+	SeriesSearchScopeEpisodeParam          = "episode_param"
+	SeriesSearchScopeEpisodeQuery          = "episode_query"
+	SeriesSearchScopeSeasonParam           = "season_param"
+	SeriesSearchScopeSeasonQuery           = "season_query"
+	SeriesSearchScopeNone                  = "none"
 )
 
 type Provider struct {
@@ -69,10 +74,14 @@ type SearchQueryConfig struct {
 	SearchResultLimit          int    `json:"search_result_limit,omitempty"`
 	IncludeYearInTextSearch    *bool  `json:"include_year_in_text_search,omitempty"`
 	UseSeasonEpisodeParams     *bool  `json:"use_season_episode_params,omitempty"`
+	SeriesSearchScope          string `json:"series_search_scope,omitempty"`
 	EnableSeriesSeasonSearch   *bool  `json:"enable_series_season_search,omitempty"`
 	EnableSeriesCompleteSearch *bool  `json:"enable_series_complete_search,omitempty"`
 	EnableSeriesPackSearch     *bool  `json:"enable_series_pack_search,omitempty"`
 	SearchTitleLanguage        string `json:"search_title_language,omitempty"`
+	EnableResultValidation     *bool  `json:"enable_result_validation,omitempty"`
+	ValidationTitleLanguage    string `json:"validation_title_language,omitempty"`
+	IncludeYearInValidation    *bool  `json:"include_year_in_validation,omitempty"`
 	MovieCategories            string `json:"movie_categories,omitempty"`
 	TVCategories               string `json:"tv_categories,omitempty"`
 	ExtraSearchTerms           string `json:"extra_search_terms,omitempty"`
@@ -147,6 +156,50 @@ func NormalizeAvailNZBMode(mode string) string {
 		return "off"
 	default:
 		return "on"
+	}
+}
+
+func NormalizeSeriesSearchScope(scope string, legacyUseSeasonEpisodeParams *bool) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case SeriesSearchScopeEpisodeParam,
+		SeriesSearchScopeEpisodeQuery,
+		SeriesSearchScopeSeasonParam,
+		SeriesSearchScopeSeasonQuery,
+		SeriesSearchScopeNone:
+		return strings.ToLower(strings.TrimSpace(scope))
+	}
+	if legacyUseSeasonEpisodeParams != nil && !*legacyUseSeasonEpisodeParams {
+		return SeriesSearchScopeEpisodeQuery
+	}
+	return SeriesSearchScopeEpisodeParam
+}
+
+func SeriesSearchScopeUsesSeasonParams(scope string) bool {
+	switch NormalizeSeriesSearchScope(scope, nil) {
+	case SeriesSearchScopeEpisodeParam, SeriesSearchScopeSeasonParam:
+		return true
+	default:
+		return false
+	}
+}
+
+func SeriesSearchScopeSearchTarget(scope, season, episode string) (string, string) {
+	switch NormalizeSeriesSearchScope(scope, nil) {
+	case SeriesSearchScopeEpisodeParam:
+		return strings.TrimSpace(season), strings.TrimSpace(episode)
+	case SeriesSearchScopeSeasonParam:
+		return strings.TrimSpace(season), ""
+	default:
+		return "", ""
+	}
+}
+
+func SeriesSearchScopeRequiresValidation(scope string) bool {
+	switch NormalizeSeriesSearchScope(scope, nil) {
+	case SeriesSearchScopeSeasonParam, SeriesSearchScopeSeasonQuery, SeriesSearchScopeNone:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -297,7 +350,7 @@ func (c *Config) GetSearchQueryByName(contentType, name string) *SearchQueryConf
 
 func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global *Config) *IndexerSearchConfig {
 	out := &IndexerSearchConfig{}
-	const defaultLimit = 1000
+	const defaultLimit = 0
 	out.SearchResultLimit = defaultLimit
 	if ic != nil && ic.SearchResultLimit > 0 {
 		out.SearchResultLimit = ic.SearchResultLimit
@@ -528,35 +581,49 @@ func (c *Config) ensureDefaultMigrationSearchQueries() bool {
 	if c.ensureMovieSearchQuery(SearchQueryConfig{
 		Name:                    "DefaultMovieText",
 		SearchMode:              "text",
-		SearchResultLimit:       1000,
+		SearchResultLimit:       0,
 		MovieCategories:         "2000",
 		IncludeYearInTextSearch: ptrBool(true),
+		EnableResultValidation:  ptrBool(false),
+		ValidationTitleLanguage: "off",
+		IncludeYearInValidation: ptrBool(false),
 	}) {
 		changed = true
 	}
 	if c.ensureMovieSearchQuery(SearchQueryConfig{
-		Name:              "DefaultMovieID",
-		SearchMode:        "id",
-		SearchResultLimit: 1000,
-		MovieCategories:   "2000",
+		Name:                    "DefaultMovieID",
+		SearchMode:              "id",
+		SearchResultLimit:       0,
+		MovieCategories:         "2000",
+		EnableResultValidation:  ptrBool(true),
+		ValidationTitleLanguage: "",
+		IncludeYearInValidation: ptrBool(false),
 	}) {
 		changed = true
 	}
 	if c.ensureSeriesSearchQuery(SearchQueryConfig{
-		Name:                   "DefaultTVText",
-		SearchMode:             "text",
-		SearchResultLimit:      1000,
-		TVCategories:           "5000",
-		UseSeasonEpisodeParams: ptrBool(false),
+		Name:                    "DefaultTVText",
+		SearchMode:              "text",
+		SearchResultLimit:       0,
+		TVCategories:            "5000",
+		UseSeasonEpisodeParams:  ptrBool(false),
+		SeriesSearchScope:       SeriesSearchScopeEpisodeQuery,
+		EnableResultValidation:  ptrBool(false),
+		ValidationTitleLanguage: "off",
+		IncludeYearInValidation: ptrBool(false),
 	}) {
 		changed = true
 	}
 	if c.ensureSeriesSearchQuery(SearchQueryConfig{
-		Name:                   "DefaultTVID",
-		SearchMode:             "id",
-		SearchResultLimit:      1000,
-		TVCategories:           "5000",
-		UseSeasonEpisodeParams: ptrBool(true),
+		Name:                    "DefaultTVID",
+		SearchMode:              "id",
+		SearchResultLimit:       0,
+		TVCategories:            "5000",
+		UseSeasonEpisodeParams:  ptrBool(true),
+		SeriesSearchScope:       SeriesSearchScopeEpisodeParam,
+		EnableResultValidation:  ptrBool(true),
+		ValidationTitleLanguage: "",
+		IncludeYearInValidation: ptrBool(false),
 	}) {
 		changed = true
 	}

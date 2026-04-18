@@ -36,6 +36,7 @@ function shortReason(reason) {
   if (value.includes('download limit reached') || value.includes('api limit reached') || value.includes('request limit reached')) return 'Limit'
   if (value.includes('playback startup timeout') || value.includes('timed out') || value.includes('context deadline exceeded')) return 'Timeout'
   if (value.includes('probe inspect') || value.includes('probe:') || value.includes('invalid container header')) return 'Probe'
+  if (value.includes('playback probe ended') || value.includes('playback ended too early') || value.includes('threshold not reached')) return 'Short play'
   if (value.includes('episode target not found') || value.includes('no file')) return 'No file'
   if (value.includes('430') || value.includes('segment unavailable') || value.includes('not found')) return 'Segment'
   if (value.includes('eof')) return 'EOF'
@@ -49,6 +50,7 @@ function attemptBadgeClass(attempt, reasonLabel) {
   if (attempt.success) return 'bg-green-600 text-white hover:bg-green-600 hover:text-white dark:text-black'
   if (attempt.preload) return 'bg-muted text-foreground hover:bg-muted'
   if (reasonLabel === 'Limit') return 'bg-slate-500 text-white hover:bg-slate-500 hover:text-white dark:bg-slate-400 dark:text-black'
+  if (reasonLabel === 'Short play') return 'bg-amber-500 text-white hover:bg-amber-500 hover:text-white dark:bg-amber-400 dark:text-black'
   return 'bg-red-500 text-white hover:bg-red-500 hover:text-white dark:bg-red-500 dark:text-black'
 }
 
@@ -74,6 +76,15 @@ function formatContentTypeLabel(contentType) {
   return '—'
 }
 
+function formatMatchType(value) {
+  if (value === 'exact_episode') return 'Exact episode'
+  if (value === 'multi_episode') return 'Multi-episode'
+  if (value === 'season_pack') return 'Season pack'
+  if (value === 'complete_pack') return 'Complete pack'
+  if (value === 'season_match') return 'Season match'
+  return ''
+}
+
 function formatContentTitle(title, contentType, contentID) {
   const baseTitle = (title || '').trim()
   if (!baseTitle) return '—'
@@ -97,6 +108,7 @@ function buildBadMatchReport(attempt) {
     ['Content ID', attempt.content_id || '—'],
     ['Indexer', attempt.indexer_name || '—'],
     ['Release title', attempt.release_title || '—'],
+    ['Match type', formatMatchType(attempt.match_type) || '—'],
     ['Served file', attempt.served_file || '—'],
     ['Release size', formatSize(attempt.release_size)],
     ['Result', formatAttemptResult(attempt)],
@@ -244,6 +256,7 @@ function buildRequestGroups(attempts) {
 function formatGroupStatus(group) {
   if (group.okCount > 0) return 'OK'
   if (group.preloadCount > 0 && group.failedCount === 0) return 'Pending'
+  if (shortReason(group.latest?.failure_reason) === 'Short play') return 'Short play'
   return 'Failed'
 }
 
@@ -256,6 +269,7 @@ function formatAvailStatus(value) {
 function statusTone(group) {
   if (group.okCount > 0) return 'success'
   if (group.preloadCount > 0 && group.failedCount === 0) return 'secondary'
+  if (shortReason(group.latest?.failure_reason) === 'Short play') return 'warning'
   return 'destructive'
 }
 
@@ -300,6 +314,7 @@ function DetailRow({ label, value, mono = false, tone = 'default', bordered = fa
           className={cn(
             'min-w-0 break-words leading-relaxed [overflow-wrap:anywhere]',
             mono && 'rounded-md border border-border/50 bg-background/70 px-3 py-2 font-mono text-xs sm:text-sm',
+            tone === 'warning' && 'rounded-md border border-amber-200/70 bg-amber-50/70 px-3 py-2 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200',
             tone === 'danger' && 'rounded-md border border-red-200/70 bg-red-50/70 px-3 py-2 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300'
           )}
         >
@@ -595,6 +610,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                                       className={cn(
                                         'shrink-0',
                                         statusTone(group) === 'success' && 'bg-green-600 text-white hover:bg-green-600 hover:text-white dark:text-black',
+                                        statusTone(group) === 'warning' && 'bg-amber-500 text-white hover:bg-amber-500 hover:text-white dark:bg-amber-400 dark:text-black',
                                         statusTone(group) === 'destructive' && 'bg-red-500 text-white hover:bg-red-500 hover:text-white dark:bg-red-500 dark:text-black'
                                       )}
                                     >
@@ -660,7 +676,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                                               {attempt.release_title || '—'}
                                             </div>
                                             <div className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                                              {[attempt.indexer_name || '—', attempt.provider_name || '—', formatSize(attempt.release_size)].join(' • ')}
+                                              {[attempt.indexer_name || '—', attempt.provider_name || '—', formatSize(attempt.release_size), formatMatchType(attempt.match_type)].filter(Boolean).join(' • ')}
                                             </div>
                                           </div>
                                         </div>
@@ -712,6 +728,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                           <DetailRow label="Stream" value={selectedAttempt.stream_name || 'default'} />
                           <DetailRow label="Title" value={selectedAttempt.content_title || '—'} bordered />
                           <DetailRow label="Content ID" value={selectedAttempt.content_id || '—'} bordered />
+                          <DetailRow label="Match" value={formatMatchType(selectedAttempt.match_type) || '—'} bordered />
                           <DetailRow label="Size" value={formatSize(selectedAttempt.release_size)} bordered />
                         </div>
                       </DetailSection>
@@ -728,7 +745,11 @@ export function NZBHistoryPage({ refreshTrigger }) {
                       </DetailSection>
                       <DetailSection title="Debug">
                         <div>
-                          <DetailRow label="Reason" value={selectedAttempt.failure_reason || '—'} tone={selectedAttempt.failure_reason ? 'danger' : 'default'} />
+                          <DetailRow
+                            label="Reason"
+                            value={selectedAttempt.failure_reason || '—'}
+                            tone={shortReason(selectedAttempt.failure_reason) === 'Short play' ? 'warning' : selectedAttempt.failure_reason ? 'danger' : 'default'}
+                          />
                           <DetailRow label="Slot path" value={selectedAttempt.slot_path || '—'} mono bordered />
                         </div>
                       </DetailSection>

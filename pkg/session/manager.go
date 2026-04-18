@@ -86,6 +86,9 @@ type Session struct {
 	downloadURL string
 	indexer     indexer.Indexer
 
+	nzbDownloadInFlight bool
+	nzbDownloadDone     chan struct{}
+
 	segmentFetcher     loader.SegmentFetcher
 	providerHosts      []string
 	attemptedProviders map[string]struct{}
@@ -839,82 +842,134 @@ func (m *Manager) CreateDeferredSessionWithFetcher(sessionID, downloadURL string
 }
 
 func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
-	s.mu.Lock()
-	if s.NZB != nil {
-		nzb := s.NZB
+	return s.GetOrDownloadNZBWithContext(nil, manager)
+}
+
+func (s *Session) GetOrDownloadNZBWithContext(ctx context.Context, manager *Manager) (*nzb.NZB, error) {
+	for {
+		s.mu.Lock()
+		if s.NZB != nil {
+			nzb := s.NZB
+			s.mu.Unlock()
+			return nzb, nil
+		}
+		if s.downloadURL == "" || s.indexer == nil {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("session has no NZB and no deferred download info")
+		}
+		sessionCtx := s.ctx
+		if ctx == nil {
+			ctx = sessionCtx
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if s.nzbDownloadInFlight {
+			done := s.nzbDownloadDone
+			s.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return nil, fmt.Errorf("failed to lazy download NZB: %w", ctx.Err())
+			}
+		}
+
+		nzbURL := s.downloadURL
+		idx := s.indexer
+		itemTitle := ""
+		indexerName := ""
+		if s.Release != nil {
+			itemTitle = s.Release.Title
+			indexerName = s.Release.Indexer
+		}
+		sessionFileCtx := sessionCtx
+		if sessionFileCtx == nil {
+			sessionFileCtx = context.Background()
+		}
+		s.nzbDownloadInFlight = true
+		done := make(chan struct{})
+		s.nzbDownloadDone = done
 		s.mu.Unlock()
+
+		downloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		if err := downloadCtx.Err(); err != nil {
+			cancel()
+			s.mu.Lock()
+			s.nzbDownloadInFlight = false
+			s.nzbDownloadDone = nil
+			close(done)
+			s.mu.Unlock()
+			return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
+		}
+
+		logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)
+		data, err := idx.DownloadNZB(downloadCtx, nzbURL)
+		cancel()
+
+		var parsedNZB *nzb.NZB
+		var loaderFiles []*loader.File
+		if err == nil {
+			if len(data) == 0 {
+				logger.Debug("NZB download returned empty body", "indexer", indexerName, "title", itemTitle, "url", nzbURL)
+				err = fmt.Errorf("NZB download returned empty body (indexer: %s)", indexerName)
+			} else {
+				parsedNZB, err = nzb.Parse(bytes.NewReader(data))
+				if err != nil {
+					snippet := string(data)
+					if len(snippet) > 200 {
+						snippet = snippet[:200] + "..."
+					}
+					logger.Debug("Failed to parse NZB", "indexer", indexerName, "title", itemTitle, "url", nzbURL, "len", len(data), "snippet", snippet, "err", err)
+					err = fmt.Errorf("failed to parse lazy downloaded NZB: %w", err)
+				}
+			}
+		}
+
+		if err == nil {
+			contentFiles := selectSessionContentFiles(parsedNZB, s.ContentIDs)
+			if len(contentFiles) == 0 {
+				logger.Error("Lazy load: no content files in NZB",
+					"title", itemTitle,
+					"indexer", indexerName,
+					"nzb_files", len(parsedNZB.Files),
+					"details", "see DEBUG log GetContentFiles returned empty for file list")
+				err = fmt.Errorf("no content files found in lazy NZB")
+			} else {
+				manager.mu.RLock()
+				pools := manager.pools
+				usenetPool := manager.usenetPool
+				estimator := manager.estimator
+				manager.mu.RUnlock()
+				segmentFetcher := s.segmentFetcher
+				if segmentFetcher == nil {
+					segmentFetcher = usenetPool
+				}
+				loaderFiles = buildLoaderFiles(sessionFileCtx, s.ID, contentFiles, pools, segmentFetcher, estimator)
+			}
+		}
+
+		s.mu.Lock()
+		if err == nil && s.NZB == nil {
+			s.NZB = parsedNZB
+			s.Files = loaderFiles
+			s.File = loaderFiles[0]
+			logger.Debug("session GetOrDownloadNZB created loader files", "id", s.ID, "files", len(loaderFiles))
+		}
+		nzb := s.NZB
+		s.nzbDownloadInFlight = false
+		s.nzbDownloadDone = nil
+		close(done)
+		s.mu.Unlock()
+
+		if err != nil {
+			if strings.Contains(err.Error(), "failed to parse lazy downloaded NZB") || strings.Contains(err.Error(), "no content files found in lazy NZB") || strings.Contains(err.Error(), "NZB download returned empty body") {
+				return nil, err
+			}
+			return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
+		}
 		return nzb, nil
 	}
-	if s.downloadURL == "" || s.indexer == nil {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("session has no NZB and no deferred download info")
-	}
-	nzbURL := s.downloadURL
-	idx := s.indexer
-	itemTitle := ""
-	indexerName := ""
-	if s.Release != nil {
-		itemTitle = s.Release.Title
-		indexerName = s.Release.Indexer
-	}
-	ctx := s.ctx
-	s.mu.Unlock()
-
-	var data []byte
-	var err error
-	downloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)
-	data, err = idx.DownloadNZB(downloadCtx, nzbURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
-	}
-	if len(data) == 0 {
-		logger.Debug("NZB download returned empty body", "indexer", indexerName, "title", itemTitle, "url", nzbURL)
-		return nil, fmt.Errorf("NZB download returned empty body (indexer: %s)", indexerName)
-	}
-	parsedNZB, err := nzb.Parse(bytes.NewReader(data))
-	if err != nil {
-		snippet := string(data)
-		if len(snippet) > 200 {
-			snippet = snippet[:200] + "..."
-		}
-		logger.Debug("Failed to parse NZB", "indexer", indexerName, "title", itemTitle, "url", nzbURL, "len", len(data), "snippet", snippet, "err", err)
-		return nil, fmt.Errorf("failed to parse lazy downloaded NZB: %w", err)
-	}
-	contentFiles := selectSessionContentFiles(parsedNZB, s.ContentIDs)
-	if len(contentFiles) == 0 {
-		logger.Error("Lazy load: no content files in NZB",
-			"title", itemTitle,
-			"indexer", indexerName,
-			"nzb_files", len(parsedNZB.Files),
-			"details", "see DEBUG log GetContentFiles returned empty for file list")
-		return nil, fmt.Errorf("no content files found in lazy NZB")
-	}
-
-	manager.mu.RLock()
-	pools := manager.pools
-	usenetPool := manager.usenetPool
-	estimator := manager.estimator
-	manager.mu.RUnlock()
-	segmentFetcher := s.segmentFetcher
-	if segmentFetcher == nil {
-		segmentFetcher = usenetPool
-	}
-
-	loaderFiles := buildLoaderFiles(ctx, s.ID, contentFiles, pools, segmentFetcher, estimator)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.NZB != nil {
-		return s.NZB, nil
-	}
-	s.NZB = parsedNZB
-	s.Files = loaderFiles
-	s.File = loaderFiles[0]
-	logger.Debug("session GetOrDownloadNZB created loader files", "id", s.ID, "files", len(loaderFiles))
-	return s.NZB, nil
 }
 
 func failoverOrderMapKey(streamToken, streamKey string) string {
