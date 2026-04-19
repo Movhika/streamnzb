@@ -9,6 +9,7 @@ import (
 
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/release"
+	"streamnzb/pkg/session"
 )
 
 type recordingIndexer struct {
@@ -56,6 +57,26 @@ func (e *errIndexer) DownloadNZB(context.Context, string) ([]byte, error) { retu
 func (e *errIndexer) Ping() error                                         { return nil }
 func (e *errIndexer) Name() string                                        { return e.name }
 func (e *errIndexer) GetUsage() indexer.Usage                             { return indexer.Usage{} }
+
+type fakeTMDBResolver struct {
+	tvName string
+}
+
+func (f *fakeTMDBResolver) GetMovieTitle(imdbID, tmdbID string) (string, error) {
+	return "", nil
+}
+
+func (f *fakeTMDBResolver) GetMovieTitleAndYear(imdbID, tmdbID string) (string, string, error) {
+	return "", "", nil
+}
+
+func (f *fakeTMDBResolver) GetMovieTitleForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (string, error) {
+	return "", nil
+}
+
+func (f *fakeTMDBResolver) GetTVShowName(tmdbID, imdbID string) (string, error) {
+	return f.tvName, nil
+}
 
 func TestRunIndexerSearchesTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
@@ -305,6 +326,19 @@ func TestRunIndexerSearchesIDModePreservesPreparedQuery(t *testing.T) {
 	}
 	if idx.reqs[0].Query != "The Age of Adaline" {
 		t.Fatalf("expected id request to preserve prepared query, got %q", idx.reqs[0].Query)
+	}
+}
+
+func TestBuildValidationQueryPreservesRawSeasonEpisodeWhenOnlyOnePartParses(t *testing.T) {
+	resolver := &fakeTMDBResolver{tvName: "Example Show"}
+	req := indexer.SearchRequest{
+		Season:  "special",
+		Episode: "1",
+	}
+
+	got := BuildValidationQuery(resolver, req, "series", &session.AvailReportMeta{}, "tt123", "76479")
+	if got != "Example Show SspecialE1" {
+		t.Fatalf("BuildValidationQuery() = %q, want %q", got, "Example Show SspecialE1")
 	}
 }
 

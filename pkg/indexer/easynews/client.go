@@ -343,7 +343,7 @@ func normalizeEasynewsQuery(query string) string {
 
 func buildEasynewsGPSQuery(query, season, episode, scope, category string) string {
 	query = normalizeEasynewsQuery(query)
-	if !strings.HasPrefix(category, "5") {
+	if !strings.HasPrefix(strings.TrimSpace(category), "5") {
 		return query
 	}
 	switch config.NormalizeSeriesSearchScope(scope, nil) {
@@ -360,6 +360,9 @@ func buildEasynewsGPSQuery(query, season, episode, scope, category string) strin
 		if strings.HasSuffix(strings.ToLower(query), strings.ToLower(" "+suffix)) || strings.EqualFold(query, suffix) {
 			return query
 		}
+		if query == "" {
+			return suffix
+		}
 		return fmt.Sprintf("%s %s", query, suffix)
 	case config.SeriesSearchScopeSeasonParam, config.SeriesSearchScopeSeasonQuery:
 		if season == "" {
@@ -372,6 +375,9 @@ func buildEasynewsGPSQuery(query, season, episode, scope, category string) strin
 		}
 		if strings.HasSuffix(strings.ToLower(query), strings.ToLower(" "+suffix)) || strings.EqualFold(query, suffix) {
 			return query
+		}
+		if query == "" {
+			return suffix
 		}
 		return fmt.Sprintf("%s %s", query, suffix)
 	default:

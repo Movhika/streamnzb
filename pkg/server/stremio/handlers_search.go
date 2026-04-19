@@ -264,6 +264,9 @@ func buildSeriesValidationQueryFromMetadata(metadata *resolvedSearchMetadata, la
 	if localized := localizedTVTitleForLanguage(metadata.TVTranslations, language); localized != "" {
 		title = localized
 	}
+	if strings.TrimSpace(title) == "" {
+		return ""
+	}
 	if includeYear && len(metadata.TVDetails.FirstAirDate) >= 4 {
 		title = strings.TrimSpace(title + " " + metadata.TVDetails.FirstAirDate[:4])
 	}

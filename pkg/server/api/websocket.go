@@ -768,16 +768,19 @@ func (s *Server) validateConfigWithPlan(cfg *config.Config, plan configValidatio
 				errors[fmt.Sprintf("%s.%d.search_mode", prefix, i)] = "Search mode must be id or text"
 			}
 			if prefix == "series_search_queries" {
-				scope := config.NormalizeSeriesSearchScope(query.SeriesSearchScope, query.UseSeasonEpisodeParams)
-				switch scope {
-				case config.SeriesSearchScopeEpisodeParam,
-					config.SeriesSearchScopeEpisodeQuery,
-					config.SeriesSearchScopeSeasonParam,
-					config.SeriesSearchScopeSeasonQuery,
-					config.SeriesSearchScopeNone:
-				default:
-					errors[fmt.Sprintf("%s.%d.series_search_scope", prefix, i)] = "TV scope must be episode_param, episode_query, season_param, season_query, or none"
+				rawScope := strings.ToLower(strings.TrimSpace(query.SeriesSearchScope))
+				if rawScope != "" {
+					switch rawScope {
+					case config.SeriesSearchScopeEpisodeParam,
+						config.SeriesSearchScopeEpisodeQuery,
+						config.SeriesSearchScopeSeasonParam,
+						config.SeriesSearchScopeSeasonQuery,
+						config.SeriesSearchScopeNone:
+					default:
+						errors[fmt.Sprintf("%s.%d.series_search_scope", prefix, i)] = "TV scope must be episode_param, episode_query, season_param, season_query, or none"
+					}
 				}
+				scope := config.NormalizeSeriesSearchScope(query.SeriesSearchScope, query.UseSeasonEpisodeParams)
 				validationEnabled := true
 				if query.EnableResultValidation != nil {
 					validationEnabled = *query.EnableResultValidation

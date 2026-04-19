@@ -2040,16 +2040,18 @@ func (s *Server) schedulePendingAttemptResolution(sess *session.Session, reason 
 	s.pendingAttemptResolutions.Store(sessionID, token)
 	finalReason := pendingAttemptResolutionReason(reason)
 	go func() {
-		timer := time.NewTimer(pendingAttemptResolutionDelay)
-		defer timer.Stop()
-		<-timer.C
+		ticker := time.NewTicker(pendingAttemptResolutionDelay)
+		defer ticker.Stop()
 
-		current, ok := s.pendingAttemptResolutions.Load(sessionID)
-		if !ok || current != token {
-			return
-		}
-		if sess.IsActivelyServing() {
-			return
+		for {
+			<-ticker.C
+			current, ok := s.pendingAttemptResolutions.Load(sessionID)
+			if !ok || current != token {
+				return
+			}
+			if !sess.IsActivelyServing() {
+				break
+			}
 		}
 
 		s.pendingAttemptResolutions.Delete(sessionID)

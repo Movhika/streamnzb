@@ -556,8 +556,10 @@ func TestGetOrDownloadNZBWithContextDoesNotRepopulateClosedSession(t *testing.T)
 	}
 
 	errCh := make(chan error, 1)
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	defer cancelCaller()
 	go func() {
-		_, err := s.GetOrDownloadNZBWithContext(context.Background(), m)
+		_, err := s.GetOrDownloadNZBWithContext(callerCtx, m)
 		errCh <- err
 	}()
 
@@ -568,15 +570,68 @@ func TestGetOrDownloadNZBWithContextDoesNotRepopulateClosedSession(t *testing.T)
 	}
 
 	s.Close()
-	close(wait)
 
-	if err := <-errCh; err == nil {
-		t.Fatal("expected lazy NZB download to stop for closed session")
-	} else if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled, got %v", err)
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected lazy NZB download to stop for closed session")
+		} else if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected session close to cancel merged download context")
 	}
 	if s.NZB != nil || s.Files != nil || s.File != nil {
 		t.Fatal("expected closed session to stay empty after lazy download finishes")
+	}
+}
+
+func TestGetOrDownloadNZBWithContextPropagatesLeaderFailureToWaiters(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	wait := make(chan struct{})
+	started := make(chan struct{}, 1)
+	idx := &fakeIndexer{err: context.DeadlineExceeded, wait: wait, started: started}
+	s, err := m.CreateDeferredSession("sess-shared-download-error", "https://example.invalid/get?nzb=1", nil, idx, nil, "movie", "tt123", "", "")
+	if err != nil {
+		t.Fatalf("CreateDeferredSession returned error: %v", err)
+	}
+
+	errCh := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := s.GetOrDownloadNZBWithContext(context.Background(), m)
+			errCh <- err
+		}()
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for NZB download to start")
+	}
+
+	close(wait)
+
+	for i := 0; i < 2; i++ {
+		err := <-errCh
+		if err == nil {
+			t.Fatal("expected lazy download error")
+		}
+		if !strings.Contains(err.Error(), "failed to lazy download NZB") {
+			t.Fatalf("expected wrapped lazy download error, got %v", err)
+		}
+	}
+
+	idx.mu.Lock()
+	calls := idx.calls
+	idx.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected DownloadNZB to be called once, got %d", calls)
 	}
 }
 

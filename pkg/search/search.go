@@ -40,11 +40,11 @@ func BuildValidationQuery(tmdbClient TMDBResolver, req indexer.SearchRequest, co
 		}
 	} else if contentType == "series" {
 		if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil && name != "" {
-			seasonNum, _ := strconv.Atoi(req.Season)
-			epNum, _ := strconv.Atoi(req.Episode)
+			seasonNum, seasonErr := strconv.Atoi(req.Season)
+			epNum, episodeErr := strconv.Atoi(req.Episode)
 			switch {
 			case req.Season != "" && req.Episode != "":
-				if seasonNum > 0 || epNum > 0 {
+				if seasonErr == nil && episodeErr == nil {
 					return fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
 				}
 				return fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)

@@ -88,6 +88,7 @@ type Session struct {
 
 	nzbDownloadInFlight bool
 	nzbDownloadDone     chan struct{}
+	nzbDownloadErr      error
 
 	segmentFetcher     loader.SegmentFetcher
 	providerHosts      []string
@@ -858,25 +859,35 @@ func (s *Session) GetOrDownloadNZBWithContext(ctx context.Context, manager *Mana
 			return nil, fmt.Errorf("session has no NZB and no deferred download info")
 		}
 		sessionCtx := s.ctx
-		if ctx == nil {
-			ctx = sessionCtx
-		}
-		if ctx == nil {
-			ctx = context.Background()
-		}
+		effectiveCtx, releaseEffectiveCtx := mergeCancellationContexts(ctx, sessionCtx)
 		if s.nzbDownloadInFlight {
 			done := s.nzbDownloadDone
 			s.mu.Unlock()
 			select {
 			case <-done:
+				releaseEffectiveCtx()
+				s.mu.Lock()
+				nzb := s.NZB
+				inFlightErr := s.nzbDownloadErr
+				s.mu.Unlock()
+				if nzb != nil {
+					return nzb, nil
+				}
+				if inFlightErr != nil {
+					return nil, inFlightErr
+				}
 				continue
-			case <-ctx.Done():
-				return nil, fmt.Errorf("failed to lazy download NZB: %w", ctx.Err())
+			case <-effectiveCtx.Done():
+				releaseEffectiveCtx()
+				return nil, fmt.Errorf("failed to lazy download NZB: %w", effectiveCtx.Err())
 			}
 		}
 
 		nzbURL := s.downloadURL
 		idx := s.indexer
+		contentIDs := s.ContentIDs
+		sessionID := s.ID
+		segmentFetcher := s.segmentFetcher
 		itemTitle := ""
 		indexerName := ""
 		if s.Release != nil {
@@ -888,24 +899,28 @@ func (s *Session) GetOrDownloadNZBWithContext(ctx context.Context, manager *Mana
 			sessionFileCtx = context.Background()
 		}
 		s.nzbDownloadInFlight = true
+		s.nzbDownloadErr = nil
 		done := make(chan struct{})
 		s.nzbDownloadDone = done
 		s.mu.Unlock()
 
-		downloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		downloadCtx, cancel := context.WithTimeout(effectiveCtx, 60*time.Second)
 		if err := downloadCtx.Err(); err != nil {
 			cancel()
+			releaseEffectiveCtx()
 			s.mu.Lock()
+			s.nzbDownloadErr = fmt.Errorf("failed to lazy download NZB: %w", err)
 			s.nzbDownloadInFlight = false
 			s.nzbDownloadDone = nil
 			close(done)
 			s.mu.Unlock()
-			return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
+			return nil, s.nzbDownloadErr
 		}
 
 		logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)
 		data, err := idx.DownloadNZB(downloadCtx, nzbURL)
 		cancel()
+		releaseEffectiveCtx()
 
 		var parsedNZB *nzb.NZB
 		var loaderFiles []*loader.File
@@ -927,7 +942,7 @@ func (s *Session) GetOrDownloadNZBWithContext(ctx context.Context, manager *Mana
 		}
 
 		if err == nil {
-			contentFiles := selectSessionContentFiles(parsedNZB, s.ContentIDs)
+			contentFiles := selectSessionContentFiles(parsedNZB, contentIDs)
 			if len(contentFiles) == 0 {
 				logger.Error("Lazy load: no content files in NZB",
 					"title", itemTitle,
@@ -941,37 +956,61 @@ func (s *Session) GetOrDownloadNZBWithContext(ctx context.Context, manager *Mana
 				usenetPool := manager.usenetPool
 				estimator := manager.estimator
 				manager.mu.RUnlock()
-				segmentFetcher := s.segmentFetcher
 				if segmentFetcher == nil {
 					segmentFetcher = usenetPool
 				}
-				loaderFiles = buildLoaderFiles(sessionFileCtx, s.ID, contentFiles, pools, segmentFetcher, estimator)
+				loaderFiles = buildLoaderFiles(sessionFileCtx, sessionID, contentFiles, pools, segmentFetcher, estimator)
+			}
+		}
+
+		finalErr := err
+		if finalErr != nil {
+			if !(strings.Contains(finalErr.Error(), "failed to parse lazy downloaded NZB") ||
+				strings.Contains(finalErr.Error(), "no content files found in lazy NZB") ||
+				strings.Contains(finalErr.Error(), "NZB download returned empty body")) {
+				finalErr = fmt.Errorf("failed to lazy download NZB: %w", finalErr)
 			}
 		}
 
 		s.mu.Lock()
-		if err == nil && sessionCtx != nil && sessionCtx.Err() != nil {
-			err = sessionCtx.Err()
+		if finalErr == nil && sessionCtx != nil && sessionCtx.Err() != nil {
+			finalErr = fmt.Errorf("failed to lazy download NZB: %w", sessionCtx.Err())
 		}
-		if err == nil && s.NZB == nil {
+		if finalErr == nil && s.NZB == nil {
 			s.NZB = parsedNZB
 			s.Files = loaderFiles
 			s.File = loaderFiles[0]
 			logger.Debug("session GetOrDownloadNZB created loader files", "id", s.ID, "files", len(loaderFiles))
 		}
 		nzb := s.NZB
+		s.nzbDownloadErr = finalErr
 		s.nzbDownloadInFlight = false
 		s.nzbDownloadDone = nil
 		close(done)
 		s.mu.Unlock()
 
-		if err != nil {
-			if strings.Contains(err.Error(), "failed to parse lazy downloaded NZB") || strings.Contains(err.Error(), "no content files found in lazy NZB") || strings.Contains(err.Error(), "NZB download returned empty body") {
-				return nil, err
-			}
-			return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
+		if finalErr != nil {
+			return nil, finalErr
 		}
 		return nzb, nil
+	}
+}
+
+func mergeCancellationContexts(callerCtx, sessionCtx context.Context) (context.Context, func()) {
+	switch {
+	case callerCtx == nil && sessionCtx == nil:
+		return context.Background(), func() {}
+	case callerCtx == nil:
+		return sessionCtx, func() {}
+	case sessionCtx == nil || callerCtx == sessionCtx:
+		return callerCtx, func() {}
+	default:
+		mergedCtx, cancel := context.WithCancel(callerCtx)
+		stopWatchingSession := context.AfterFunc(sessionCtx, cancel)
+		return mergedCtx, func() {
+			stopWatchingSession()
+			cancel()
+		}
 	}
 }
 
