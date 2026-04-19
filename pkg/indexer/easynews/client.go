@@ -388,7 +388,7 @@ func (c *Client) searchInternal(ctx context.Context, query, season, episode, sco
 	}
 
 	req.SetBasicAuth(c.username, c.password)
-	resp, err := c.downloadClient.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("easynews search request failed: %w", err)
 	}
@@ -461,7 +461,7 @@ func (c *Client) downloadNZBInternal(ctx context.Context, payload map[string]int
 	req.SetBasicAuth(c.username, c.password)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", env.IndexerGrabHeader())
-	resp, err := c.client.Do(req)
+	resp, err := c.downloadClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("easynews NZB download request failed: %w", err)
 	}

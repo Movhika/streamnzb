@@ -137,3 +137,9 @@ func TestGetMediaStreamAllowsPlausibleLargestDirectFallback(t *testing.T) {
 		t.Fatalf("expected plausible fallback name, got %q", name)
 	}
 }
+
+func TestPlausibleLargestDirectFallbackAllowsCommonReleasePunctuation(t *testing.T) {
+	if !isPlausibleLargestDirectFallbackName("Movie, Title '11 [1080p]") {
+		t.Fatal("expected common release punctuation to remain plausible")
+	}
+}

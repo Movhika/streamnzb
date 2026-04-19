@@ -21,6 +21,7 @@ function formatSize(bytes) {
 
 function formatAttemptResult(attempt) {
   if (attempt.preload) return 'Pending'
+  if (isShortPlayAttempt(attempt)) return 'Short play'
   return attempt.success ? 'OK' : 'Failed'
 }
 
@@ -44,6 +45,10 @@ function shortReason(reason) {
   if (value.includes('compressed')) return 'Compressed'
   if (value.includes('encrypted')) return 'Encrypted'
   return 'Error'
+}
+
+function isShortPlayAttempt(attempt) {
+  return !attempt?.preload && !attempt?.success && shortReason(attempt?.failure_reason) === 'Short play'
 }
 
 function attemptBadgeClass(attempt, reasonLabel) {
@@ -147,7 +152,8 @@ function matchesResult(attempt, result) {
   if (result === 'all') return true
   if (result === 'preload') return Boolean(attempt.preload)
   if (result === 'ok') return !attempt.preload && Boolean(attempt.success)
-  if (result === 'failed') return !attempt.preload && !attempt.success
+  if (result === 'failed') return !attempt.preload && !attempt.success && !isShortPlayAttempt(attempt)
+  if (result === 'short_play') return isShortPlayAttempt(attempt)
   return true
 }
 
@@ -233,7 +239,7 @@ function buildRequestGroups(attempts) {
       const oldest = attemptsSorted[attemptsSorted.length - 1]
       const active = attemptsSorted.find((a) => a.preload) || latest
       const okCount = attemptsSorted.filter((a) => !a.preload && a.success).length
-      const failedCount = attemptsSorted.filter((a) => !a.preload && !a.success).length
+      const failedCount = attemptsSorted.filter((a) => !a.preload && !a.success && !isShortPlayAttempt(a)).length
       const preloadCount = attemptsSorted.filter((a) => a.preload).length
 
       return {
@@ -353,6 +359,7 @@ function formatTimeframeLabel(value) {
 function formatResultFilterLabel(value) {
   if (value === 'ok') return 'OK'
   if (value === 'failed') return 'Failed'
+  if (value === 'short_play') return 'Short play'
   if (value === 'preload') return 'Pending'
   return 'All'
 }
@@ -419,7 +426,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
     requests: requestGroups.length,
     attempts: filteredAttempts.length,
     ok: filteredAttempts.filter((attempt) => !attempt.preload && attempt.success).length,
-    failed: filteredAttempts.filter((attempt) => !attempt.preload && !attempt.success).length,
+    failed: filteredAttempts.filter((attempt) => !attempt.preload && !attempt.success && !isShortPlayAttempt(attempt)).length,
     preload: filteredAttempts.filter((attempt) => attempt.preload).length,
   }), [filteredAttempts, requestGroups])
 
@@ -858,6 +865,7 @@ export function NZBHistoryPage({ refreshTrigger }) {
                       <option value="all">All</option>
                       <option value="ok">OK</option>
                       <option value="failed">Failed</option>
+                      <option value="short_play">Short play</option>
                       <option value="preload">Pending</option>
                     </select>
                   </div>

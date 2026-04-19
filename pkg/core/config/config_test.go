@@ -124,6 +124,48 @@ func TestDefaultSearchValidationSettingsMatchExpectedModes(t *testing.T) {
 	}
 }
 
+func TestDefaultSearchValidationSettingsBackfillExistingDefaults(t *testing.T) {
+	cfg := &Config{
+		MovieSearchQueries: []SearchQueryConfig{
+			{Name: "DefaultMovieText", SearchMode: "text"},
+			{Name: "DefaultMovieID", SearchMode: "id"},
+		},
+		SeriesSearchQueries: []SearchQueryConfig{
+			{Name: "DefaultTVText", SearchMode: "text"},
+			{Name: "DefaultTVID", SearchMode: "id"},
+		},
+	}
+
+	if !cfg.applyStreamModelUpgradeDefaults() {
+		t.Fatal("expected existing defaults to be backfilled")
+	}
+
+	if got := cfg.MovieSearchQueries[0].ValidationTitleLanguage; got != "off" {
+		t.Fatalf("DefaultMovieText validation title = %q, want off", got)
+	}
+	if cfg.MovieSearchQueries[0].EnableResultValidation == nil || *cfg.MovieSearchQueries[0].EnableResultValidation {
+		t.Fatal("expected DefaultMovieText validation disabled after backfill")
+	}
+	if cfg.MovieSearchQueries[1].EnableResultValidation == nil || !*cfg.MovieSearchQueries[1].EnableResultValidation {
+		t.Fatal("expected DefaultMovieID validation enabled after backfill")
+	}
+	if cfg.MovieSearchQueries[1].IncludeYearInValidation == nil || *cfg.MovieSearchQueries[1].IncludeYearInValidation {
+		t.Fatal("expected DefaultMovieID year validation off after backfill")
+	}
+	if got := cfg.SeriesSearchQueries[0].ValidationTitleLanguage; got != "off" {
+		t.Fatalf("DefaultTVText validation title = %q, want off", got)
+	}
+	if cfg.SeriesSearchQueries[0].EnableResultValidation == nil || *cfg.SeriesSearchQueries[0].EnableResultValidation {
+		t.Fatal("expected DefaultTVText validation disabled after backfill")
+	}
+	if cfg.SeriesSearchQueries[1].EnableResultValidation == nil || !*cfg.SeriesSearchQueries[1].EnableResultValidation {
+		t.Fatal("expected DefaultTVID validation enabled after backfill")
+	}
+	if cfg.SeriesSearchQueries[1].IncludeYearInValidation == nil || *cfg.SeriesSearchQueries[1].IncludeYearInValidation {
+		t.Fatal("expected DefaultTVID year validation off after backfill")
+	}
+}
+
 func TestIndexerConfigEffectiveTimeoutDefaults(t *testing.T) {
 	tests := []struct {
 		name string

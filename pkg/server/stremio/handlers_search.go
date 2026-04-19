@@ -446,16 +446,50 @@ func searchTitleLanguageForLog(language string) string {
 	return trimmed
 }
 
-func validationTitleLanguageForLog(language string) string {
+func validationTitleLanguageForLog(language string, titleValidationEnabled bool) string {
+	if !titleValidationEnabled {
+		return "off"
+	}
 	trimmed := strings.TrimSpace(language)
 	switch {
-	case strings.EqualFold(trimmed, "off"):
-		return "off"
-	case trimmed == "":
+	case strings.EqualFold(trimmed, "off"), trimmed == "":
 		return "original"
 	default:
 		return trimmed
 	}
+}
+
+func effectiveValidationTitleLanguage(contentType, scope, rawLanguage string, enableTitleValidation, enableYearValidation bool) string {
+	trimmed := strings.TrimSpace(rawLanguage)
+	if enableTitleValidation {
+		if strings.EqualFold(trimmed, "off") {
+			return ""
+		}
+		return trimmed
+	}
+	if contentType == "series" && config.SeriesSearchScopeRequiresValidation(scope) && !enableYearValidation {
+		return ""
+	}
+	return trimmed
+}
+
+func shouldEnableTitleValidation(contentType, scope, rawLanguage string, enableYearValidation bool) bool {
+	trimmed := strings.TrimSpace(rawLanguage)
+	if !strings.EqualFold(trimmed, "off") {
+		return true
+	}
+	return contentType == "series" && config.SeriesSearchScopeRequiresValidation(scope) && !enableYearValidation
+}
+
+func validationTitleLanguageForBuild(contentType, scope, rawLanguage string, enableTitleValidation, enableYearValidation bool) string {
+	trimmed := strings.TrimSpace(rawLanguage)
+	if !enableTitleValidation {
+		return ""
+	}
+	if strings.EqualFold(trimmed, "off") {
+		return "off"
+	}
+	return effectiveValidationTitleLanguage(contentType, scope, rawLanguage, enableTitleValidation, enableYearValidation)
 }
 
 func newAvailContext(result *availnzb.ReleasesResult, inputResults int) *AvailContext {
@@ -566,7 +600,7 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 			"validation_enabled", validationEnabledForLog,
 			"title_validation", titleValidationEnabledForLog,
 			"year_validation", yearValidationEnabledForLog,
-			"validation_title_language", validationTitleLanguageForLog(searchQuery.ValidationTitleLanguage),
+			"validation_title_language", validationTitleLanguageForLog(searchQuery.ValidationTitleLanguage, titleValidationEnabledForLog),
 			"extra_terms", searchQuery.ExtraSearchTerms,
 			"limit", effectiveLimit,
 		)
@@ -990,13 +1024,9 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 	req.SearchMode = "text"
 	req.Query = ""
 	if req.EnableResultValidation {
-		titleValidationLanguage := validationTitleLanguage
-		if strings.EqualFold(strings.TrimSpace(titleValidationLanguage), "off") {
-			titleValidationLanguage = ""
-		} else {
-			req.EnableTitleValidation = true
-		}
 		req.EnableYearValidation = includeYearInValidation
+		req.EnableTitleValidation = shouldEnableTitleValidation(contentType, scope, validationTitleLanguage, req.EnableYearValidation)
+		titleValidationLanguage := effectiveValidationTitleLanguage(contentType, scope, validationTitleLanguage, req.EnableTitleValidation, req.EnableYearValidation)
 		if req.EnableTitleValidation || req.EnableYearValidation {
 			if contentType == "movie" {
 				req.ValidationQuery = buildMovieValidationQueryFromMetadata(params.Metadata, titleValidationLanguage, includeYearInValidation)

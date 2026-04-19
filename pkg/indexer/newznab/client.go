@@ -403,6 +403,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 
 	useTVSearchParams := false
+	searchSeason, searchEpisode := "", ""
 	if isMovieSearch && (caps == nil || caps.Searching.MovieSearch) {
 		if !isTextMode && req.IMDbID != "" {
 			params.Set("t", "movie")
@@ -410,7 +411,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			params.Set("t", "search")
 		}
 	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
-		searchSeason, searchEpisode := config.SeriesSearchScopeSearchTarget(req.SeriesSearchScope, req.Season, req.Episode)
+		searchSeason, searchEpisode = config.SeriesSearchScopeSearchTarget(req.SeriesSearchScope, req.Season, req.Episode)
 		useTVSearchParams = config.SeriesSearchScopeUsesSeasonParams(req.SeriesSearchScope) && (searchSeason != "" || searchEpisode != "")
 		if isTextMode {
 			params.Set("t", "search")
@@ -451,7 +452,6 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 
 	if useTVSearchParams {
-		searchSeason, searchEpisode := config.SeriesSearchScopeSearchTarget(req.SeriesSearchScope, req.Season, req.Episode)
 		if searchSeason != "" {
 			params.Set("season", searchSeason)
 		}

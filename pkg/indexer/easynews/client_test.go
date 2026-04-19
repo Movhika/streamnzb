@@ -133,6 +133,22 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			want:     "The Last of Us S01E02",
 		},
 		{
+			name:     "season param appends season only",
+			query:    "The Last of Us",
+			season:   "1",
+			scope:    config.SeriesSearchScopeSeasonParam,
+			category: "5000",
+			want:     "The Last of Us S01",
+		},
+		{
+			name:     "season query keeps prepared season query unchanged",
+			query:    "The Last of Us S01",
+			season:   "1",
+			scope:    config.SeriesSearchScopeSeasonQuery,
+			category: "5000",
+			want:     "The Last of Us S01",
+		},
+		{
 			name:     "movie query unchanged",
 			query:    "The Age of Adaline 2015",
 			season:   "1",

@@ -80,6 +80,10 @@ function seriesScopeRequiresValidation(scope) {
   return scope === 'season_param' || scope === 'season_query' || scope === 'none'
 }
 
+function shouldForceValidationTitle(scope, titleLanguage, includeYearInValidation) {
+  return seriesScopeRequiresValidation(scope) && normalizeValidationTitleLanguage(titleLanguage) === 'off' && includeYearInValidation !== true
+}
+
 function normalizeName(value) {
   return (value || '').trim().toLowerCase()
 }
@@ -227,7 +231,7 @@ function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors 
           series_search_scope: nextScope,
           use_season_episode_params: nextScope === 'episode_param' || nextScope === 'season_param',
           enable_result_validation: nextRequiresValidation ? true : current.enable_result_validation,
-          validation_title_language: nextRequiresValidation && normalizeValidationTitleLanguage(current.validation_title_language) === 'off'
+          validation_title_language: shouldForceValidationTitle(nextScope, current.validation_title_language, current.include_year_in_validation)
             ? ''
             : normalizeValidationTitleLanguage(current.validation_title_language),
         }
@@ -250,7 +254,7 @@ function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors 
         return {
           ...current,
           enable_result_validation: value === true,
-          validation_title_language: value === true && normalizeValidationTitleLanguage(current.validation_title_language) === 'off'
+          validation_title_language: value === true && shouldForceValidationTitle(currentScope, current.validation_title_language, current.include_year_in_validation)
             ? ''
             : normalizeValidationTitleLanguage(current.validation_title_language),
         }
@@ -568,6 +572,16 @@ function QueryDialog({ open, onOpenChange, kind, initialValue, existingNames = [
 
   const handleSave = async () => {
     const next = normalizeDraft(kind, draft)
+    if (kind === 'series') {
+      next.series_search_scope = normalizeSeriesSearchScope(next.series_search_scope, next.use_season_episode_params !== false)
+      next.use_season_episode_params = next.series_search_scope === 'episode_param' || next.series_search_scope === 'season_param'
+      if (seriesScopeRequiresValidation(next.series_search_scope)) {
+        next.enable_result_validation = true
+        if (shouldForceValidationTitle(next.series_search_scope, next.validation_title_language, next.include_year_in_validation)) {
+          next.validation_title_language = ''
+        }
+      }
+    }
     const nextFieldErrors = {}
     if (!next.name) nextFieldErrors.name = 'Name is required.'
     if (duplicateName) nextFieldErrors.name = 'Name already exists.'
@@ -596,13 +610,6 @@ function QueryDialog({ open, onOpenChange, kind, initialValue, existingNames = [
     if (next.search_mode !== 'text') {
       next.search_title_language = ''
       next.include_year_in_text_search = false
-    }
-    if (kind === 'series') {
-      next.series_search_scope = normalizeSeriesSearchScope(next.series_search_scope, next.use_season_episode_params !== false)
-      next.use_season_episode_params = next.series_search_scope === 'episode_param' || next.series_search_scope === 'season_param'
-      if (seriesScopeRequiresValidation(next.series_search_scope)) {
-        next.enable_result_validation = true
-      }
     }
     next.search_result_limit = limit
     setSaving(true)

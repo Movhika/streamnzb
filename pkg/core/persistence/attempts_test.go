@@ -211,6 +211,9 @@ func TestResolvePendingAttemptFinalizesWithoutInsertingFallbackRow(t *testing.T)
 	if len(list) != 1 {
 		t.Fatalf("expected second finalize to remain a no-op, got %d rows", len(list))
 	}
+	if got := list[0].FailureReason; got != "Playback probe ended before the good threshold was reached." {
+		t.Fatalf("expected second finalize to preserve failure reason, got %q", got)
+	}
 }
 
 func TestDeleteAttemptsBeforeRemovesOlderRows(t *testing.T) {

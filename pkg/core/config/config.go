@@ -589,12 +589,26 @@ func (c *Config) ensureDefaultMigrationSearchQueries() bool {
 		IncludeYearInValidation: ptrBool(false),
 	}) {
 		changed = true
+	} else if c.backfillDefaultSearchQueryValidation("movie", SearchQueryConfig{
+		Name:                    "DefaultMovieText",
+		EnableResultValidation:  ptrBool(false),
+		ValidationTitleLanguage: "off",
+		IncludeYearInValidation: ptrBool(false),
+	}) {
+		changed = true
 	}
 	if c.ensureMovieSearchQuery(SearchQueryConfig{
 		Name:                    "DefaultMovieID",
 		SearchMode:              "id",
 		SearchResultLimit:       0,
 		MovieCategories:         "2000",
+		EnableResultValidation:  ptrBool(true),
+		ValidationTitleLanguage: "",
+		IncludeYearInValidation: ptrBool(false),
+	}) {
+		changed = true
+	} else if c.backfillDefaultSearchQueryValidation("movie", SearchQueryConfig{
+		Name:                    "DefaultMovieID",
 		EnableResultValidation:  ptrBool(true),
 		ValidationTitleLanguage: "",
 		IncludeYearInValidation: ptrBool(false),
@@ -613,6 +627,13 @@ func (c *Config) ensureDefaultMigrationSearchQueries() bool {
 		IncludeYearInValidation: ptrBool(false),
 	}) {
 		changed = true
+	} else if c.backfillDefaultSearchQueryValidation("series", SearchQueryConfig{
+		Name:                    "DefaultTVText",
+		EnableResultValidation:  ptrBool(false),
+		ValidationTitleLanguage: "off",
+		IncludeYearInValidation: ptrBool(false),
+	}) {
+		changed = true
 	}
 	if c.ensureSeriesSearchQuery(SearchQueryConfig{
 		Name:                    "DefaultTVID",
@@ -626,8 +647,61 @@ func (c *Config) ensureDefaultMigrationSearchQueries() bool {
 		IncludeYearInValidation: ptrBool(false),
 	}) {
 		changed = true
+	} else if c.backfillDefaultSearchQueryValidation("series", SearchQueryConfig{
+		Name:                    "DefaultTVID",
+		EnableResultValidation:  ptrBool(true),
+		ValidationTitleLanguage: "",
+		IncludeYearInValidation: ptrBool(false),
+	}) {
+		changed = true
 	}
 	return changed
+}
+
+func (c *Config) backfillDefaultSearchQueryValidation(kind string, defaults SearchQueryConfig) bool {
+	legacyValidationUnset := func(query *SearchQueryConfig) bool {
+		return query != nil &&
+			query.EnableResultValidation == nil &&
+			query.IncludeYearInValidation == nil &&
+			strings.TrimSpace(query.ValidationTitleLanguage) == ""
+	}
+
+	apply := func(query *SearchQueryConfig) bool {
+		if query == nil {
+			return false
+		}
+		changed := false
+		legacyUnset := legacyValidationUnset(query)
+		if query.EnableResultValidation == nil && defaults.EnableResultValidation != nil {
+			query.EnableResultValidation = ptrBool(*defaults.EnableResultValidation)
+			changed = true
+		}
+		if query.IncludeYearInValidation == nil && defaults.IncludeYearInValidation != nil {
+			query.IncludeYearInValidation = ptrBool(*defaults.IncludeYearInValidation)
+			changed = true
+		}
+		if legacyUnset && strings.TrimSpace(defaults.ValidationTitleLanguage) != "" {
+			query.ValidationTitleLanguage = defaults.ValidationTitleLanguage
+			changed = true
+		}
+		return changed
+	}
+
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "movie":
+		for i := range c.MovieSearchQueries {
+			if strings.EqualFold(strings.TrimSpace(c.MovieSearchQueries[i].Name), strings.TrimSpace(defaults.Name)) {
+				return apply(&c.MovieSearchQueries[i])
+			}
+		}
+	case "series":
+		for i := range c.SeriesSearchQueries {
+			if strings.EqualFold(strings.TrimSpace(c.SeriesSearchQueries[i].Name), strings.TrimSpace(defaults.Name)) {
+				return apply(&c.SeriesSearchQueries[i])
+			}
+		}
+	}
+	return false
 }
 
 func (c *Config) ensureMovieSearchQuery(query SearchQueryConfig) bool {

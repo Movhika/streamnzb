@@ -486,21 +486,35 @@ func TestGetOrDownloadNZBWithContextDeduplicatesConcurrentDownloads(t *testing.T
 	}
 
 	errCh := make(chan error, 2)
+	startGate := make(chan struct{})
+	ready := make(chan struct{}, 2)
 	go func() {
+		ready <- struct{}{}
+		<-startGate
 		_, err := s.GetOrDownloadNZBWithContext(context.Background(), m)
 		errCh <- err
 	}()
+	go func() {
+		ready <- struct{}{}
+		<-startGate
+		_, err := s.GetOrDownloadNZBWithContext(context.Background(), m)
+		errCh <- err
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ready:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for goroutines to be ready")
+		}
+	}
+	close(startGate)
 
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for first NZB download to start")
+		t.Fatal("timed out waiting for NZB download to start")
 	}
-
-	go func() {
-		_, err := s.GetOrDownloadNZBWithContext(context.Background(), m)
-		errCh <- err
-	}()
 
 	close(wait)
 
@@ -520,6 +534,50 @@ func TestGetOrDownloadNZBWithContextDeduplicatesConcurrentDownloads(t *testing.T
 		t.Fatal("expected session NZB to be populated")
 	}
 	s.Close()
+}
+
+func TestGetOrDownloadNZBWithContextDoesNotRepopulateClosedSession(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	data := marshalTestNZB(t, &nzb.NZB{Files: []nzb.File{{
+		Subject:  "Movie.2024.1080p.mkv",
+		Segments: []nzb.Segment{{ID: "<a>", Bytes: 60}},
+	}}})
+	wait := make(chan struct{})
+	started := make(chan struct{}, 1)
+	idx := &fakeIndexer{data: data, wait: wait, started: started}
+	s, err := m.CreateDeferredSession("sess-close-during-download", "https://example.invalid/get?nzb=1", nil, idx, nil, "movie", "tt123", "", "")
+	if err != nil {
+		t.Fatalf("CreateDeferredSession returned error: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := s.GetOrDownloadNZBWithContext(context.Background(), m)
+		errCh <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for NZB download to start")
+	}
+
+	s.Close()
+	close(wait)
+
+	if err := <-errCh; err == nil {
+		t.Fatal("expected lazy NZB download to stop for closed session")
+	} else if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if s.NZB != nil || s.Files != nil || s.File != nil {
+		t.Fatal("expected closed session to stay empty after lazy download finishes")
+	}
 }
 
 func TestAcquirePlaybackStreamReusesSameKey(t *testing.T) {

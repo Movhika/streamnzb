@@ -213,6 +213,7 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
   const controlWideClass = `${controlBaseClass} min-[360px]:w-[14rem]`
   const controlNameClass = `${controlBaseClass} flex items-center gap-2 min-[360px]:w-[16.5rem]`
   const controlNarrowClass = `${controlBaseClass} min-[360px]:w-[9rem]`
+  const controlSwitchClass = `${controlBaseClass} flex min-h-9 items-center`
 
   const handleSave = async () => {
     const nextFieldErrors = {}
@@ -390,7 +391,7 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
                 <div className={labelClass}>
                   <Label className="text-sm font-medium">SSL</Label>
                 </div>
-                <div className="flex min-h-9 items-center min-[360px]:ml-auto min-[360px]:shrink-0">
+                <div className={controlSwitchClass}>
                   <Switch checked={draft.use_ssl} onCheckedChange={(checked) => update('use_ssl', checked === true)} />
                 </div>
               </div>

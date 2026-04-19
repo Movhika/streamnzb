@@ -43,7 +43,7 @@ func isPlausibleLargestDirectFallbackName(name string) bool {
 		return true
 	}
 
-	switch strings.ToLower(filepath.Ext(lower)) {
+	switch strings.ToLower(filepath.Ext(trimmed)) {
 	case ".m2ts", ".mts", ".ts", ".tp":
 		return true
 	}
@@ -65,7 +65,7 @@ func isPlausibleLargestDirectFallbackName(name string) bool {
 			alphaNum++
 		case unicode.IsDigit(r):
 			alphaNum++
-		case strings.ContainsRune(" ._[]()-", r):
+		case strings.ContainsRune(" ._[]()-,'&+", r):
 			continue
 		default:
 			return false

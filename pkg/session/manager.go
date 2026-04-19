@@ -911,7 +911,7 @@ func (s *Session) GetOrDownloadNZBWithContext(ctx context.Context, manager *Mana
 		var loaderFiles []*loader.File
 		if err == nil {
 			if len(data) == 0 {
-				logger.Debug("NZB download returned empty body", "indexer", indexerName, "title", itemTitle, "url", nzbURL)
+				logger.Debug("NZB download returned empty body", "indexer", indexerName, "title", itemTitle)
 				err = fmt.Errorf("NZB download returned empty body (indexer: %s)", indexerName)
 			} else {
 				parsedNZB, err = nzb.Parse(bytes.NewReader(data))
@@ -920,7 +920,7 @@ func (s *Session) GetOrDownloadNZBWithContext(ctx context.Context, manager *Mana
 					if len(snippet) > 200 {
 						snippet = snippet[:200] + "..."
 					}
-					logger.Debug("Failed to parse NZB", "indexer", indexerName, "title", itemTitle, "url", nzbURL, "len", len(data), "snippet", snippet, "err", err)
+					logger.Debug("Failed to parse NZB", "indexer", indexerName, "title", itemTitle, "len", len(data), "snippet", snippet, "err", err)
 					err = fmt.Errorf("failed to parse lazy downloaded NZB: %w", err)
 				}
 			}
@@ -950,6 +950,9 @@ func (s *Session) GetOrDownloadNZBWithContext(ctx context.Context, manager *Mana
 		}
 
 		s.mu.Lock()
+		if err == nil && sessionCtx != nil && sessionCtx.Err() != nil {
+			err = sessionCtx.Err()
+		}
 		if err == nil && s.NZB == nil {
 			s.NZB = parsedNZB
 			s.Files = loaderFiles
