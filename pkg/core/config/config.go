@@ -181,6 +181,17 @@ func NormalizeSeriesSearchScope(scope string) string {
 	return SeriesSearchScopeSeasonEpisode
 }
 
+func normalizeSeriesSearchScopeFromLegacy(scope string, useSeasonEpisodeParams *bool) string {
+	normalizedScope := strings.ToLower(strings.TrimSpace(scope))
+	if normalizedScope != "" {
+		return NormalizeSeriesSearchScope(normalizedScope)
+	}
+	if useSeasonEpisodeParams != nil {
+		return SeriesSearchScopeSeasonEpisode
+	}
+	return normalizedScope
+}
+
 func SeriesSearchScopeUsesSeasonParams(scope, searchMode string) bool {
 	if !strings.EqualFold(strings.TrimSpace(searchMode), "id") {
 		return false
@@ -656,7 +667,7 @@ func backfillLegacySearchQuerySettingsForQuery(query *SearchQueryConfig, isSerie
 		changed = true
 	}
 	if isSeries {
-		normalizedScope := NormalizeSeriesSearchScope(query.SeriesSearchScope)
+		normalizedScope := normalizeSeriesSearchScopeFromLegacy(query.SeriesSearchScope, query.UseSeasonEpisodeParams)
 		if query.SeriesSearchScope != normalizedScope {
 			query.SeriesSearchScope = normalizedScope
 			changed = true
@@ -877,9 +888,7 @@ func (c *Config) MigrateLegacyIndexers() bool {
 			changed = true
 		}
 		if strings.EqualFold(strings.TrimSpace(c.Indexers[i].Type), "easynews") {
-			// Older local configs often carried the generic 5s indexer default for Easynews.
-			// Treat that as legacy and bump it to the new Easynews-specific 15s default.
-			if c.Indexers[i].TimeoutSeconds <= 0 || c.Indexers[i].TimeoutSeconds == DefaultInternalIndexerTimeoutSeconds {
+			if c.Indexers[i].TimeoutSeconds <= 0 {
 				c.Indexers[i].TimeoutSeconds = DefaultEasynewsIndexerTimeoutSeconds
 				changed = true
 			}

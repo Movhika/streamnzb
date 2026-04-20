@@ -26,6 +26,13 @@ function normalizeQueryYearSetting(searchMode, includeYear, legacyIncludeYearInT
   return String(searchMode || '').trim().toLowerCase() !== 'id'
 }
 
+function normalizeSeriesScopeFromLegacy(scope, legacyUseSeasonEpisodeParams) {
+  const normalizedScope = String(scope || '').trim().toLowerCase()
+  if (normalizedScope) return normalizedScope
+  if (legacyUseSeasonEpisodeParams != null) return 'season_episode'
+  return ''
+}
+
 function Settings({
   initialConfig,
   sendCommand,
@@ -136,7 +143,7 @@ function Settings({
           search_result_limit: Number(query.search_result_limit || 0),
           search_title_language: query.search_title_language || '',
           include_year: normalizeQueryYearSetting(query.search_mode, query.include_year, query.include_year_in_text_search),
-          series_search_scope: query.series_search_scope || '',
+          series_search_scope: normalizeSeriesScopeFromLegacy(query.series_search_scope, query.use_season_episode_params),
         })) || []
       }
       reset({

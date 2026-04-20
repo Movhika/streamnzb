@@ -908,13 +908,14 @@ func (s *Session) GetOrDownloadNZBWithContext(ctx context.Context, manager *Mana
 		if err := downloadCtx.Err(); err != nil {
 			cancel()
 			releaseEffectiveCtx()
+			preflightErr := fmt.Errorf("failed to lazy download NZB: %w", err)
 			s.mu.Lock()
-			s.nzbDownloadErr = fmt.Errorf("failed to lazy download NZB: %w", err)
+			s.nzbDownloadErr = preflightErr
 			s.nzbDownloadInFlight = false
 			s.nzbDownloadDone = nil
 			close(done)
 			s.mu.Unlock()
-			return nil, s.nzbDownloadErr
+			return nil, preflightErr
 		}
 
 		logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)

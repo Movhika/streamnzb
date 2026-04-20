@@ -224,6 +224,13 @@ func ValidateSearchResultsWithStats(releases []*release.Release, contentType, va
 		}
 		stats.RawResults++
 		parsed := parser.ParseReleaseTitle(rel.Title)
+		if parsed == nil {
+			stats.DroppedTitle++
+			logger.Trace("ValidateSearchResults dropped: unparsed_title",
+				"release", rel.Title,
+			)
+			continue
+		}
 
 		if contentType == "movie" {
 			if stats.TitleValidationApplied && !normalizedTitleMatches(expectTitle, parsed.Title) {

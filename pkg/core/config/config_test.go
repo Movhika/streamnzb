@@ -110,7 +110,7 @@ func TestBackfillLegacySearchQuerySettings(t *testing.T) {
 			{Name: "DefaultMovieID", SearchMode: "id", LegacyIncludeYearInTextSearch: ptrBool(true)},
 		},
 		SeriesSearchQueries: []SearchQueryConfig{
-			{Name: "DefaultTVText", SearchMode: "text"},
+			{Name: "DefaultTVText", SearchMode: "text", UseSeasonEpisodeParams: ptrBool(false)},
 			{Name: "DefaultTVID", SearchMode: "id", LegacyIncludeYearInTextSearch: ptrBool(false)},
 		},
 	}
@@ -127,6 +127,9 @@ func TestBackfillLegacySearchQuerySettings(t *testing.T) {
 	}
 	if cfg.SeriesSearchQueries[0].IncludeYear == nil || !*cfg.SeriesSearchQueries[0].IncludeYear {
 		t.Fatal("expected DefaultTVText year enabled after backfill")
+	}
+	if cfg.SeriesSearchQueries[0].SeriesSearchScope != SeriesSearchScopeSeasonEpisode {
+		t.Fatalf("expected DefaultTVText scope %q after legacy backfill, got %q", SeriesSearchScopeSeasonEpisode, cfg.SeriesSearchQueries[0].SeriesSearchScope)
 	}
 	if cfg.SeriesSearchQueries[1].IncludeYear == nil || *cfg.SeriesSearchQueries[1].IncludeYear {
 		t.Fatal("expected DefaultTVID year disabled after backfill")
@@ -185,18 +188,18 @@ func TestMigrateLegacyIndexersBackfillsEasynewsTimeout(t *testing.T) {
 	}
 }
 
-func TestMigrateLegacyIndexersPromotesLegacyEasynewsDefaultTimeout(t *testing.T) {
+func TestMigrateLegacyIndexersKeepsExplicitEasynewsTimeout(t *testing.T) {
 	cfg := &Config{
 		Indexers: []IndexerConfig{
-			{Name: "Easynews", Type: "easynews", TimeoutSeconds: DefaultInternalIndexerTimeoutSeconds},
+			{Name: "Easynews", Type: "easynews", TimeoutSeconds: DefaultInternalIndexerTimeoutSeconds, Enabled: ptrBool(true)},
 		},
 	}
 
-	if !cfg.MigrateLegacyIndexers() {
-		t.Fatalf("expected legacy Easynews timeout to be migrated")
+	if cfg.MigrateLegacyIndexers() {
+		t.Fatalf("did not expect explicit Easynews timeout to be migrated")
 	}
-	if cfg.Indexers[0].TimeoutSeconds != DefaultEasynewsIndexerTimeoutSeconds {
-		t.Fatalf("Easynews timeout = %d, want %d", cfg.Indexers[0].TimeoutSeconds, DefaultEasynewsIndexerTimeoutSeconds)
+	if cfg.Indexers[0].TimeoutSeconds != DefaultInternalIndexerTimeoutSeconds {
+		t.Fatalf("Easynews timeout = %d, want %d", cfg.Indexers[0].TimeoutSeconds, DefaultInternalIndexerTimeoutSeconds)
 	}
 }
 
