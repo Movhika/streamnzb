@@ -619,6 +619,17 @@ func hasResolvedIdentifiers(req indexer.SearchRequest) bool {
 	return strings.TrimSpace(req.IMDbID) != "" || strings.TrimSpace(req.TMDBID) != "" || strings.TrimSpace(req.TVDBID) != ""
 }
 
+func hasUsableIDSearchIdentifier(req indexer.SearchRequest, contentType string) bool {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "movie":
+		return strings.TrimSpace(req.IMDbID) != ""
+	case "series":
+		return strings.TrimSpace(req.TVDBID) != ""
+	default:
+		return hasResolvedIdentifiers(req)
+	}
+}
+
 func hasPreparedTextQueries(req indexer.SearchRequest) bool {
 	return strings.TrimSpace(req.Query) != "" || strings.TrimSpace(req.ValidationQuery) != ""
 }

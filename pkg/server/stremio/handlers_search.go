@@ -96,7 +96,7 @@ func hasUsableResolvedMetadata(params *SearchParams, contentType string) bool {
 	if params == nil {
 		return false
 	}
-	if hasResolvedIdentifiers(params.Req) {
+	if hasUsableIDSearchIdentifier(params.Req, contentType) {
 		return true
 	}
 	return strings.TrimSpace(metadataDisplayTitle(params.Metadata, contentType)) != ""
@@ -543,7 +543,7 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 		applyStreamIndexerSelection(&profileParams.Req, stream)
 		profileParams.Req.DisableResultFiltering = stream == nil || strings.TrimSpace(stream.FilterSortingMode) == "" || strings.EqualFold(strings.TrimSpace(stream.FilterSortingMode), "none") || streamUsesAIOStreamsProfile(stream)
 		searchMode := strings.ToLower(strings.TrimSpace(searchQuery.SearchMode))
-		if searchMode == "id" && !hasResolvedIdentifiers(profileParams.Req) {
+		if searchMode == "id" && !hasUsableIDSearchIdentifier(profileParams.Req, contentType) {
 			logger.Debug("Skipping search request without resolved metadata identifiers",
 				"stream", streamLabel,
 				"request", searchQuery.Name,
