@@ -376,6 +376,45 @@ func TestBuildSearchParamsFromBaseAlwaysBuildsValidationInputs(t *testing.T) {
 	}
 }
 
+func TestBuildSearchParamsFromBaseSeriesFallbackUsesNormalizedMetadataQueries(t *testing.T) {
+	srv := &Server{config: &config.Config{}}
+	base := &SearchParams{
+		ContentType: "series",
+		ID:          "tmdb:241609",
+		Req: indexer.SearchRequest{
+			TMDBID: "241609",
+			Cat:    "5000",
+			Limit:  1000,
+		},
+		Metadata: &resolvedSearchMetadata{
+			TVDetails: &tmdb.TVDetails{
+				Name:             "Your Friends & Neighbors",
+				OriginalName:     "Your Friends & Neighbors",
+				OriginalLanguage: "en",
+				FirstAirDate:     "2025-01-01",
+			},
+		},
+		MovieTitleQueries:  make(map[string][]string),
+		SeriesTitleQueries: make(map[string][]string),
+	}
+
+	params, err := srv.buildSearchParamsFromBase(base, &config.SearchQueryConfig{
+		SearchMode:          "text",
+		SearchTitleLanguage: "original",
+		IncludeYear:         boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
+	}
+
+	if params.Req.Query != "Your Friends Neighbors" {
+		t.Fatalf("expected normalized fallback series query, got %q", params.Req.Query)
+	}
+	if params.Req.ValidationQuery != "Your Friends Neighbors" {
+		t.Fatalf("expected normalized validation query, got %q", params.Req.ValidationQuery)
+	}
+}
+
 func TestRunConfiguredSearchRequestsKeepsMetadataValidationQueryForTextSearch(t *testing.T) {
 	rec := &recordingIndexer{}
 	srv := &Server{

@@ -1052,7 +1052,7 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 				}
 			}
 		} else {
-			queries = buildSeriesQueriesWithOptions(metadataDisplayTitle(params.Metadata, contentType), metadataDisplayYear(params.Metadata, contentType), includeYear)
+			queries = buildSeriesQueriesFromMetadata(params.Metadata, searchTitleLanguage, includeYear, "", "", config.SeriesSearchScopeNone)
 		}
 		if len(queries) > 0 {
 			params.PreparedQueries = append([]string(nil), queries...)
