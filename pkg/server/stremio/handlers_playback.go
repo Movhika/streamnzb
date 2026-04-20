@@ -622,9 +622,9 @@ func hasResolvedIdentifiers(req indexer.SearchRequest) bool {
 func hasUsableIDSearchIdentifier(req indexer.SearchRequest, contentType string) bool {
 	switch strings.ToLower(strings.TrimSpace(contentType)) {
 	case "movie":
-		return strings.TrimSpace(req.IMDbID) != ""
+		return strings.TrimSpace(req.IMDbID) != "" || strings.TrimSpace(req.TMDBID) != ""
 	case "series":
-		return strings.TrimSpace(req.TVDBID) != ""
+		return strings.TrimSpace(req.TVDBID) != "" || strings.TrimSpace(req.TMDBID) != "" || strings.TrimSpace(req.IMDbID) != ""
 	default:
 		return hasResolvedIdentifiers(req)
 	}

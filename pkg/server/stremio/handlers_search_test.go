@@ -485,54 +485,6 @@ func TestRunConfiguredSearchRequestsKeepsMetadataValidationQueryForTextSearch(t 
 	}
 }
 
-func TestRunConfiguredSearchRequestsSkipsSeriesIDSearchWithoutTVDBID(t *testing.T) {
-	rec := &recordingIndexer{}
-	srv := &Server{
-		config: &config.Config{
-			SeriesSearchQueries: []config.SearchQueryConfig{
-				{
-					Name:       "DefaultTVID",
-					SearchMode: "id",
-				},
-			},
-		},
-		indexer: rec,
-	}
-
-	params := &SearchParams{
-		ContentType: "series",
-		ID:          "tt1190634:1:1",
-		Req: indexer.SearchRequest{
-			IMDbID:  "tt1190634",
-			Season:  "1",
-			Episode: "1",
-			Cat:     "5000",
-			Limit:   1000,
-		},
-		MovieTitleQueries:  make(map[string][]string),
-		SeriesTitleQueries: make(map[string][]string),
-		ContentIDs: &session.AvailReportMeta{
-			ImdbID:  "tt1190634",
-			Season:  1,
-			Episode: 1,
-		},
-	}
-
-	releases, executed, err := srv.runConfiguredSearchRequests("series", "tt1190634:1:1", "default", nil, []string{"DefaultTVID"}, params)
-	if err != nil {
-		t.Fatalf("runConfiguredSearchRequests() error = %v", err)
-	}
-	if executed != 0 {
-		t.Fatalf("executedRequests = %d, want 0", executed)
-	}
-	if len(releases) != 0 {
-		t.Fatalf("expected no releases, got %d", len(releases))
-	}
-	if rec.lastReq.SearchMode != "" {
-		t.Fatalf("expected indexer search not to run, got last request %#v", rec.lastReq)
-	}
-}
-
 func TestHasResolvedIdentifiers(t *testing.T) {
 	if hasResolvedIdentifiers(indexer.SearchRequest{}) {
 		t.Fatal("expected empty request to report no resolved identifiers")
@@ -549,14 +501,17 @@ func TestHasResolvedIdentifiers(t *testing.T) {
 }
 
 func TestHasUsableIDSearchIdentifier(t *testing.T) {
-	if hasUsableIDSearchIdentifier(indexer.SearchRequest{TMDBID: "123"}, "movie") {
-		t.Fatal("expected movie ID search to require IMDb ID")
+	if !hasUsableIDSearchIdentifier(indexer.SearchRequest{TMDBID: "123"}, "movie") {
+		t.Fatal("expected movie ID search to accept TMDB ID")
 	}
 	if !hasUsableIDSearchIdentifier(indexer.SearchRequest{IMDbID: "tt1234567"}, "movie") {
 		t.Fatal("expected movie ID search to accept IMDb ID")
 	}
-	if hasUsableIDSearchIdentifier(indexer.SearchRequest{IMDbID: "tt1234567"}, "series") {
-		t.Fatal("expected series ID search not to accept IMDb ID alone")
+	if !hasUsableIDSearchIdentifier(indexer.SearchRequest{IMDbID: "tt1234567"}, "series") {
+		t.Fatal("expected series ID search to accept IMDb ID")
+	}
+	if !hasUsableIDSearchIdentifier(indexer.SearchRequest{TMDBID: "123"}, "series") {
+		t.Fatal("expected series ID search to accept TMDB ID")
 	}
 	if !hasUsableIDSearchIdentifier(indexer.SearchRequest{TVDBID: "456"}, "series") {
 		t.Fatal("expected series ID search to accept TVDB ID")
@@ -582,8 +537,8 @@ func TestHasUsableResolvedMetadata(t *testing.T) {
 	if hasUsableResolvedMetadata(&SearchParams{}, "series") {
 		t.Fatal("expected empty params not to have usable resolved metadata")
 	}
-	if hasUsableResolvedMetadata(&SearchParams{Req: indexer.SearchRequest{IMDbID: "tt1234567"}}, "series") {
-		t.Fatal("expected IMDb ID alone not to count as usable series metadata")
+	if !hasUsableResolvedMetadata(&SearchParams{Req: indexer.SearchRequest{IMDbID: "tt1234567"}}, "series") {
+		t.Fatal("expected IMDb ID to count as usable series metadata")
 	}
 	if !hasUsableResolvedMetadata(&SearchParams{
 		Metadata: &resolvedSearchMetadata{

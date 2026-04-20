@@ -404,6 +404,56 @@ func (c *Client) checkNewznabError(bodyBytes []byte) error {
 	return nil
 }
 
+func emptySearchResponse() *indexer.SearchResponse {
+	resp := &indexer.SearchResponse{
+		XMLName: xml.Name{Local: "rss"},
+		Channel: indexer.Channel{Items: []indexer.Item{}},
+	}
+	indexer.NormalizeSearchResponse(resp)
+	return resp
+}
+
+func normalizeIMDbID(id string) string {
+	return strings.TrimPrefix(strings.TrimSpace(id), "tt")
+}
+
+func supportsMovieIDParam(caps *indexer.Caps, param string) bool {
+	if caps == nil || len(caps.Searching.MovieSearchSupportedParams) == 0 {
+		return param == "imdbid"
+	}
+	return caps.Searching.MovieSearchSupportedParams[param]
+}
+
+func supportsTVIDParam(caps *indexer.Caps, param string) bool {
+	if caps == nil || len(caps.Searching.TVSearchSupportedParams) == 0 {
+		return param == "tvdbid"
+	}
+	return caps.Searching.TVSearchSupportedParams[param]
+}
+
+func selectMovieIDSearchParam(caps *indexer.Caps, req indexer.SearchRequest) (string, string) {
+	if imdbID := normalizeIMDbID(req.IMDbID); imdbID != "" && supportsMovieIDParam(caps, "imdbid") {
+		return "imdbid", imdbID
+	}
+	if tmdbID := strings.TrimSpace(req.TMDBID); tmdbID != "" && supportsMovieIDParam(caps, "tmdbid") {
+		return "tmdbid", tmdbID
+	}
+	return "", ""
+}
+
+func selectTVIDSearchParam(caps *indexer.Caps, req indexer.SearchRequest) (string, string) {
+	if tvdbID := strings.TrimSpace(req.TVDBID); tvdbID != "" && supportsTVIDParam(caps, "tvdbid") {
+		return "tvdbid", tvdbID
+	}
+	if tmdbID := strings.TrimSpace(req.TMDBID); tmdbID != "" && supportsTVIDParam(caps, "tmdbid") {
+		return "tmdbid", tmdbID
+	}
+	if imdbID := normalizeIMDbID(req.IMDbID); imdbID != "" && supportsTVIDParam(caps, "imdbid") {
+		return "imdbid", imdbID
+	}
+	return "", ""
+}
+
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
 	if err := c.checkAPILimit(); err != nil {
 		return nil, err
@@ -449,30 +499,70 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 
 	useTVSearchParams := false
 	searchSeason, searchEpisode := "", ""
-	if isMovieSearch && (caps == nil || caps.Searching.MovieSearch) {
-		if !isTextMode && req.IMDbID != "" {
-			params.Set("t", "movie")
-		} else {
+	idParamName, idParamValue := "", ""
+	if isMovieSearch {
+		if isTextMode {
 			params.Set("t", "search")
+		} else {
+			if caps != nil && !caps.Searching.MovieSearch {
+				logger.Debug("Indexer skipped for request",
+					"stream", req.StreamLabel,
+					"request", req.RequestLabel,
+					"indexer", c.Name(),
+					"reason", "movie id search unsupported by caps",
+				)
+				return emptySearchResponse(), nil
+			}
+			params.Set("t", "movie")
+			idParamName, idParamValue = selectMovieIDSearchParam(caps, req)
+			if idParamName == "" {
+				logger.Debug("Indexer skipped for request",
+					"stream", req.StreamLabel,
+					"request", req.RequestLabel,
+					"indexer", c.Name(),
+					"reason", "no supported movie id for caps",
+					"imdb_id", strings.TrimSpace(req.IMDbID) != "",
+					"tmdb_id", strings.TrimSpace(req.TMDBID) != "",
+				)
+				return emptySearchResponse(), nil
+			}
 		}
-	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
+	} else if isTVSearch {
 		searchSeason, searchEpisode = config.SeriesSearchScopeSearchTarget(req.SeriesSearchScope, req.SearchMode, req.Season, req.Episode)
 		useTVSearchParams = config.SeriesSearchScopeUsesSeasonParams(req.SeriesSearchScope, req.SearchMode) && (searchSeason != "" || searchEpisode != "")
 		if isTextMode {
 			params.Set("t", "search")
 		} else {
+			if caps != nil && !caps.Searching.TVSearch {
+				logger.Debug("Indexer skipped for request",
+					"stream", req.StreamLabel,
+					"request", req.RequestLabel,
+					"indexer", c.Name(),
+					"reason", "tv id search unsupported by caps",
+				)
+				return emptySearchResponse(), nil
+			}
 			params.Set("t", "tvsearch")
+			idParamName, idParamValue = selectTVIDSearchParam(caps, req)
+			if idParamName == "" {
+				logger.Debug("Indexer skipped for request",
+					"stream", req.StreamLabel,
+					"request", req.RequestLabel,
+					"indexer", c.Name(),
+					"reason", "no supported tv id for caps",
+					"imdb_id", strings.TrimSpace(req.IMDbID) != "",
+					"tmdb_id", strings.TrimSpace(req.TMDBID) != "",
+					"tvdb_id", strings.TrimSpace(req.TVDBID) != "",
+				)
+				return emptySearchResponse(), nil
+			}
 		}
 	} else {
 		params.Set("t", "search")
 	}
 
-	if !isTextMode && isMovieSearch && req.IMDbID != "" {
-		imdbID := strings.TrimPrefix(req.IMDbID, "tt")
-		params.Set("imdbid", imdbID)
-	}
-	if !isTextMode && req.TVDBID != "" {
-		params.Set("tvdbid", req.TVDBID)
+	if !isTextMode && idParamName != "" && idParamValue != "" {
+		params.Set(idParamName, idParamValue)
 	}
 
 	cat := req.Cat
