@@ -797,6 +797,15 @@ func buildSeriesQueries(showName string) []string {
 	return buildSeriesQueriesWithOptions(showName, "", false)
 }
 
+func logMetadataResolutionState(contentType, requestID, resolver string, attrs ...any) {
+	base := []any{
+		"type", contentType,
+		"id", requestID,
+		"resolver", resolver,
+	}
+	logger.Debug("Metadata resolution", append(base, attrs...)...)
+}
+
 func buildSeriesQueriesWithOptions(showName, year string, includeYear bool) []string {
 	showName = strings.TrimSpace(showName)
 	if includeYear && strings.TrimSpace(year) != "" {
@@ -858,28 +867,45 @@ func (s *Server) buildSearchParamsBase(contentType, id string, searchQuery *conf
 		req.Cat = "5000"
 	}
 
-	if req.TMDBID == "" && req.IMDbID != "" && s.tmdbClient != nil {
-		findResp, findErr := s.tmdbClient.Find(req.IMDbID, "imdb_id")
-		if findErr == nil {
-			if contentType == "movie" && len(findResp.MovieResults) > 0 {
-				req.TMDBID = strconv.Itoa(findResp.MovieResults[0].ID)
-				tmdbForText = req.TMDBID
-			}
-			if contentType == "series" && len(findResp.TVResults) > 0 {
-				req.TMDBID = strconv.Itoa(findResp.TVResults[0].ID)
-				tmdbForText = req.TMDBID
+	if req.TMDBID == "" && req.IMDbID != "" {
+		if s.tmdbClient == nil {
+			logMetadataResolutionState(contentType, id, "tmdb_find", "imdb_id", req.IMDbID, "status", "skipped", "reason", "tmdb_client_unconfigured")
+		} else {
+			findResp, findErr := s.tmdbClient.Find(req.IMDbID, "imdb_id")
+			if findErr != nil {
+				logMetadataResolutionState(contentType, id, "tmdb_find", "imdb_id", req.IMDbID, "status", "failed", "err", findErr)
+			} else {
+				resolved := ""
+				if contentType == "movie" && len(findResp.MovieResults) > 0 {
+					resolved = strconv.Itoa(findResp.MovieResults[0].ID)
+				}
+				if contentType == "series" && len(findResp.TVResults) > 0 {
+					resolved = strconv.Itoa(findResp.TVResults[0].ID)
+				}
+				if resolved != "" {
+					req.TMDBID = resolved
+					tmdbForText = req.TMDBID
+				} else {
+					logMetadataResolutionState(contentType, id, "tmdb_find", "imdb_id", req.IMDbID, "status", "empty")
+				}
 			}
 		}
 	}
 
 	if contentType == "series" {
-		if req.TMDBID != "" && s.tmdbClient != nil {
-			if tmdbIDNum, err := strconv.Atoi(req.TMDBID); err == nil {
+		if req.TMDBID != "" {
+			if s.tmdbClient == nil {
+				logMetadataResolutionState(contentType, id, "tmdb_series_details", "tmdb_id", req.TMDBID, "status", "skipped", "reason", "tmdb_client_unconfigured")
+			} else if tmdbIDNum, err := strconv.Atoi(req.TMDBID); err == nil {
 				if details, err := s.tmdbClient.GetTVDetails(tmdbIDNum); err == nil {
 					params.Metadata.TVDetails = details
+				} else {
+					logMetadataResolutionState(contentType, id, "tmdb_series_details", "tmdb_id", req.TMDBID, "status", "failed", "err", err)
 				}
 				if translations, err := s.tmdbClient.GetTVTranslations(tmdbIDNum); err == nil {
 					params.Metadata.TVTranslations = translations
+				} else {
+					logMetadataResolutionState(contentType, id, "tmdb_series_translations", "tmdb_id", req.TMDBID, "status", "failed", "err", err)
 				}
 				if extIDs, err := s.tmdbClient.GetExternalIDs(tmdbIDNum, "tv"); err == nil {
 					if extIDs.TVDBID != 0 {
@@ -889,19 +915,39 @@ func (s *Server) buildSearchParamsBase(contentType, id string, searchQuery *conf
 						req.IMDbID = extIDs.IMDbID
 						imdbForText = extIDs.IMDbID
 					}
+					if req.TVDBID == "" {
+						logMetadataResolutionState(contentType, id, "tmdb_series_external_ids", "tmdb_id", req.TMDBID, "status", "empty")
+					}
+				} else {
+					logMetadataResolutionState(contentType, id, "tmdb_series_external_ids", "tmdb_id", req.TMDBID, "status", "failed", "err", err)
 				}
+			} else {
+				logMetadataResolutionState(contentType, id, "tmdb_series_details", "tmdb_id", req.TMDBID, "status", "failed", "err", err)
 			}
 		}
 		if req.IMDbID != "" && req.TVDBID == "" {
+			if s.tvdbClient == nil {
+				logMetadataResolutionState(contentType, id, "tvdb_resolve", "imdb_id", req.IMDbID, "status", "skipped", "reason", "tvdb_client_unconfigured")
+			}
 			if s.tvdbClient != nil {
 				if tvdbID, err := s.tvdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
 					req.TVDBID = tvdbID
+				} else if err != nil {
+					logMetadataResolutionState(contentType, id, "tvdb_resolve", "imdb_id", req.IMDbID, "status", "failed", "err", err)
+				} else {
+					logMetadataResolutionState(contentType, id, "tvdb_resolve", "imdb_id", req.IMDbID, "status", "empty")
 				}
 			}
 			if req.TVDBID == "" && s.tmdbClient != nil {
 				if tvdbID, err := s.tmdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
 					req.TVDBID = tvdbID
+				} else if err != nil {
+					logMetadataResolutionState(contentType, id, "tmdb_resolve_tvdb", "imdb_id", req.IMDbID, "status", "failed", "err", err)
+				} else {
+					logMetadataResolutionState(contentType, id, "tmdb_resolve_tvdb", "imdb_id", req.IMDbID, "status", "empty")
 				}
+			} else if req.TVDBID == "" && s.tmdbClient == nil {
+				logMetadataResolutionState(contentType, id, "tmdb_resolve_tvdb", "imdb_id", req.IMDbID, "status", "skipped", "reason", "tmdb_client_unconfigured")
 			}
 		}
 	}
