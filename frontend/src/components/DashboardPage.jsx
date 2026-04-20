@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/chart"
 import { ComposedChart, Area, XAxis, YAxis } from "recharts"
 import { Activity, Globe, X, MonitorPlay, Loader2 } from "lucide-react"
+import { isAvailNZBEnabled } from "@/lib/availnzb"
 import { cn } from "@/lib/utils"
 
 const chartConfig = {
@@ -32,10 +33,7 @@ function formatDownloadedMb(mb) {
 
 export function DashboardPage({ stats, chartData, sendCommand, config, availNZBStatus, availNZBStatusLoading, availNZBStatusError }) {
   const [activeSessionToClose, setActiveSessionToClose] = useState(null)
-  const availNZBEnabled = (() => {
-    const mode = String(config?.availnzb_mode || 'on').toLowerCase()
-    return mode !== 'off' && mode !== 'disabled'
-  })()
+  const availNZBEnabled = isAvailNZBEnabled(config?.availnzb_mode)
   const indexerUrls = useMemo(() => {
     const urls = new Map()
     ;(config?.indexers || []).forEach((idx) => {

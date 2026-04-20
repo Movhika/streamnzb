@@ -3,8 +3,10 @@ package session
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,13 +59,35 @@ type fakeIndexer struct {
 	calls    int
 	lastURL  string
 	typeName string
+	wait     <-chan struct{}
+	started  chan struct{}
+	mu       sync.Mutex
 }
 
 func (*fakeIndexer) Search(indexer.SearchRequest) (*indexer.SearchResponse, error) { return nil, nil }
-func (f *fakeIndexer) DownloadNZB(_ context.Context, rawURL string) ([]byte, error) {
+func (f *fakeIndexer) DownloadNZB(ctx context.Context, rawURL string) ([]byte, error) {
+	f.mu.Lock()
 	f.calls++
 	f.lastURL = rawURL
-	return f.data, f.err
+	wait := f.wait
+	started := f.started
+	data := f.data
+	err := f.err
+	f.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+	}
+	if wait != nil {
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return data, err
 }
 func (*fakeIndexer) Ping() error             { return nil }
 func (*fakeIndexer) Name() string            { return "fake" }
@@ -413,6 +437,202 @@ func TestGetOrDownloadNZBDownloadsKeylessURL(t *testing.T) {
 		t.Fatalf("DownloadNZB called with URL %q", idx.lastURL)
 	}
 	s.Close()
+}
+
+func TestGetOrDownloadNZBWithContextHonorsCancellation(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	idx := &fakeIndexer{err: context.DeadlineExceeded}
+	s, err := m.CreateDeferredSession("sess-cancel", "https://example.invalid/get?nzb=1", nil, idx, nil, "movie", "tt123", "", "")
+	if err != nil {
+		t.Fatalf("CreateDeferredSession returned error: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := s.GetOrDownloadNZBWithContext(ctx, m); err == nil {
+		t.Fatal("expected canceled context error")
+	} else if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if idx.calls != 0 {
+		t.Fatalf("expected DownloadNZB not to be called, got %d calls", idx.calls)
+	}
+	s.Close()
+}
+
+func TestGetOrDownloadNZBWithContextDeduplicatesConcurrentDownloads(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	data := marshalTestNZB(t, &nzb.NZB{Files: []nzb.File{{
+		Subject:  "Movie.2024.1080p.mkv",
+		Segments: []nzb.Segment{{ID: "<a>", Bytes: 60}},
+	}}})
+	wait := make(chan struct{})
+	started := make(chan struct{}, 2)
+	idx := &fakeIndexer{data: data, wait: wait, started: started}
+	s, err := m.CreateDeferredSession("sess-shared-download", "https://example.invalid/get?nzb=1", nil, idx, nil, "movie", "tt123", "", "")
+	if err != nil {
+		t.Fatalf("CreateDeferredSession returned error: %v", err)
+	}
+
+	errCh := make(chan error, 2)
+	startGate := make(chan struct{})
+	ready := make(chan struct{}, 2)
+	go func() {
+		ready <- struct{}{}
+		<-startGate
+		_, err := s.GetOrDownloadNZBWithContext(context.Background(), m)
+		errCh <- err
+	}()
+	go func() {
+		ready <- struct{}{}
+		<-startGate
+		_, err := s.GetOrDownloadNZBWithContext(context.Background(), m)
+		errCh <- err
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ready:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for goroutines to be ready")
+		}
+	}
+	close(startGate)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for NZB download to start")
+	}
+
+	close(wait)
+
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("GetOrDownloadNZBWithContext returned error: %v", err)
+		}
+	}
+
+	idx.mu.Lock()
+	calls := idx.calls
+	idx.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected DownloadNZB to be called once, got %d", calls)
+	}
+	if s.NZB == nil {
+		t.Fatal("expected session NZB to be populated")
+	}
+	s.Close()
+}
+
+func TestGetOrDownloadNZBWithContextDoesNotRepopulateClosedSession(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	data := marshalTestNZB(t, &nzb.NZB{Files: []nzb.File{{
+		Subject:  "Movie.2024.1080p.mkv",
+		Segments: []nzb.Segment{{ID: "<a>", Bytes: 60}},
+	}}})
+	wait := make(chan struct{})
+	started := make(chan struct{}, 1)
+	idx := &fakeIndexer{data: data, wait: wait, started: started}
+	s, err := m.CreateDeferredSession("sess-close-during-download", "https://example.invalid/get?nzb=1", nil, idx, nil, "movie", "tt123", "", "")
+	if err != nil {
+		t.Fatalf("CreateDeferredSession returned error: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	defer cancelCaller()
+	go func() {
+		_, err := s.GetOrDownloadNZBWithContext(callerCtx, m)
+		errCh <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for NZB download to start")
+	}
+
+	s.Close()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected lazy NZB download to stop for closed session")
+		} else if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected session close to cancel merged download context")
+	}
+	if s.NZB != nil || s.Files != nil || s.File != nil {
+		t.Fatal("expected closed session to stay empty after lazy download finishes")
+	}
+}
+
+func TestGetOrDownloadNZBWithContextPropagatesLeaderFailureToWaiters(t *testing.T) {
+	logger.Init("ERROR")
+
+	m := &Manager{
+		sessions:  make(map[string]*Session),
+		estimator: loader.NewSegmentSizeEstimator(),
+	}
+	wait := make(chan struct{})
+	started := make(chan struct{}, 1)
+	idx := &fakeIndexer{err: context.DeadlineExceeded, wait: wait, started: started}
+	s, err := m.CreateDeferredSession("sess-shared-download-error", "https://example.invalid/get?nzb=1", nil, idx, nil, "movie", "tt123", "", "")
+	if err != nil {
+		t.Fatalf("CreateDeferredSession returned error: %v", err)
+	}
+
+	errCh := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := s.GetOrDownloadNZBWithContext(context.Background(), m)
+			errCh <- err
+		}()
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for NZB download to start")
+	}
+
+	close(wait)
+
+	for i := 0; i < 2; i++ {
+		err := <-errCh
+		if err == nil {
+			t.Fatal("expected lazy download error")
+		}
+		if !strings.Contains(err.Error(), "failed to lazy download NZB") {
+			t.Fatalf("expected wrapped lazy download error, got %v", err)
+		}
+	}
+
+	idx.mu.Lock()
+	calls := idx.calls
+	idx.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected DownloadNZB to be called once, got %d", calls)
+	}
 }
 
 func TestAcquirePlaybackStreamReusesSameKey(t *testing.T) {

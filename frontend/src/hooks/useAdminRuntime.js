@@ -248,6 +248,7 @@ export function useAdminRuntime({
             window.profileUsernameCallback({ status: 'error', message: msg })
             delete window.profileUsernameCallback
           }
+          throw err
         })
         .finally(() => setIsSaving(false))
     }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/env"
@@ -36,6 +37,64 @@ type Client struct {
 	usageManager      *indexer.UsageManager
 	requestLimiter    *indexer.RequestLimiter
 	mu                sync.RWMutex
+}
+
+var orderedSearchQueryKeys = []string{
+	"apikey",
+	"t",
+	"cat",
+	"imdbid",
+	"tmdbid",
+	"tvdbid",
+	"rid",
+	"season",
+	"ep",
+	"q",
+	"offset",
+	"limit",
+	"o",
+}
+
+func encodeOrderedQuery(params url.Values, orderedKeys []string) string {
+	if len(params) == 0 {
+		return ""
+	}
+
+	pairs := make([]string, 0, len(params))
+	seen := make(map[string]struct{}, len(params))
+	appendKey := func(key string) {
+		values, ok := params[key]
+		if !ok {
+			return
+		}
+		seen[key] = struct{}{}
+		escapedKey := url.QueryEscape(key)
+		if len(values) == 0 {
+			pairs = append(pairs, escapedKey+"=")
+			return
+		}
+		for _, value := range values {
+			pairs = append(pairs, escapedKey+"="+url.QueryEscape(value))
+		}
+	}
+
+	for _, key := range orderedKeys {
+		appendKey(key)
+	}
+
+	extraKeys := make([]string, 0, len(params))
+	for key := range params {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		extraKeys = append(extraKeys, key)
+	}
+	sort.Strings(extraKeys)
+	for _, key := range extraKeys {
+		appendKey(key)
+	}
+
+	return strings.Join(pairs, "&")
 }
 
 var _ indexer.Indexer = (*Client)(nil)
@@ -345,6 +404,56 @@ func (c *Client) checkNewznabError(bodyBytes []byte) error {
 	return nil
 }
 
+func emptySearchResponse() *indexer.SearchResponse {
+	resp := &indexer.SearchResponse{
+		XMLName: xml.Name{Local: "rss"},
+		Channel: indexer.Channel{Items: []indexer.Item{}},
+	}
+	indexer.NormalizeSearchResponse(resp)
+	return resp
+}
+
+func normalizeIMDbID(id string) string {
+	return strings.TrimPrefix(strings.TrimSpace(id), "tt")
+}
+
+func supportsMovieIDParam(caps *indexer.Caps, param string) bool {
+	if caps == nil || len(caps.Searching.MovieSearchSupportedParams) == 0 {
+		return param == "imdbid"
+	}
+	return caps.Searching.MovieSearchSupportedParams[param]
+}
+
+func supportsTVIDParam(caps *indexer.Caps, param string) bool {
+	if caps == nil || len(caps.Searching.TVSearchSupportedParams) == 0 {
+		return param == "tvdbid"
+	}
+	return caps.Searching.TVSearchSupportedParams[param]
+}
+
+func selectMovieIDSearchParam(caps *indexer.Caps, req indexer.SearchRequest) (string, string) {
+	if imdbID := normalizeIMDbID(req.IMDbID); imdbID != "" && supportsMovieIDParam(caps, "imdbid") {
+		return "imdbid", imdbID
+	}
+	if tmdbID := strings.TrimSpace(req.TMDBID); tmdbID != "" && supportsMovieIDParam(caps, "tmdbid") {
+		return "tmdbid", tmdbID
+	}
+	return "", ""
+}
+
+func selectTVIDSearchParam(caps *indexer.Caps, req indexer.SearchRequest) (string, string) {
+	if tvdbID := strings.TrimSpace(req.TVDBID); tvdbID != "" && supportsTVIDParam(caps, "tvdbid") {
+		return "tvdbid", tvdbID
+	}
+	if tmdbID := strings.TrimSpace(req.TMDBID); tmdbID != "" && supportsTVIDParam(caps, "tmdbid") {
+		return "tmdbid", tmdbID
+	}
+	if imdbID := normalizeIMDbID(req.IMDbID); imdbID != "" && supportsTVIDParam(caps, "imdbid") {
+		return "imdbid", imdbID
+	}
+	return "", ""
+}
+
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
 	if err := c.checkAPILimit(); err != nil {
 		return nil, err
@@ -355,15 +464,20 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, err
 	}
 
+	c.mu.RLock()
+	caps := c.caps
+	c.mu.RUnlock()
+
 	limit := req.Limit
 	if o := req.OptionalOverrides; o != nil && o.SearchResultLimit > 0 {
 		limit = o.SearchResultLimit
 	}
-	if limit <= 0 {
-		limit = 100
+	maxLimit := 2000
+	if caps != nil && caps.Limits.Max > 0 {
+		maxLimit = caps.Limits.Max
 	}
-	if limit > 1000 {
-		limit = 1000
+	if limit <= 0 {
+		limit = maxLimit
 	}
 
 	params := url.Values{}
@@ -372,63 +486,83 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	params.Set("limit", fmt.Sprintf("%d", limit))
 	params.Set("offset", "0")
 
-	c.mu.RLock()
-	caps := c.caps
-	c.mu.RUnlock()
-
 	isMovieSearch := strings.HasPrefix(req.Cat, "2")
 	isTVSearch := strings.HasPrefix(req.Cat, "5")
 
-	query := req.Query
+	rawQuery := req.Query
+	query := rawQuery
 	isTextMode := !strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") && query != ""
 	extraTerms := c.cfg.ExtraSearchTerms
 	if o := req.OptionalOverrides; o != nil && o.ExtraSearchTerms != nil {
 		extraTerms = *o.ExtraSearchTerms
 	}
-	if extraTerms != "" {
-		if strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") {
-			if query != "" {
-				query = extraTerms + " " + query
-			} else {
-				query = extraTerms
-			}
-		} else {
-			if query != "" {
-				query = query + " " + extraTerms
-			} else {
-				query = extraTerms
-			}
-		}
-	}
 
 	useTVSearchParams := false
-	if isMovieSearch && (caps == nil || caps.Searching.MovieSearch) {
-		if !isTextMode && req.IMDbID != "" {
-			params.Set("t", "movie")
-		} else {
-			params.Set("t", "search")
-		}
-	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
-		useTVSearchParams = req.UseSeasonEpisodeParams && (req.Season != "" || req.Episode != "")
+	searchSeason, searchEpisode := "", ""
+	idParamName, idParamValue := "", ""
+	if isMovieSearch {
 		if isTextMode {
 			params.Set("t", "search")
 		} else {
+			if caps != nil && !caps.Searching.MovieSearch {
+				logger.Debug("Indexer skipped for request",
+					"stream", req.StreamLabel,
+					"request", req.RequestLabel,
+					"indexer", c.Name(),
+					"reason", "movie id search unsupported by caps",
+				)
+				return emptySearchResponse(), nil
+			}
+			params.Set("t", "movie")
+			idParamName, idParamValue = selectMovieIDSearchParam(caps, req)
+			if idParamName == "" {
+				logger.Debug("Indexer skipped for request",
+					"stream", req.StreamLabel,
+					"request", req.RequestLabel,
+					"indexer", c.Name(),
+					"reason", "no supported movie id for caps",
+					"imdb_id", strings.TrimSpace(req.IMDbID) != "",
+					"tmdb_id", strings.TrimSpace(req.TMDBID) != "",
+				)
+				return emptySearchResponse(), nil
+			}
+		}
+	} else if isTVSearch {
+		searchSeason, searchEpisode = config.SeriesSearchScopeSearchTarget(req.SeriesSearchScope, req.SearchMode, req.Season, req.Episode)
+		useTVSearchParams = config.SeriesSearchScopeUsesSeasonParams(req.SeriesSearchScope, req.SearchMode) && (searchSeason != "" || searchEpisode != "")
+		if isTextMode {
+			params.Set("t", "search")
+		} else {
+			if caps != nil && !caps.Searching.TVSearch {
+				logger.Debug("Indexer skipped for request",
+					"stream", req.StreamLabel,
+					"request", req.RequestLabel,
+					"indexer", c.Name(),
+					"reason", "tv id search unsupported by caps",
+				)
+				return emptySearchResponse(), nil
+			}
 			params.Set("t", "tvsearch")
+			idParamName, idParamValue = selectTVIDSearchParam(caps, req)
+			if idParamName == "" {
+				logger.Debug("Indexer skipped for request",
+					"stream", req.StreamLabel,
+					"request", req.RequestLabel,
+					"indexer", c.Name(),
+					"reason", "no supported tv id for caps",
+					"imdb_id", strings.TrimSpace(req.IMDbID) != "",
+					"tmdb_id", strings.TrimSpace(req.TMDBID) != "",
+					"tvdb_id", strings.TrimSpace(req.TVDBID) != "",
+				)
+				return emptySearchResponse(), nil
+			}
 		}
 	} else {
 		params.Set("t", "search")
 	}
 
-	if query != "" {
-		params.Set("q", query)
-	}
-
-	if !isTextMode && isMovieSearch && req.IMDbID != "" {
-		imdbID := strings.TrimPrefix(req.IMDbID, "tt")
-		params.Set("imdbid", imdbID)
-	}
-	if !isTextMode && req.TVDBID != "" {
-		params.Set("tvdbid", req.TVDBID)
+	if !isTextMode && idParamName != "" && idParamValue != "" {
+		params.Set(idParamName, idParamValue)
 	}
 
 	cat := req.Cat
@@ -449,15 +583,38 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 
 	if useTVSearchParams {
-		if req.Season != "" {
-			params.Set("season", req.Season)
+		if searchSeason != "" {
+			params.Set("season", searchSeason)
 		}
-		if req.Episode != "" {
-			params.Set("ep", req.Episode)
+		if searchEpisode != "" {
+			params.Set("ep", searchEpisode)
 		}
 	}
 
-	apiURL := fmt.Sprintf("%s%s?%s", c.baseURL, c.apiPath, params.Encode())
+	if extraTerms != "" {
+		switch {
+		case !isTextMode && useTVSearchParams:
+			query = extraTerms
+		case strings.EqualFold(strings.TrimSpace(req.SearchMode), "id"):
+			if query != "" {
+				query = extraTerms + " " + query
+			} else {
+				query = extraTerms
+			}
+		default:
+			if query != "" {
+				query = query + " " + extraTerms
+			} else {
+				query = extraTerms
+			}
+		}
+	}
+
+	if query != "" && (isTextMode || !useTVSearchParams || (!isTextMode && useTVSearchParams && query != rawQuery)) {
+		params.Set("q", query)
+	}
+
+	apiURL := fmt.Sprintf("%s%s?%s", c.baseURL, c.apiPath, encodeOrderedQuery(params, orderedSearchQueryKeys))
 	logger.Debug("Search request",
 		"stream", req.StreamLabel,
 		"request", req.RequestLabel,
@@ -478,6 +635,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("User-Agent", env.IndexerQueryHeader())
+	startedAt := time.Now()
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query %s: %w", c.Name(), err)
@@ -535,6 +693,26 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if len(result.Channel.Items) > limit {
 		result.Channel.Items = result.Channel.Items[:limit]
 	}
+	totalResults := result.Channel.Response.Total
+	if totalResults <= 0 {
+		totalResults = len(result.Channel.Items)
+	}
+	logger.Debug("Search request result",
+		"stream", req.StreamLabel,
+		"request", req.RequestLabel,
+		"mode", func() string {
+			if strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") {
+				return "id"
+			}
+			return "text"
+		}(),
+		"indexer", c.Name(),
+		"type", "newznab",
+		"raw_results", len(result.Channel.Items),
+		"result_offset", result.Channel.Response.Offset,
+		"total_results", totalResults,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
 	return &result, nil
 }
 

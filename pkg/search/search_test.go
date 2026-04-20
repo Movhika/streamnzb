@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/release"
 )
 
 type recordingIndexer struct {
@@ -59,16 +60,16 @@ func (e *errIndexer) GetUsage() indexer.Usage                             { retu
 func TestRunIndexerSearchesTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{
-		Cat:                    "5000",
-		Limit:                  100,
-		IMDbID:                 "tt1234567",
-		Season:                 "1",
-		Episode:                "5",
-		UseSeasonEpisodeParams: true,
-		Query:                  "The Walking Dead",
+		Cat:             "5000",
+		Limit:           100,
+		IMDbID:          "tt1234567",
+		Season:          "1",
+		Episode:         "5",
+		Query:           "The Walking Dead",
+		ValidationQuery: "The Walking Dead",
 	}
 
-	if _, err := RunIndexerSearches(idx, nil, req, "series", nil, "", "", nil); err != nil {
+	if _, err := RunIndexerSearches(idx, req, "series"); err != nil {
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
 
@@ -85,7 +86,7 @@ func TestRunIndexerSearchesTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing
 	}
 }
 
-func TestRunIndexerSearchesSkipsPostFilterWhenDisabled(t *testing.T) {
+func TestRunIndexerSearchesAlwaysAppliesValidation(t *testing.T) {
 	idx := &staticIndexer{
 		name: "SceneNZBs",
 		resp: &indexer.SearchResponse{
@@ -97,34 +98,147 @@ func TestRunIndexerSearchesSkipsPostFilterWhenDisabled(t *testing.T) {
 		},
 	}
 	req := indexer.SearchRequest{
-		Cat:                    "2100",
-		IMDbID:                 "tt0187393",
-		TMDBID:                 "2024",
-		Query:                  "Der Patriot 2000",
-		FilterQuery:            "The Patriot 2000",
-		DisableResultFiltering: true,
+		Cat:                  "2100",
+		IMDbID:               "tt0187393",
+		TMDBID:               "2024",
+		Query:                "Der Patriot 2000",
+		ValidationQuery:      "The Patriot 2000",
+		EnableYearValidation: true,
 	}
 
-	got, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil)
+	got, err := RunIndexerSearches(idx, req, "movie")
 	if err != nil {
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("expected 1 result with post-filter disabled, got %d: %+v", len(got), got)
+	if len(got) != 0 {
+		t.Fatalf("expected validation to remove mismatched title, got %d: %+v", len(got), got)
+	}
+}
+
+func TestValidateSearchResultsWithStatsCountsSeriesEpisodeMatches(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "Right.Show.S01E02.1080p.WEB-DL.x264-GROUP"},
+		{Title: "Right.Show.S01E02E03.1080p.WEB-DL.x264-GROUP"},
+		{Title: "Right.Show.S01.COMPLETE.1080p.WEB-DL.x264-GROUP"},
+		{Title: "Right.Show.COMPLETE.1080p.WEB-DL.x264-GROUP"},
+		{Title: "Right.Show.S01E04.1080p.WEB-DL.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "series", "Right Show S01E02", "1", "2", true, false)
+
+	if len(filtered) != 4 {
+		t.Fatalf("expected 4 accepted results, got %d", len(filtered))
+	}
+	if stats.RawResults != 5 || stats.FinalResults != 4 || stats.RejectedResults != 1 {
+		t.Fatalf("unexpected raw/final/rejected counts: %+v", stats)
+	}
+	if !stats.TitleValidationApplied {
+		t.Fatalf("expected title validation to be applied, got %+v", stats)
+	}
+	if stats.AcceptedExactEpisode != 1 {
+		t.Fatalf("expected 1 exact episode match, got %d", stats.AcceptedExactEpisode)
+	}
+	if stats.AcceptedMultiEpisode != 1 {
+		t.Fatalf("expected 1 multi-episode match, got %d", stats.AcceptedMultiEpisode)
+	}
+	if stats.AcceptedSeasonPack != 1 {
+		t.Fatalf("expected 1 season pack match, got %d", stats.AcceptedSeasonPack)
+	}
+	if stats.AcceptedCompletePack != 1 {
+		t.Fatalf("expected 1 complete pack match, got %d", stats.AcceptedCompletePack)
+	}
+	if stats.DroppedEpisodeRequest != 1 {
+		t.Fatalf("expected 1 episode-request rejection, got %d", stats.DroppedEpisodeRequest)
+	}
+}
+
+func TestValidateSearchResultsWithStatsCountsMovieTitleAndYearDrops(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "The.Patriot.2000.1080p.BluRay.x264-GROUP"},
+		{Title: "The.Patriot.2004.1080p.BluRay.x264-GROUP"},
+		{Title: "Der.Patriot.2000.1080p.BluRay.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "movie", "The Patriot 2000", "", "", true, true)
+
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 accepted movie result, got %d", len(filtered))
+	}
+	if !stats.TitleValidationApplied || !stats.YearValidationApplied {
+		t.Fatalf("expected title and year validation to be applied, got %+v", stats)
+	}
+	if stats.DroppedYear != 1 {
+		t.Fatalf("expected 1 year rejection, got %d", stats.DroppedYear)
+	}
+	if stats.DroppedTitle != 1 {
+		t.Fatalf("expected 1 title rejection, got %d", stats.DroppedTitle)
+	}
+}
+
+func TestValidateSearchResultsWithStatsSkipsYearWhenDisabled(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "The.Patriot.2000.1080p.BluRay.x264-GROUP"},
+		{Title: "The.Patriot.2004.1080p.BluRay.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "movie", "The Patriot 2000", "", "", true, false)
+
+	if len(filtered) != 2 {
+		t.Fatalf("expected both results to remain when year validation is off, got %d", len(filtered))
+	}
+	if stats.YearValidationApplied {
+		t.Fatalf("expected year validation to stay off, got %+v", stats)
+	}
+	if stats.DroppedYear != 0 {
+		t.Fatalf("expected no year rejections, got %d", stats.DroppedYear)
+	}
+}
+
+func TestValidateSearchResultsWithStatsAllowsOptionalAndWordMatches(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "Your.Friends.Neighbors.S01E01.1080p.WEB-DL.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "series", "Your Friends & Neighbors", "1", "1", true, false)
+
+	if len(filtered) != 1 {
+		t.Fatalf("expected optional '&/and' title match to pass, got %d results", len(filtered))
+	}
+	if stats.DroppedTitle != 0 {
+		t.Fatalf("expected no title rejection, got %+v", stats)
+	}
+	if stats.AcceptedExactEpisode != 1 {
+		t.Fatalf("expected exact episode match, got %+v", stats)
+	}
+}
+
+func TestValidateSearchResultsWithStatsRejectsExtraTrailingTitleWords(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "The.Rookie.Feds.S01E01.1080p.WEB-DL.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "series", "The Rookie", "1", "1", true, false)
+
+	if len(filtered) != 0 {
+		t.Fatalf("expected trailing title words to be rejected, got %d results", len(filtered))
+	}
+	if stats.DroppedTitle != 1 {
+		t.Fatalf("expected title rejection for extra trailing words, got %+v", stats)
 	}
 }
 
 func TestRunIndexerSearchesQueryWithIDsDoesNotAlsoRunIDSearch(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{
-		Query:  "Meal Ticket 2026",
-		Cat:    "2000",
-		Limit:  100,
-		IMDbID: "tt40232255",
-		TMDBID: "1649758",
+		Query:           "Meal Ticket 2026",
+		Cat:             "2000",
+		Limit:           100,
+		IMDbID:          "tt40232255",
+		TMDBID:          "1649758",
+		ValidationQuery: "Meal Ticket 2026",
 	}
 
-	if _, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil); err != nil {
+	if _, err := RunIndexerSearches(idx, req, "movie"); err != nil {
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
 
@@ -142,15 +256,16 @@ func TestRunIndexerSearchesQueryWithIDsDoesNotAlsoRunIDSearch(t *testing.T) {
 func TestRunIndexerSearchesIDModePreservesPreparedQuery(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{
-		Cat:        "2000",
-		Limit:      100,
-		SearchMode: "id",
-		IMDbID:     "tt1655441",
-		TMDBID:     "1655441",
-		Query:      "The Age of Adaline",
+		Cat:             "2000",
+		Limit:           100,
+		SearchMode:      "id",
+		IMDbID:          "tt1655441",
+		TMDBID:          "1655441",
+		Query:           "The Age of Adaline",
+		ValidationQuery: "The Age of Adaline",
 	}
 
-	if _, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil); err != nil {
+	if _, err := RunIndexerSearches(idx, req, "movie"); err != nil {
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
 
@@ -168,17 +283,38 @@ func TestRunIndexerSearchesIDModePreservesPreparedQuery(t *testing.T) {
 func TestRunIndexerSearchesReturnsTextSearchErrors(t *testing.T) {
 	idx := &errIndexer{name: "BrokenIndexer", err: fmt.Errorf("backend unavailable")}
 	req := indexer.SearchRequest{
-		SearchMode:   "text",
-		Query:        "The King Who Never Was",
-		StreamLabel:  "TestStream",
-		RequestLabel: "Text Request",
+		SearchMode:      "text",
+		Query:           "The King Who Never Was",
+		ValidationQuery: "The King Who Never Was",
+		StreamLabel:     "TestStream",
+		RequestLabel:    "Text Request",
 	}
 
-	_, err := RunIndexerSearches(idx, nil, req, "series", nil, "", "", nil)
+	_, err := RunIndexerSearches(idx, req, "series")
 	if err == nil {
 		t.Fatalf("expected text search error, got nil")
 	}
 	if got := err.Error(); got == "" || !strings.Contains(got, "text search failed") {
 		t.Fatalf("expected wrapped text search error, got %q", got)
+	}
+}
+
+func TestRunIndexerSearchesSkipsWithoutValidationBasis(t *testing.T) {
+	idx := &recordingIndexer{name: "TestIndexer"}
+	req := indexer.SearchRequest{
+		SearchMode: "id",
+		Cat:        "2000",
+		IMDbID:     "tt1655441",
+	}
+
+	got, err := RunIndexerSearches(idx, req, "movie")
+	if err != nil {
+		t.Fatalf("RunIndexerSearches() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no releases without validation basis, got %d", len(got))
+	}
+	if len(idx.reqs) != 0 {
+		t.Fatalf("expected no Search call without validation basis, got %d", len(idx.reqs))
 	}
 }

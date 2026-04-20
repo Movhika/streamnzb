@@ -1,6 +1,9 @@
 package indexer
 
-import "encoding/xml"
+import (
+	"encoding/xml"
+	"strings"
+)
 
 type Caps struct {
 	Categories    []CapsCategory `json:"categories"`
@@ -16,9 +19,12 @@ type CapsCategory struct {
 }
 
 type CapsSearching struct {
-	Search      bool `json:"search"`
-	TVSearch    bool `json:"tv_search"`
-	MovieSearch bool `json:"movie_search"`
+	Search                     bool            `json:"search"`
+	TVSearch                   bool            `json:"tv_search"`
+	MovieSearch                bool            `json:"movie_search"`
+	SearchSupportedParams      map[string]bool `json:"search_supported_params,omitempty"`
+	TVSearchSupportedParams    map[string]bool `json:"tv_search_supported_params,omitempty"`
+	MovieSearchSupportedParams map[string]bool `json:"movie_search_supported_params,omitempty"`
 }
 
 type CapsLimits struct {
@@ -50,7 +56,8 @@ type capsXMLSearching struct {
 }
 
 type capsXMLSearchType struct {
-	Available string `xml:"available,attr"`
+	Available       string `xml:"available,attr"`
+	SupportedParams string `xml:"supportedParams,attr"`
 }
 
 type capsXMLCategories struct {
@@ -65,9 +72,12 @@ func ParseCapsXML(data []byte) (*Caps, error) {
 	return &Caps{
 		Categories: raw.Categories.Categories,
 		Searching: CapsSearching{
-			Search:      raw.Searching.Search.Available == "yes",
-			TVSearch:    raw.Searching.TVSearch.Available == "yes",
-			MovieSearch: raw.Searching.MovieSearch.Available == "yes",
+			Search:                     raw.Searching.Search.Available == "yes",
+			TVSearch:                   raw.Searching.TVSearch.Available == "yes",
+			MovieSearch:                raw.Searching.MovieSearch.Available == "yes",
+			SearchSupportedParams:      parseSupportedParams(raw.Searching.Search.SupportedParams),
+			TVSearchSupportedParams:    parseSupportedParams(raw.Searching.TVSearch.SupportedParams),
+			MovieSearchSupportedParams: parseSupportedParams(raw.Searching.MovieSearch.SupportedParams),
 		},
 		Limits: CapsLimits{
 			Max:     raw.Limits.Max,
@@ -75,6 +85,25 @@ func ParseCapsXML(data []byte) (*Caps, error) {
 		},
 		RetentionDays: raw.Retention.Days,
 	}, nil
+}
+
+func parseSupportedParams(raw string) map[string]bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	params := make(map[string]bool)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "" {
+			continue
+		}
+		params[part] = true
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
 }
 
 type IndexerWithCaps interface {

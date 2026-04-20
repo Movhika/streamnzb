@@ -3,7 +3,6 @@ package release
 import (
 	"net"
 	"net/url"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -44,27 +43,6 @@ type Release struct {
 
 	Available *bool
 	Duration  float64
-}
-
-func Key(r *Release) string {
-	if r == nil {
-		return ""
-	}
-	if r.DetailsURL != "" {
-		return r.DetailsURL
-	}
-	return NormalizeTitle(r.Title) + ":" + strconv.FormatInt(r.Size, 10)
-}
-
-func (r *Release) EqualByTitle(other *Release) bool {
-	if r == nil || other == nil {
-		return r == other
-	}
-	return NormalizeTitle(r.Title) == NormalizeTitle(other.Title)
-}
-
-func NormalizeTitle(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func NormalizeTitleForDedup(s string) string {
@@ -178,4 +156,48 @@ var filenameReplacer = strings.NewReplacer(
 
 func NormalizeTitleForFilename(s string) string {
 	return filenameReplacer.Replace(s)
+}
+
+// NormalizeTitleForSearchQuery prepares a metadata title for outgoing text
+// searches and validation baselines. It keeps letters and numbers, collapses
+// punctuation into spaces, and normalizes common filename replacements so
+// "König" becomes "Koenig" and "Friends & Neighbors" becomes
+// "Friends Neighbors".
+func NormalizeTitleForSearchQuery(s string) string {
+	s = strings.TrimSpace(NormalizeTitleForFilename(s))
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r), unicode.IsNumber(r):
+			b.WriteRune(r)
+			lastSpace = false
+		case isTitleJoinerRune(r):
+			// Keep contractions together so "Don't" becomes "Dont"
+			// instead of "Don t".
+		case unicode.IsSpace(r):
+			if !lastSpace {
+				b.WriteRune(' ')
+				lastSpace = true
+			}
+		default:
+			if !lastSpace {
+				b.WriteRune(' ')
+				lastSpace = true
+			}
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func isTitleJoinerRune(r rune) bool {
+	switch r {
+	case '\'', '’', '‘', 'ʼ', '‛', '`', '´':
+		return true
+	default:
+		return false
+	}
 }

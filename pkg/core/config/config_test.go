@@ -53,6 +53,89 @@ func TestMergeIndexerSearchExplicitSeriesSearchOverridesWin(t *testing.T) {
 	}
 }
 
+func TestNormalizeSeriesSearchScopeDefaultsToSeasonEpisode(t *testing.T) {
+	if got := NormalizeSeriesSearchScope(""); got != SeriesSearchScopeSeasonEpisode {
+		t.Fatalf("NormalizeSeriesSearchScope() = %q, want %q", got, SeriesSearchScopeSeasonEpisode)
+	}
+}
+
+func TestSeriesSearchScopeRequiresValidation(t *testing.T) {
+	if !SeriesSearchScopeRequiresValidation(SeriesSearchScopeSeason) {
+		t.Fatalf("expected season scope to require validation")
+	}
+	if !SeriesSearchScopeRequiresValidation(SeriesSearchScopeNone) {
+		t.Fatalf("expected none scope to require validation")
+	}
+	if SeriesSearchScopeRequiresValidation(SeriesSearchScopeSeasonEpisode) {
+		t.Fatalf("did not expect season_episode scope to require validation")
+	}
+}
+
+func TestDefaultSearchQuerySettingsMatchExpectedModes(t *testing.T) {
+	cfg := &Config{}
+	if !cfg.applyStreamModelUpgradeDefaults() {
+		t.Fatalf("expected defaults to be applied")
+	}
+
+	if cfg.MovieSearchQueries[0].SearchResultLimit != 0 {
+		t.Fatalf("expected DefaultMovieText limit max/0, got %d", cfg.MovieSearchQueries[0].SearchResultLimit)
+	}
+	if cfg.MovieSearchQueries[0].IncludeYear == nil || !*cfg.MovieSearchQueries[0].IncludeYear {
+		t.Fatalf("expected DefaultMovieText year enabled")
+	}
+	if cfg.MovieSearchQueries[1].SearchResultLimit != 0 {
+		t.Fatalf("expected DefaultMovieID limit max/0, got %d", cfg.MovieSearchQueries[1].SearchResultLimit)
+	}
+	if cfg.MovieSearchQueries[1].IncludeYear == nil || *cfg.MovieSearchQueries[1].IncludeYear {
+		t.Fatalf("expected DefaultMovieID year disabled")
+	}
+	if cfg.SeriesSearchQueries[0].SearchResultLimit != 0 {
+		t.Fatalf("expected DefaultTVText limit max/0, got %d", cfg.SeriesSearchQueries[0].SearchResultLimit)
+	}
+	if cfg.SeriesSearchQueries[0].IncludeYear == nil || !*cfg.SeriesSearchQueries[0].IncludeYear {
+		t.Fatalf("expected DefaultTVText year enabled")
+	}
+	if cfg.SeriesSearchQueries[1].SearchResultLimit != 0 {
+		t.Fatalf("expected DefaultTVID limit max/0, got %d", cfg.SeriesSearchQueries[1].SearchResultLimit)
+	}
+	if cfg.SeriesSearchQueries[1].IncludeYear == nil || *cfg.SeriesSearchQueries[1].IncludeYear {
+		t.Fatalf("expected DefaultTVID year disabled")
+	}
+}
+
+func TestBackfillLegacySearchQuerySettings(t *testing.T) {
+	cfg := &Config{
+		MovieSearchQueries: []SearchQueryConfig{
+			{Name: "DefaultMovieText", SearchMode: "text"},
+			{Name: "DefaultMovieID", SearchMode: "id", LegacyIncludeYearInTextSearch: ptrBool(true)},
+		},
+		SeriesSearchQueries: []SearchQueryConfig{
+			{Name: "DefaultTVText", SearchMode: "text", UseSeasonEpisodeParams: ptrBool(false)},
+			{Name: "DefaultTVID", SearchMode: "id", LegacyIncludeYearInTextSearch: ptrBool(false)},
+		},
+	}
+
+	if !cfg.backfillLegacySearchQuerySettings() {
+		t.Fatal("expected legacy search query settings to be backfilled")
+	}
+
+	if cfg.MovieSearchQueries[0].IncludeYear == nil || !*cfg.MovieSearchQueries[0].IncludeYear {
+		t.Fatal("expected DefaultMovieText year enabled after backfill")
+	}
+	if cfg.MovieSearchQueries[1].IncludeYear == nil || !*cfg.MovieSearchQueries[1].IncludeYear {
+		t.Fatal("expected DefaultMovieID year enabled after backfill from legacy year field")
+	}
+	if cfg.SeriesSearchQueries[0].IncludeYear == nil || !*cfg.SeriesSearchQueries[0].IncludeYear {
+		t.Fatal("expected DefaultTVText year enabled after backfill")
+	}
+	if cfg.SeriesSearchQueries[0].SeriesSearchScope != SeriesSearchScopeSeasonEpisode {
+		t.Fatalf("expected DefaultTVText scope %q after legacy backfill, got %q", SeriesSearchScopeSeasonEpisode, cfg.SeriesSearchQueries[0].SeriesSearchScope)
+	}
+	if cfg.SeriesSearchQueries[1].IncludeYear == nil || *cfg.SeriesSearchQueries[1].IncludeYear {
+		t.Fatal("expected DefaultTVID year disabled after backfill")
+	}
+}
+
 func TestIndexerConfigEffectiveTimeoutDefaults(t *testing.T) {
 	tests := []struct {
 		name string
@@ -63,6 +146,7 @@ func TestIndexerConfigEffectiveTimeoutDefaults(t *testing.T) {
 		{name: "aggregator", cfg: IndexerConfig{Type: "aggregator"}, want: DefaultAggregatorIndexerTimeoutSeconds},
 		{name: "nzbhydra", cfg: IndexerConfig{Type: "nzbhydra"}, want: DefaultAggregatorIndexerTimeoutSeconds},
 		{name: "prowlarr", cfg: IndexerConfig{Type: "prowlarr"}, want: DefaultAggregatorIndexerTimeoutSeconds},
+		{name: "easynews", cfg: IndexerConfig{Type: "easynews"}, want: DefaultEasynewsIndexerTimeoutSeconds},
 	}
 
 	for _, tt := range tests {
@@ -82,6 +166,40 @@ func TestIndexerConfigEffectiveTimeoutHonorsExplicitOverride(t *testing.T) {
 	}
 	if got := cfg.EffectiveTimeout(); got != 7*time.Second {
 		t.Fatalf("EffectiveTimeout() = %v, want %v", got, 7*time.Second)
+	}
+}
+
+func TestMigrateLegacyIndexersBackfillsEasynewsTimeout(t *testing.T) {
+	cfg := &Config{
+		Indexers: []IndexerConfig{
+			{Name: "Easynews", Type: "easynews"},
+			{Name: "SceneNZBs", Type: "newznab"},
+		},
+	}
+
+	if !cfg.MigrateLegacyIndexers() {
+		t.Fatalf("expected legacy indexers to be migrated")
+	}
+	if cfg.Indexers[0].TimeoutSeconds != DefaultEasynewsIndexerTimeoutSeconds {
+		t.Fatalf("Easynews timeout = %d, want %d", cfg.Indexers[0].TimeoutSeconds, DefaultEasynewsIndexerTimeoutSeconds)
+	}
+	if cfg.Indexers[1].TimeoutSeconds != 0 {
+		t.Fatalf("non-Easynews timeout = %d, want 0", cfg.Indexers[1].TimeoutSeconds)
+	}
+}
+
+func TestMigrateLegacyIndexersKeepsExplicitEasynewsTimeout(t *testing.T) {
+	cfg := &Config{
+		Indexers: []IndexerConfig{
+			{Name: "Easynews", Type: "easynews", TimeoutSeconds: DefaultInternalIndexerTimeoutSeconds, Enabled: ptrBool(true)},
+		},
+	}
+
+	if cfg.MigrateLegacyIndexers() {
+		t.Fatalf("did not expect explicit Easynews timeout to be migrated")
+	}
+	if cfg.Indexers[0].TimeoutSeconds != DefaultInternalIndexerTimeoutSeconds {
+		t.Fatalf("Easynews timeout = %d, want %d", cfg.Indexers[0].TimeoutSeconds, DefaultInternalIndexerTimeoutSeconds)
 	}
 }
 
@@ -140,6 +258,18 @@ func TestApplyStreamModelUpgradeDefaultsCreatesQueriesAndDefaultStream(t *testin
 	}
 	if len(cfg.SeriesSearchQueries) != 2 {
 		t.Fatalf("expected 2 series queries, got %d", len(cfg.SeriesSearchQueries))
+	}
+	if got := NormalizeSeriesSearchScope(cfg.SeriesSearchQueries[0].SeriesSearchScope); got != SeriesSearchScopeSeasonEpisode {
+		t.Fatalf("expected DefaultTVText scope season_episode, got %q", got)
+	}
+	if cfg.SeriesSearchQueries[0].IncludeYear == nil || !*cfg.SeriesSearchQueries[0].IncludeYear {
+		t.Fatalf("expected DefaultTVText year enabled")
+	}
+	if got := NormalizeSeriesSearchScope(cfg.SeriesSearchQueries[1].SeriesSearchScope); got != SeriesSearchScopeSeasonEpisode {
+		t.Fatalf("expected DefaultTVID scope season_episode, got %q", got)
+	}
+	if cfg.SeriesSearchQueries[1].IncludeYear == nil || *cfg.SeriesSearchQueries[1].IncludeYear {
+		t.Fatalf("expected DefaultTVID year disabled")
 	}
 
 	stream := cfg.Streams[defaultMigratedStreamID]

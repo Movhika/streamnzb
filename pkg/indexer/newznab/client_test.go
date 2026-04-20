@@ -168,6 +168,83 @@ func TestNewznabPagination(t *testing.T) {
 	}
 }
 
+func TestNewznabSearchLimitUsesCapsMaxWhenRequestLimitIsZero(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{Limits: indexer.CapsLimits{Max: 500}}
+
+	_, err := client.Search(indexer.SearchRequest{Limit: 0})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if gotLimit != "500" {
+		t.Fatalf("limit = %q, want %q", gotLimit, "500")
+	}
+}
+
+func TestNewznabSearchLimitFallsBackTo2000WithoutCaps(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+
+	_, err := client.Search(indexer.SearchRequest{Limit: 0})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if gotLimit != "2000" {
+		t.Fatalf("limit = %q, want %q", gotLimit, "2000")
+	}
+}
+
+func TestNewznabSearchLimitKeepsExplicitValueEvenAboveCapsMax(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{Limits: indexer.CapsLimits{Max: 500}}
+
+	_, err := client.Search(indexer.SearchRequest{Limit: 3000})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if gotLimit != "3000" {
+		t.Fatalf("limit = %q, want %q", gotLimit, "3000")
+	}
+}
+
 func TestNewznabPing(t *testing.T) {
 	logger.Init("DEBUG")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -354,7 +431,7 @@ func TestLimitChecksRefreshDailyUsageAfterRollover(t *testing.T) {
 	}
 }
 
-func TestSearchTVTextModeIncludesSeasonEpisodeParamsWhenEnabled(t *testing.T) {
+func TestSearchTVTextModeDoesNotUseTVSearchParams(t *testing.T) {
 	var gotQuery url.Values
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.Query()
@@ -371,12 +448,12 @@ func TestSearchTVTextModeIncludesSeasonEpisodeParamsWhenEnabled(t *testing.T) {
 	client.caps = &indexer.Caps{Searching: indexer.CapsSearching{TVSearch: true}}
 
 	_, err := client.Search(indexer.SearchRequest{
-		Cat:                    "5000",
-		Query:                  "The Last of Us",
-		Season:                 "1",
-		Episode:                "2",
-		UseSeasonEpisodeParams: true,
-		SearchMode:             "text",
+		Cat:               "5000",
+		Query:             "The Last of Us S01E02",
+		Season:            "1",
+		Episode:           "2",
+		SeriesSearchScope: config.SeriesSearchScopeSeasonEpisode,
+		SearchMode:        "text",
 	})
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
@@ -385,14 +462,14 @@ func TestSearchTVTextModeIncludesSeasonEpisodeParamsWhenEnabled(t *testing.T) {
 	if got := gotQuery.Get("t"); got != "search" {
 		t.Fatalf("t = %q, want %q", got, "search")
 	}
-	if got := gotQuery.Get("q"); got != "The Last of Us" {
-		t.Fatalf("q = %q, want %q", got, "The Last of Us")
+	if got := gotQuery.Get("q"); got != "The Last of Us S01E02" {
+		t.Fatalf("q = %q, want %q", got, "The Last of Us S01E02")
 	}
-	if got := gotQuery.Get("season"); got != "1" {
-		t.Fatalf("season = %q, want %q", got, "1")
+	if got := gotQuery.Get("season"); got != "" {
+		t.Fatalf("season = %q, want empty", got)
 	}
-	if got := gotQuery.Get("ep"); got != "2" {
-		t.Fatalf("ep = %q, want %q", got, "2")
+	if got := gotQuery.Get("ep"); got != "" {
+		t.Fatalf("ep = %q, want empty", got)
 	}
 }
 
@@ -413,12 +490,12 @@ func TestSearchTVIDModeKeepsTVSearchParams(t *testing.T) {
 	client.caps = &indexer.Caps{Searching: indexer.CapsSearching{TVSearch: true}}
 
 	_, err := client.Search(indexer.SearchRequest{
-		Cat:                    "5000",
-		TVDBID:                 "121361",
-		Season:                 "1",
-		Episode:                "2",
-		UseSeasonEpisodeParams: true,
-		SearchMode:             "id",
+		Cat:               "5000",
+		TVDBID:            "121361",
+		Season:            "1",
+		Episode:           "2",
+		SeriesSearchScope: config.SeriesSearchScopeSeasonEpisode,
+		SearchMode:        "id",
 	})
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
@@ -435,5 +512,336 @@ func TestSearchTVIDModeKeepsTVSearchParams(t *testing.T) {
 	}
 	if got := gotQuery.Get("ep"); got != "2" {
 		t.Fatalf("ep = %q, want %q", got, "2")
+	}
+}
+
+func TestSearchTVIDModeUsesIMDbIDWhenCapsSupportIt(t *testing.T) {
+	var gotQuery url.Values
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{
+		Searching: indexer.CapsSearching{
+			TVSearch:                true,
+			TVSearchSupportedParams: map[string]bool{"imdbid": true, "season": true, "ep": true},
+		},
+	}
+
+	_, err := client.Search(indexer.SearchRequest{
+		Cat:               "5000",
+		IMDbID:            "tt1190634",
+		Season:            "1",
+		Episode:           "2",
+		SeriesSearchScope: config.SeriesSearchScopeSeasonEpisode,
+		SearchMode:        "id",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if got := gotQuery.Get("t"); got != "tvsearch" {
+		t.Fatalf("t = %q, want %q", got, "tvsearch")
+	}
+	if got := gotQuery.Get("imdbid"); got != "1190634" {
+		t.Fatalf("imdbid = %q, want %q", got, "1190634")
+	}
+	if got := gotQuery.Get("tvdbid"); got != "" {
+		t.Fatalf("tvdbid = %q, want empty", got)
+	}
+}
+
+func TestSearchTVIDModeUsesTMDBIDWhenCapsSupportIt(t *testing.T) {
+	var gotQuery url.Values
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{
+		Searching: indexer.CapsSearching{
+			TVSearch:                true,
+			TVSearchSupportedParams: map[string]bool{"tmdbid": true, "season": true},
+		},
+	}
+
+	_, err := client.Search(indexer.SearchRequest{
+		Cat:               "5000",
+		TMDBID:            "250307",
+		Season:            "1",
+		SeriesSearchScope: config.SeriesSearchScopeSeason,
+		SearchMode:        "id",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if got := gotQuery.Get("tmdbid"); got != "250307" {
+		t.Fatalf("tmdbid = %q, want %q", got, "250307")
+	}
+	if got := gotQuery.Get("season"); got != "1" {
+		t.Fatalf("season = %q, want %q", got, "1")
+	}
+}
+
+func TestSearchTVIDModeSkipsWhenCapsDoNotSupportAvailableIDs(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{
+		Searching: indexer.CapsSearching{
+			TVSearch:                true,
+			TVSearchSupportedParams: map[string]bool{"tvdbid": true, "season": true, "ep": true},
+		},
+	}
+
+	resp, err := client.Search(indexer.SearchRequest{
+		Cat:               "5000",
+		IMDbID:            "tt1190634",
+		Season:            "1",
+		Episode:           "2",
+		SeriesSearchScope: config.SeriesSearchScopeSeasonEpisode,
+		SearchMode:        "id",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if requests != 0 {
+		t.Fatalf("requests = %d, want 0", requests)
+	}
+	if resp == nil || len(resp.Channel.Items) != 0 {
+		t.Fatalf("expected empty response when caps do not support available ids, got %#v", resp)
+	}
+}
+
+func TestSearchMovieIDModeUsesTMDBIDWhenCapsSupportIt(t *testing.T) {
+	var gotQuery url.Values
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{
+		Searching: indexer.CapsSearching{
+			MovieSearch:                true,
+			MovieSearchSupportedParams: map[string]bool{"tmdbid": true},
+		},
+	}
+
+	_, err := client.Search(indexer.SearchRequest{
+		Cat:        "2000",
+		TMDBID:     "83533",
+		SearchMode: "id",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if got := gotQuery.Get("t"); got != "movie" {
+		t.Fatalf("t = %q, want %q", got, "movie")
+	}
+	if got := gotQuery.Get("tmdbid"); got != "83533" {
+		t.Fatalf("tmdbid = %q, want %q", got, "83533")
+	}
+}
+
+func TestSearchTVIDModeOmitsQueryWhenUsingTVSearchParams(t *testing.T) {
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{Searching: indexer.CapsSearching{TVSearch: true}}
+
+	_, err := client.Search(indexer.SearchRequest{
+		Cat:               "5000",
+		Query:             "Star Wars Maul Shadow Lord S01E01",
+		TVDBID:            "462715",
+		Season:            "1",
+		Episode:           "1",
+		SeriesSearchScope: config.SeriesSearchScopeSeasonEpisode,
+		SearchMode:        "id",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if got := gotQuery.Get("t"); got != "tvsearch" {
+		t.Fatalf("t = %q, want %q", got, "tvsearch")
+	}
+	if got := gotQuery.Get("season"); got != "1" {
+		t.Fatalf("season = %q, want %q", got, "1")
+	}
+	if got := gotQuery.Get("ep"); got != "1" {
+		t.Fatalf("ep = %q, want %q", got, "1")
+	}
+	if got := gotQuery.Get("q"); got != "" {
+		t.Fatalf("q = %q, want empty", got)
+	}
+}
+
+func TestSearchTVIDModeKeepsExtraTermsQueryWhenUsingTVSearchParams(t *testing.T) {
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	extra := "remux"
+	client := NewClient(config.IndexerConfig{
+		Name:             "MockIndexer",
+		URL:              server.URL,
+		APIKey:           "test-api-key",
+		ExtraSearchTerms: extra,
+	}, nil)
+	client.caps = &indexer.Caps{Searching: indexer.CapsSearching{TVSearch: true}}
+
+	_, err := client.Search(indexer.SearchRequest{
+		Cat:               "5000",
+		Query:             "Star Wars Maul Shadow Lord S01E01",
+		TVDBID:            "462715",
+		Season:            "1",
+		Episode:           "1",
+		SeriesSearchScope: config.SeriesSearchScopeSeasonEpisode,
+		SearchMode:        "id",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if got := gotQuery.Get("season"); got != "1" {
+		t.Fatalf("season = %q, want %q", got, "1")
+	}
+	if got := gotQuery.Get("ep"); got != "1" {
+		t.Fatalf("ep = %q, want %q", got, "1")
+	}
+	if got := gotQuery.Get("q"); got != extra {
+		t.Fatalf("q = %q, want %q", got, extra)
+	}
+}
+
+func TestSearchTextModeOrdersQueryParams(t *testing.T) {
+	var gotRawQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRawQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{Searching: indexer.CapsSearching{TVSearch: true}}
+
+	_, err := client.Search(indexer.SearchRequest{
+		Cat:               "5000",
+		Query:             "The Last of Us S01E02",
+		Season:            "1",
+		Episode:           "2",
+		SeriesSearchScope: config.SeriesSearchScopeSeasonEpisode,
+		SearchMode:        "text",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	want := "apikey=test-api-key&t=search&cat=5000&q=The+Last+of+Us+S01E02&offset=0&limit=2000&o=xml"
+	if gotRawQuery != want {
+		t.Fatalf("raw query = %q, want %q", gotRawQuery, want)
+	}
+}
+
+func TestSearchTVIDModeOrdersQueryParams(t *testing.T) {
+	var gotRawQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRawQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(config.IndexerConfig{
+		Name:   "MockIndexer",
+		URL:    server.URL,
+		APIKey: "test-api-key",
+	}, nil)
+	client.caps = &indexer.Caps{Searching: indexer.CapsSearching{TVSearch: true}}
+
+	_, err := client.Search(indexer.SearchRequest{
+		Cat:               "5000",
+		TVDBID:            "462715",
+		Season:            "1",
+		Episode:           "1",
+		SeriesSearchScope: config.SeriesSearchScopeSeasonEpisode,
+		SearchMode:        "id",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	want := "apikey=test-api-key&t=tvsearch&cat=5000&tvdbid=462715&season=1&ep=1&offset=0&limit=2000&o=xml"
+	if gotRawQuery != want {
+		t.Fatalf("raw query = %q, want %q", gotRawQuery, want)
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
+	"unicode"
 
 	"streamnzb/pkg/core/logger"
 )
@@ -28,6 +30,49 @@ type DirectBlueprint struct {
 type FailedBlueprint struct {
 	Err    error
 	Target EpisodeTarget
+}
+
+func isPlausibleLargestDirectFallbackName(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return false
+	}
+
+	lower := strings.ToLower(trimmed)
+	if IsVideoFile(lower) {
+		return true
+	}
+
+	switch strings.ToLower(filepath.Ext(trimmed)) {
+	case ".m2ts", ".mts", ".ts", ".tp":
+		return true
+	}
+
+	if filepath.Ext(trimmed) != "" {
+		return false
+	}
+
+	if utfLen := len([]rune(trimmed)); utfLen < 6 {
+		return false
+	}
+
+	letters := 0
+	alphaNum := 0
+	for _, r := range trimmed {
+		switch {
+		case unicode.IsLetter(r):
+			letters++
+			alphaNum++
+		case unicode.IsDigit(r):
+			alphaNum++
+		case strings.ContainsRune(" ._[]()-,'&+", r):
+			continue
+		default:
+			return false
+		}
+	}
+
+	return letters > 0 && alphaNum >= 6
 }
 
 func blueprintTargetMatches(cachedTarget, requestedTarget EpisodeTarget) bool {
@@ -180,6 +225,15 @@ func GetMediaStreamForEpisode(ctx context.Context, files []UnpackableFile, cache
 		if target.Valid() {
 			err := fmt.Errorf("%w: no direct media candidate matched season=%d episode=%d", ErrEpisodeTargetNotFound, target.Season, target.Episode)
 			logger.Warn("Refusing largest-file fallback for targeted episode request",
+				"target", target,
+				"name", extractedName,
+				"index", largestIdx,
+				"size", largestFile.Size())
+			return nil, "", 0, &FailedBlueprint{Err: err, Target: target}, err
+		}
+		if !isPlausibleLargestDirectFallbackName(extractedName) {
+			err := fmt.Errorf("%w: suspicious largest direct fallback candidate %q", io.EOF, extractedName)
+			logger.Warn("Refusing suspicious largest-file fallback",
 				"target", target,
 				"name", extractedName,
 				"index", largestIdx,

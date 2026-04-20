@@ -20,11 +20,19 @@ const (
 	defaultAdminPasswordHash               = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 	DefaultInternalIndexerTimeoutSeconds   = 5
 	DefaultAggregatorIndexerTimeoutSeconds = 10
+	DefaultEasynewsIndexerTimeoutSeconds   = 15
 	DefaultPlaybackStartupTimeoutSeconds   = 5
 	MaxPlaybackStartupTimeoutSeconds       = 60
 	CurrentConfigVersion                   = 2
 	StreamModelConfigVersion               = 2
 	defaultMigratedStreamID                = "default"
+	SeriesSearchScopeSeasonEpisode         = "season_episode"
+	SeriesSearchScopeSeason                = "season"
+	SeriesSearchScopeNone                  = "none"
+	legacySeriesSearchScopeEpisodeParam    = "episode_param"
+	legacySeriesSearchScopeEpisodeQuery    = "episode_query"
+	legacySeriesSearchScopeSeasonParam     = "season_param"
+	legacySeriesSearchScopeSeasonQuery     = "season_query"
 )
 
 type Provider struct {
@@ -64,20 +72,24 @@ type IndexerSearchConfig struct {
 }
 
 type SearchQueryConfig struct {
-	Name                       string `json:"name"`
-	SearchMode                 string `json:"search_mode,omitempty"`
-	SearchResultLimit          int    `json:"search_result_limit,omitempty"`
-	IncludeYearInTextSearch    *bool  `json:"include_year_in_text_search,omitempty"`
+	Name              string `json:"name"`
+	SearchMode        string `json:"search_mode,omitempty"`
+	SearchResultLimit int    `json:"search_result_limit,omitempty"`
+	IncludeYear       *bool  `json:"include_year,omitempty"`
+	// Legacy transport-vs-query hint kept only so older local draft configs still load cleanly.
 	UseSeasonEpisodeParams     *bool  `json:"use_season_episode_params,omitempty"`
+	SeriesSearchScope          string `json:"series_search_scope,omitempty"`
 	EnableSeriesSeasonSearch   *bool  `json:"enable_series_season_search,omitempty"`
 	EnableSeriesCompleteSearch *bool  `json:"enable_series_complete_search,omitempty"`
 	EnableSeriesPackSearch     *bool  `json:"enable_series_pack_search,omitempty"`
 	SearchTitleLanguage        string `json:"search_title_language,omitempty"`
-	MovieCategories            string `json:"movie_categories,omitempty"`
-	TVCategories               string `json:"tv_categories,omitempty"`
-	ExtraSearchTerms           string `json:"extra_search_terms,omitempty"`
-	DisableIdSearch            *bool  `json:"disable_id_search,omitempty"`
-	DisableStringSearch        *bool  `json:"disable_string_search,omitempty"`
+	// Legacy year field kept only so older local draft configs still load cleanly.
+	LegacyIncludeYearInTextSearch *bool  `json:"include_year_in_text_search,omitempty"`
+	MovieCategories               string `json:"movie_categories,omitempty"`
+	TVCategories                  string `json:"tv_categories,omitempty"`
+	ExtraSearchTerms              string `json:"extra_search_terms,omitempty"`
+	DisableIdSearch               *bool  `json:"disable_id_search,omitempty"`
+	DisableStringSearch           *bool  `json:"disable_string_search,omitempty"`
 }
 
 type IndexerConfig struct {
@@ -110,6 +122,9 @@ type IndexerConfig struct {
 func (ic IndexerConfig) EffectiveTimeoutSeconds() int {
 	if ic.TimeoutSeconds > 0 {
 		return ic.TimeoutSeconds
+	}
+	if strings.EqualFold(strings.TrimSpace(ic.Type), "easynews") {
+		return DefaultEasynewsIndexerTimeoutSeconds
 	}
 	if IsAggregatorIndexerType(ic.Type) {
 		return DefaultAggregatorIndexerTimeoutSeconds
@@ -147,6 +162,68 @@ func NormalizeAvailNZBMode(mode string) string {
 		return "off"
 	default:
 		return "on"
+	}
+}
+
+func NormalizeSeriesSearchScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case SeriesSearchScopeSeasonEpisode,
+		SeriesSearchScopeSeason,
+		SeriesSearchScopeNone:
+		return strings.ToLower(strings.TrimSpace(scope))
+	case legacySeriesSearchScopeEpisodeParam,
+		legacySeriesSearchScopeEpisodeQuery:
+		return SeriesSearchScopeSeasonEpisode
+	case legacySeriesSearchScopeSeasonParam,
+		legacySeriesSearchScopeSeasonQuery:
+		return SeriesSearchScopeSeason
+	}
+	return SeriesSearchScopeSeasonEpisode
+}
+
+func normalizeSeriesSearchScopeFromLegacy(scope string, useSeasonEpisodeParams *bool) string {
+	normalizedScope := strings.ToLower(strings.TrimSpace(scope))
+	if normalizedScope != "" {
+		return NormalizeSeriesSearchScope(normalizedScope)
+	}
+	if useSeasonEpisodeParams != nil {
+		return SeriesSearchScopeSeasonEpisode
+	}
+	return normalizedScope
+}
+
+func SeriesSearchScopeUsesSeasonParams(scope, searchMode string) bool {
+	if !strings.EqualFold(strings.TrimSpace(searchMode), "id") {
+		return false
+	}
+	switch NormalizeSeriesSearchScope(scope) {
+	case SeriesSearchScopeSeasonEpisode, SeriesSearchScopeSeason:
+		return true
+	default:
+		return false
+	}
+}
+
+func SeriesSearchScopeSearchTarget(scope, searchMode, season, episode string) (string, string) {
+	if !SeriesSearchScopeUsesSeasonParams(scope, searchMode) {
+		return "", ""
+	}
+	switch NormalizeSeriesSearchScope(scope) {
+	case SeriesSearchScopeSeasonEpisode:
+		return strings.TrimSpace(season), strings.TrimSpace(episode)
+	case SeriesSearchScopeSeason:
+		return strings.TrimSpace(season), ""
+	default:
+		return "", ""
+	}
+}
+
+func SeriesSearchScopeRequiresValidation(scope string) bool {
+	switch NormalizeSeriesSearchScope(scope) {
+	case SeriesSearchScopeSeason, SeriesSearchScopeNone:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -229,8 +306,6 @@ type StreamEntry struct {
 	SeriesSearchQueries []string                       `json:"series_search_queries,omitempty"`
 }
 
-func (c *Config) GetSearchTitleLanguage() string { return "" }
-
 func (sq *SearchQueryConfig) AsIndexerSearchConfig() *IndexerSearchConfig {
 	if sq == nil {
 		return nil
@@ -297,7 +372,7 @@ func (c *Config) GetSearchQueryByName(contentType, name string) *SearchQueryConf
 
 func MergeIndexerSearch(ic *IndexerConfig, override *IndexerSearchConfig, global *Config) *IndexerSearchConfig {
 	out := &IndexerSearchConfig{}
-	const defaultLimit = 1000
+	const defaultLimit = 0
 	out.SearchResultLimit = defaultLimit
 	if ic != nil && ic.SearchResultLimit > 0 {
 		out.SearchResultLimit = ic.SearchResultLimit
@@ -473,9 +548,14 @@ func Load() (*Config, error) {
 	overrides, keys := env.ReadConfigOverrides()
 	ApplyEnvOverrides(cfg, overrides, keys)
 
-	cfg.MigrateLegacyIndexers()
+	if cfg.MigrateLegacyIndexers() {
+		needSave = true
+	}
 
 	if cfg.ApplyProviderDefaults() {
+		needSave = true
+	}
+	if cfg.backfillLegacySearchQuerySettings() {
 		needSave = true
 	}
 	if streamModelUpgrade && cfg.applyStreamModelUpgradeDefaults() {
@@ -526,39 +606,94 @@ func (c *Config) applyStreamModelUpgradeDefaults() bool {
 func (c *Config) ensureDefaultMigrationSearchQueries() bool {
 	changed := false
 	if c.ensureMovieSearchQuery(SearchQueryConfig{
-		Name:                    "DefaultMovieText",
-		SearchMode:              "text",
-		SearchResultLimit:       1000,
-		MovieCategories:         "2000",
-		IncludeYearInTextSearch: ptrBool(true),
+		Name:              "DefaultMovieText",
+		SearchMode:        "text",
+		SearchResultLimit: 0,
+		MovieCategories:   "2000",
+		IncludeYear:       ptrBool(true),
 	}) {
 		changed = true
 	}
 	if c.ensureMovieSearchQuery(SearchQueryConfig{
 		Name:              "DefaultMovieID",
 		SearchMode:        "id",
-		SearchResultLimit: 1000,
+		SearchResultLimit: 0,
 		MovieCategories:   "2000",
+		IncludeYear:       ptrBool(false),
 	}) {
 		changed = true
 	}
 	if c.ensureSeriesSearchQuery(SearchQueryConfig{
-		Name:                   "DefaultTVText",
-		SearchMode:             "text",
-		SearchResultLimit:      1000,
-		TVCategories:           "5000",
-		UseSeasonEpisodeParams: ptrBool(false),
+		Name:              "DefaultTVText",
+		SearchMode:        "text",
+		SearchResultLimit: 0,
+		TVCategories:      "5000",
+		IncludeYear:       ptrBool(true),
+		SeriesSearchScope: SeriesSearchScopeSeasonEpisode,
 	}) {
 		changed = true
 	}
 	if c.ensureSeriesSearchQuery(SearchQueryConfig{
-		Name:                   "DefaultTVID",
-		SearchMode:             "id",
-		SearchResultLimit:      1000,
-		TVCategories:           "5000",
-		UseSeasonEpisodeParams: ptrBool(true),
+		Name:              "DefaultTVID",
+		SearchMode:        "id",
+		SearchResultLimit: 0,
+		TVCategories:      "5000",
+		IncludeYear:       ptrBool(false),
+		SeriesSearchScope: SeriesSearchScopeSeasonEpisode,
 	}) {
 		changed = true
+	}
+	return changed
+}
+
+func backfillLegacySearchQuerySettingsForQuery(query *SearchQueryConfig, isSeries bool) bool {
+	if query == nil {
+		return false
+	}
+	changed := false
+	if query.IncludeYear == nil {
+		switch {
+		case query.LegacyIncludeYearInTextSearch != nil:
+			query.IncludeYear = ptrBool(*query.LegacyIncludeYearInTextSearch)
+		case strings.EqualFold(strings.TrimSpace(query.SearchMode), "id"):
+			query.IncludeYear = ptrBool(false)
+		default:
+			query.IncludeYear = ptrBool(true)
+		}
+		changed = true
+	}
+	if query.LegacyIncludeYearInTextSearch != nil {
+		query.LegacyIncludeYearInTextSearch = nil
+		changed = true
+	}
+	if isSeries {
+		normalizedScope := normalizeSeriesSearchScopeFromLegacy(query.SeriesSearchScope, query.UseSeasonEpisodeParams)
+		if query.SeriesSearchScope != normalizedScope {
+			query.SeriesSearchScope = normalizedScope
+			changed = true
+		}
+	} else if query.SeriesSearchScope != "" {
+		query.SeriesSearchScope = ""
+		changed = true
+	}
+	if query.UseSeasonEpisodeParams != nil {
+		query.UseSeasonEpisodeParams = nil
+		changed = true
+	}
+	return changed
+}
+
+func (c *Config) backfillLegacySearchQuerySettings() bool {
+	changed := false
+	for i := range c.MovieSearchQueries {
+		if backfillLegacySearchQuerySettingsForQuery(&c.MovieSearchQueries[i], false) {
+			changed = true
+		}
+	}
+	for i := range c.SeriesSearchQueries {
+		if backfillLegacySearchQuerySettingsForQuery(&c.SeriesSearchQueries[i], true) {
+			changed = true
+		}
 	}
 	return changed
 }
@@ -744,13 +879,22 @@ func providerNameFromHost(host string) string {
 	return "provider"
 }
 
-func (c *Config) MigrateLegacyIndexers() {
+func (c *Config) MigrateLegacyIndexers() bool {
+	changed := false
 	for i := range c.Indexers {
 		if c.Indexers[i].Enabled == nil {
 			enabled := true
 			c.Indexers[i].Enabled = &enabled
+			changed = true
+		}
+		if strings.EqualFold(strings.TrimSpace(c.Indexers[i].Type), "easynews") {
+			if c.Indexers[i].TimeoutSeconds <= 0 {
+				c.Indexers[i].TimeoutSeconds = DefaultEasynewsIndexerTimeoutSeconds
+				changed = true
+			}
 		}
 	}
+	return changed
 }
 
 func (c *Config) Save() error {

@@ -207,6 +207,13 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
 
   const update = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
   const fieldClass = (key) => fieldErrors[key] ? "border-destructive focus-visible:ring-destructive" : ""
+  const rowClass = "flex flex-col gap-3 min-[360px]:flex-row min-[360px]:items-center min-[360px]:gap-4"
+  const labelClass = "min-w-0 min-[360px]:flex-1"
+  const controlBaseClass = "w-full min-[360px]:ml-auto min-[360px]:shrink-0"
+  const controlWideClass = `${controlBaseClass} min-[360px]:w-[14rem]`
+  const controlNameClass = `${controlBaseClass} flex items-center gap-2 min-[360px]:w-[16.5rem]`
+  const controlNarrowClass = `${controlBaseClass} min-[360px]:w-[9rem]`
+  const controlSwitchClass = `${controlBaseClass} flex min-h-9 items-center`
 
   const handleSave = async () => {
     const nextFieldErrors = {}
@@ -280,11 +287,11 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         <div className="space-y-4">
           <div className="rounded-md border border-border/60 p-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-              <div className="min-w-0 xl:flex-1">
-                <Label className="text-sm font-medium">Provider Name</Label>
+            <div className={rowClass}>
+              <div className={labelClass}>
+                <Label className="text-sm font-medium">Name</Label>
               </div>
-              <div className="flex w-full items-center gap-2 xl:max-w-sm">
+              <div className={controlNameClass}>
                 <Input ref={nameInputRef} className={`h-9 ${fieldClass('name')}`} value={draft.name} onChange={(event) => update('name', event.target.value)} placeholder="e.g. Newshosting" disabled={editing} />
                 {!editing && (
                   <>
@@ -356,11 +363,11 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
           <div className="rounded-md border border-border/60">
 
             <div className="relative p-3">
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                <div className="min-w-0 xl:flex-1">
+              <div className={rowClass}>
+                <div className={labelClass}>
                   <Label className="text-sm font-medium">Host</Label>
                 </div>
-                <div className="w-full xl:max-w-sm">
+                <div className={controlWideClass}>
                   <Input className={`h-9 ${fieldClass('host')}`} value={draft.host} onChange={(event) => update('host', event.target.value)} placeholder="news.example.com" />
                 </div>
               </div>
@@ -368,11 +375,11 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
 
             <div className="relative p-3">
               <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                <div className="min-w-0 xl:flex-1">
+              <div className={rowClass}>
+                <div className={labelClass}>
                   <Label className="text-sm font-medium">Port</Label>
                 </div>
-                <div className="w-full xl:max-w-[8rem]">
+                <div className={controlNarrowClass}>
                   <Input className={`h-9 ${fieldClass('port')}`} type="number" min={1} value={draft.port} onChange={(event) => update('port', event.target.value === '' ? 563 : Number(event.target.value))} />
                 </div>
               </div>
@@ -380,20 +387,24 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
 
             <div className="relative p-3">
               <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-              <div className="flex items-center justify-between gap-4">
-                <div className="text-sm font-medium">SSL</div>
-                <Switch checked={draft.use_ssl} onCheckedChange={(checked) => update('use_ssl', checked === true)} />
+              <div className={rowClass}>
+                <div className={labelClass}>
+                  <Label className="text-sm font-medium">SSL</Label>
+                </div>
+                <div className={controlSwitchClass}>
+                  <Switch checked={draft.use_ssl} onCheckedChange={(checked) => update('use_ssl', checked === true)} />
+                </div>
               </div>
             </div>
           </div>
 
           <div className="rounded-md border border-border/60">
             <div className="p-3">
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                <div className="min-w-0 xl:flex-1">
+              <div className={rowClass}>
+                <div className={labelClass}>
                   <Label className="text-sm font-medium">Username</Label>
                 </div>
-                <div className="w-full xl:max-w-sm">
+                <div className={controlWideClass}>
                   <Input className={`h-9 ${fieldClass('username')}`} value={draft.username} onChange={(event) => update('username', event.target.value)} />
                 </div>
               </div>
@@ -401,11 +412,11 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
 
             <div className="relative p-3">
               <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-                <div className="min-w-0 xl:flex-1">
+              <div className={rowClass}>
+                <div className={labelClass}>
                   <Label className="text-sm font-medium">Password</Label>
                 </div>
-                <div className="w-full xl:max-w-sm">
+                <div className={controlWideClass}>
                   <Input className={`h-9 ${fieldClass('password')}`} type="password" value={draft.password} onChange={(event) => update('password', event.target.value)} />
                 </div>
               </div>
@@ -413,11 +424,11 @@ function ProviderDialog({ open, onOpenChange, initialValue, onSave, onClearStatu
           </div>
 
           <div className="rounded-md border border-border/60 p-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
-              <div className="min-w-0 xl:flex-1">
+            <div className={rowClass}>
+              <div className={labelClass}>
                 <Label className="text-sm font-medium">Connections</Label>
               </div>
-              <div className="w-full xl:max-w-[8rem]">
+              <div className={controlNarrowClass}>
                 <Input className={`h-9 ${fieldClass('connections')}`} type="number" min={1} value={draft.connections} onChange={(event) => update('connections', event.target.value === '' ? 30 : Number(event.target.value))} />
               </div>
             </div>

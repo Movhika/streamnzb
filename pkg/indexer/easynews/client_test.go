@@ -12,6 +12,7 @@ import (
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/release"
 )
 
 func init() {
@@ -56,7 +57,7 @@ func TestGetUsageRefreshesDailyCountersAfterRollover(t *testing.T) {
 	usageData.AllTimeAPIHitsUsed = 30
 	usageData.AllTimeDownloadsUsed = 12
 
-	client, err := NewClient("user", "pass", name, "", 8, 4, 0, usageManager)
+	client, err := NewClient("user", "pass", name, "", 8, 4, 0, 0, usageManager)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestLimitChecksRefreshDailyUsageAfterRollover(t *testing.T) {
 	usageData.APIHitsUsed = 8
 	usageData.DownloadsUsed = 4
 
-	client, err := NewClient("user", "pass", name, "", 8, 4, 0, usageManager)
+	client, err := NewClient("user", "pass", name, "", 8, 4, 0, 0, usageManager)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -106,83 +107,117 @@ func TestLimitChecksRefreshDailyUsageAfterRollover(t *testing.T) {
 
 func TestBuildEasynewsGPSQuery(t *testing.T) {
 	tests := []struct {
-		name                   string
-		query                  string
-		season                 string
-		episode                string
-		useSeasonEpisodeParams bool
-		category               string
-		want                   string
+		name     string
+		query    string
+		season   string
+		episode  string
+		scope    string
+		category string
+		want     string
 	}{
 		{
-			name:                   "tv param mode appends season and episode",
-			query:                  "The Last of Us",
-			season:                 "1",
-			episode:                "2",
-			useSeasonEpisodeParams: true,
-			category:               "5000",
-			want:                   "The Last of Us S01E02",
+			name:     "tv param mode appends season and episode",
+			query:    "The Last of Us",
+			season:   "1",
+			episode:  "2",
+			scope:    config.SeriesSearchScopeSeasonEpisode,
+			category: "5000",
+			want:     "The Last of Us S01E02",
 		},
 		{
-			name:                   "tv query mode keeps prepared query unchanged",
-			query:                  "The Last of Us S01E02",
-			season:                 "1",
-			episode:                "2",
-			useSeasonEpisodeParams: false,
-			category:               "5000",
-			want:                   "The Last of Us S01E02",
+			name:     "tv query mode keeps prepared query unchanged",
+			query:    "The Last of Us S01E02",
+			season:   "1",
+			episode:  "2",
+			scope:    config.SeriesSearchScopeSeasonEpisode,
+			category: "5000",
+			want:     "The Last of Us S01E02",
 		},
 		{
-			name:                   "movie query unchanged",
-			query:                  "The Age of Adaline 2015",
-			season:                 "1",
-			episode:                "2",
-			useSeasonEpisodeParams: true,
-			category:               "2000",
-			want:                   "The Age of Adaline 2015",
+			name:     "season param appends season only",
+			query:    "The Last of Us",
+			season:   "1",
+			scope:    config.SeriesSearchScopeSeason,
+			category: "5000",
+			want:     "The Last of Us S01",
 		},
 		{
-			name:                   "all 5xxx categories are treated as tv",
-			query:                  "The King Who Never Was",
-			season:                 "1",
-			episode:                "1",
-			useSeasonEpisodeParams: true,
-			category:               "5030",
-			want:                   "The King Who Never Was S01E01",
+			name:     "season query keeps prepared season query unchanged",
+			query:    "The Last of Us S01",
+			season:   "1",
+			scope:    config.SeriesSearchScopeSeason,
+			category: "5000",
+			want:     "The Last of Us S01",
 		},
 		{
-			name:                   "normalizes german punctuation and umlauts",
-			query:                  "Bube, Dame, König, grAS",
-			useSeasonEpisodeParams: false,
-			category:               "5000",
-			want:                   "Bube Dame Koenig grAS",
+			name:     "movie query unchanged",
+			query:    "The Age of Adaline 2015",
+			season:   "1",
+			episode:  "2",
+			scope:    config.SeriesSearchScopeSeasonEpisode,
+			category: "2000",
+			want:     "The Age of Adaline 2015",
 		},
 		{
-			name:                   "normalizes original punctuation",
-			query:                  "Lock, Stock & Two Smoking Barrels",
-			useSeasonEpisodeParams: false,
-			category:               "2000",
-			want:                   "Lock Stock Two Smoking Barrels",
+			name:     "all 5xxx categories are treated as tv",
+			query:    "The King Who Never Was",
+			season:   "1",
+			episode:  "1",
+			scope:    config.SeriesSearchScopeSeasonEpisode,
+			category: "5030",
+			want:     "The King Who Never Was S01E01",
 		},
 		{
-			name:                   "normalizes colon punctuation",
-			query:                  "Avatar: Fire and Ash",
-			useSeasonEpisodeParams: false,
-			category:               "2000",
-			want:                   "Avatar Fire and Ash",
+			name:     "trimmed tv category still appends suffix",
+			query:    "The Last of Us",
+			season:   "1",
+			episode:  "2",
+			scope:    config.SeriesSearchScopeSeasonEpisode,
+			category: " 5000",
+			want:     "The Last of Us S01E02",
+		},
+		{
+			name:     "empty tv title returns episode suffix without leading space",
+			query:    "",
+			season:   "1",
+			episode:  "2",
+			scope:    config.SeriesSearchScopeSeasonEpisode,
+			category: "5000",
+			want:     "S01E02",
+		},
+		{
+			name:     "normalizes german punctuation and umlauts",
+			query:    "Bube, Dame, König, grAS",
+			scope:    config.SeriesSearchScopeNone,
+			category: "5000",
+			want:     "Bube Dame Koenig grAS",
+		},
+		{
+			name:     "normalizes original punctuation",
+			query:    "Lock, Stock & Two Smoking Barrels",
+			scope:    config.SeriesSearchScopeNone,
+			category: "2000",
+			want:     "Lock Stock Two Smoking Barrels",
+		},
+		{
+			name:     "normalizes colon punctuation",
+			query:    "Avatar: Fire and Ash",
+			scope:    config.SeriesSearchScopeNone,
+			category: "2000",
+			want:     "Avatar Fire and Ash",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := buildEasynewsGPSQuery(tt.query, tt.season, tt.episode, tt.useSeasonEpisodeParams, tt.category); got != tt.want {
+			if got := buildEasynewsGPSQuery(tt.query, tt.season, tt.episode, tt.scope, tt.category); got != tt.want {
 				t.Fatalf("buildEasynewsGPSQuery() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestNormalizeEasynewsQuery(t *testing.T) {
+func TestNormalizeTitleForSearchQuery(t *testing.T) {
 	tests := []struct {
 		in   string
 		want string
@@ -190,11 +225,12 @@ func TestNormalizeEasynewsQuery(t *testing.T) {
 		{"Bube, Dame, König, grAS", "Bube Dame Koenig grAS"},
 		{"Lock, Stock & Two Smoking Barrels", "Lock Stock Two Smoking Barrels"},
 		{"Avatar: Fire and Ash", "Avatar Fire and Ash"},
+		{"Good Luck, Have Fun, Don't Die", "Good Luck Have Fun Dont Die"},
 	}
 
 	for _, tt := range tests {
-		if got := normalizeEasynewsQuery(tt.in); got != tt.want {
-			t.Fatalf("normalizeEasynewsQuery(%q) = %q, want %q", tt.in, got, tt.want)
+		if got := release.NormalizeTitleForSearchQuery(tt.in); got != tt.want {
+			t.Fatalf("NormalizeTitleForSearchQuery(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }

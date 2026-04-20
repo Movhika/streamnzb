@@ -37,14 +37,15 @@ function uniquePreserveOrder(values) {
 }
 
 function normalizeStreamDraft(draft) {
+  const normalizedFilterSortingMode = draft?.filter_sorting_mode === 'aiostreams' ? 'aiostreams' : 'none'
   return {
-    filter_sorting_mode: draft?.filter_sorting_mode === 'aiostreams' ? 'aiostreams' : 'none',
+    filter_sorting_mode: normalizedFilterSortingMode,
     indexer_mode: draft?.indexer_mode === 'failover' ? 'failover' : 'combine',
     username: (draft?.username || '').trim(),
     use_availnzb: draft?.use_availnzb !== false,
     combine_results: draft?.combine_results !== false,
     enable_failover: draft?.enable_failover !== false,
-    results_mode: draft?.results_mode === 'display_all' ? 'display_all' : 'combined_stream',
+    results_mode: normalizedFilterSortingMode === 'aiostreams' || draft?.results_mode === 'display_all' ? 'display_all' : 'combined_stream',
     providers: uniquePreserveOrder(draft?.providers),
     indexers: uniquePreserveOrder(draft?.indexers),
     indexer_overrides: draft?.indexer_overrides || {},
@@ -136,10 +137,6 @@ function applyFilterSortingMode(current, nextMode) {
     filter_sorting_mode: normalizedMode,
   }
   if (normalizedMode === 'aiostreams') {
-    nextDraft.indexer_mode = 'combine'
-    nextDraft.use_availnzb = true
-    nextDraft.combine_results = true
-    nextDraft.enable_failover = true
     nextDraft.results_mode = 'display_all'
   }
   return normalizeStreamDraft(nextDraft)
@@ -444,7 +441,7 @@ function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', provid
 
         <div className="flex-1 space-y-4 overflow-y-auto px-1">
           <div className="space-y-2">
-            <Label>Stream Name</Label>
+            <Label>Name</Label>
             <Input
               className={fieldErrors.username ? "border-destructive focus-visible:ring-destructive" : ""}
               value={draft.username || ''}
@@ -498,47 +495,43 @@ function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', provid
                   </DropdownMenu>
                 </div>
                 <p className="mt-3 text-sm text-muted-foreground">
-                  Apply a predefined stream profile. AIOStreams locks the settings below to the values needed for that client flow.
+                  Apply a predefined stream profile. AIOStreams keeps the filter behavior, but only forces Results to Display all.
                 </p>
               </div>
 
-              <div className={`relative rounded-md border border-border/60 p-3 ${aiostreamsMode ? 'bg-muted/20' : ''}`}>
+              <div className="rounded-md border border-border/60 p-3">
                 <div className="flex items-center justify-between gap-4">
                   <div className="text-sm font-medium">AvailNZB</div>
                   <Switch
                     checked={draft.use_availnzb}
                     onCheckedChange={(checked) => setDraft((current) => ({ ...current, use_availnzb: checked === true }))}
-                    disabled={aiostreamsMode}
                   />
                 </div>
                 <p className="mt-3 text-sm text-muted-foreground">
                   Use AvailNZB for this stream when AvailNZB is enabled in Network settings.
                 </p>
-                {aiostreamsMode && <div className="pointer-events-none absolute inset-0 rounded-md bg-background/45" />}
               </div>
 
-              <div className={`relative rounded-md border border-border/60 p-3 ${aiostreamsMode ? 'bg-muted/20' : ''}`}>
+              <div className="rounded-md border border-border/60 p-3">
                 <div className="flex items-center justify-between gap-4">
                   <div className="text-sm font-medium">Failover</div>
                   <Switch
                     checked={draft.enable_failover}
                     onCheckedChange={(checked) => setDraft((current) => ({ ...current, enable_failover: checked === true }))}
-                    disabled={aiostreamsMode}
                   />
                 </div>
                 <p className="mt-3 text-sm text-muted-foreground">
                   If enabled, StreamNZB automatically tries the next release in order when the current NZB fails during playback.
                 </p>
-                {aiostreamsMode && <div className="pointer-events-none absolute inset-0 rounded-md bg-background/45" />}
               </div>
 
-              <div className={`relative rounded-md border border-border/60 ${aiostreamsMode ? 'bg-muted/20' : ''}`}>
+              <div className="relative rounded-md border border-border/60">
                 <div className="p-3">
                   <div className="flex items-center justify-between gap-4">
                     <div className="text-sm font-medium">Indexers</div>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button type="button" variant="outline" className="h-9 w-40 justify-between" disabled={aiostreamsMode}>
+                        <Button type="button" variant="outline" className="h-9 w-40 justify-between">
                           <span>{indexerModeLabel(draft.indexer_mode)}</span>
                           <ChevronDown className="h-4 w-4 text-muted-foreground" />
                         </Button>
@@ -564,7 +557,7 @@ function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', provid
                     <div className="text-sm font-medium">Search requests</div>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button type="button" variant="outline" className="h-9 w-40 justify-between" disabled={aiostreamsMode}>
+                        <Button type="button" variant="outline" className="h-9 w-40 justify-between">
                           <span>{searchRequestsLabel(draft.combine_results)}</span>
                           <ChevronDown className="h-4 w-4 text-muted-foreground" />
                         </Button>
@@ -606,11 +599,9 @@ function StreamDialog({ open, onOpenChange, initialStream, mode = 'edit', provid
                     </DropdownMenu>
                   </div>
                   <p className="mt-3 text-sm text-muted-foreground">
-                    Choose whether StreamNZB returns one combined stream or shows every matching result as a separate stream entry.
+                    Choose whether StreamNZB returns one combined stream or shows every matching result as a separate stream entry. AIOStreams always uses Display all.
                   </p>
                 </div>
-
-                {aiostreamsMode && <div className="pointer-events-none absolute inset-0 rounded-md bg-background/45" />}
               </div>
             </div>
           )}
@@ -1028,37 +1019,34 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                   <CardContent className="pt-6">
                     <div className="space-y-4">
                       <div className="space-y-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <h3 className="font-semibold">{stream.username}</h3>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 sm:ml-4 sm:shrink-0">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button type="button" variant="outline" size="icon" onClick={() => setEditingStream(stream)} className="h-9 w-9" aria-label={`Edit ${stream.username} stream`}>
-                                <Settings className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Edit stream</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="icon"
-                                onClick={() => handleCloneStream(stream)}
-                                disabled={actionLoading !== null || loading}
-                                className="h-9 w-9"
-                                aria-label={`Copy ${stream.username} stream`}
-                              >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex items-center gap-2 self-end sm:order-2">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button type="button" variant="outline" size="icon" onClick={() => setEditingStream(stream)} className="h-9 w-9" aria-label={`Edit ${stream.username} stream`}>
+                                  <Settings className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Edit stream</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={() => handleCloneStream(stream)}
+                                  disabled={actionLoading !== null || loading}
+                                  className="h-9 w-9"
+                                  aria-label={`Copy ${stream.username} stream`}
+                                >
                                   {actionLoading === `copy-${stream.username}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Copy stream</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Copy stream</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
                                 <Button type="button" variant="destructive" size="icon" onClick={() => setDeleteTarget(stream.username)} disabled={actionLoading !== null || loading} className="h-9 w-9" aria-label={`Delete ${stream.username} stream`}>
                                   {actionLoading === `delete-${stream.username}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                                 </Button>
@@ -1066,6 +1054,7 @@ function StreamManagement({ globalConfig, movieSearchQueries = [], seriesSearchQ
                               <TooltipContent>Delete stream</TooltipContent>
                             </Tooltip>
                           </div>
+                          <div className="min-w-0 font-semibold sm:order-1">{stream.username}</div>
                         </div>
                       </div>
 

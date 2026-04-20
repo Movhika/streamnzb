@@ -80,42 +80,6 @@ func (a *Aggregator) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, er
 	return nil, lastErr
 }
 
-func (a *Aggregator) ResolveDownloadURL(ctx context.Context, directURL, title string, size int64, cat string) (string, error) {
-	if title == "" {
-		return "", fmt.Errorf("title required to resolve download URL")
-	}
-	req := SearchRequest{Query: title, Limit: 30, Cat: cat}
-	resp, err := a.Search(req)
-	if err != nil {
-		return "", fmt.Errorf("search for resolve: %w", err)
-	}
-	if resp == nil || len(resp.Channel.Items) == 0 {
-		return "", fmt.Errorf("no search results for title")
-	}
-	normTitle := release.NormalizeTitle(title)
-	var bestMatch string
-	for _, item := range resp.Channel.Items {
-		if release.NormalizeTitle(item.Title) != normTitle {
-			continue
-		}
-		if item.Link == "" {
-			continue
-		}
-
-		if size > 0 && item.Size > 0 && item.Size == size {
-			return item.Link, nil
-		}
-
-		if bestMatch == "" {
-			bestMatch = item.Link
-		}
-	}
-	if bestMatch != "" {
-		return bestMatch, nil
-	}
-	return "", fmt.Errorf("no matching release for title in search results")
-}
-
 // isIDOnlySearch returns true when the request is an ID-based search
 // (has IMDb/TVDB IDs and no text query).
 func isIDOnlySearch(req SearchRequest) bool {

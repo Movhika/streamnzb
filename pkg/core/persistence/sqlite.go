@@ -36,6 +36,7 @@ const (
 		release_url TEXT,
 		release_size INTEGER,
 		served_file TEXT,
+		match_type TEXT,
 		success INTEGER NOT NULL,
 		failure_reason TEXT,
 		avail_status TEXT,
@@ -81,6 +82,9 @@ func initSchema(db *sql.DB) error {
 	if err := migrateNzbAttemptsServedFile(db); err != nil {
 		return err
 	}
+	if err := migrateNzbAttemptsMatchType(db); err != nil {
+		return err
+	}
 	if err := migrateNzbAttemptsIndexerName(db); err != nil {
 		return err
 	}
@@ -117,6 +121,14 @@ func migrateNzbAttemptsServedFile(db *sql.DB) error {
 	_, err := db.Exec(`ALTER TABLE nzb_attempts ADD COLUMN served_file TEXT`)
 	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("migrate nzb_attempts.served_file: %w", err)
+	}
+	return nil
+}
+
+func migrateNzbAttemptsMatchType(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE nzb_attempts ADD COLUMN match_type TEXT`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate nzb_attempts.match_type: %w", err)
 	}
 	return nil
 }

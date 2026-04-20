@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"streamnzb/pkg/media/unpack"
+	"streamnzb/pkg/release"
 	"streamnzb/pkg/services/availnzb"
 	"streamnzb/pkg/session"
 )
@@ -61,6 +62,38 @@ func TestRecordAttemptParamsFailureUsesAttemptedProvidersWhenNoUsedProvidersExis
 	params := server.recordAttemptParamsForFailure(sess)
 	if got := params.ProviderName; got != "news-a.example.net, news-b.example.net" {
 		t.Fatalf("ProviderName = %q, want %q", got, "news-a.example.net, news-b.example.net")
+	}
+}
+
+func TestRecordAttemptParamsDerivesSeasonPackMatchType(t *testing.T) {
+	server := &Server{}
+	sess := &session.Session{
+		ContentType: "series",
+		ContentID:   "tt2261227:2:3",
+		Release: &release.Release{
+			Title: "Altered.Carbon.S02.COMPLETE.1080p.NF.WEB-DL.DDP5.1.Atmos.H.264.mkv",
+		},
+	}
+
+	params := server.recordAttemptParamsForOutcome(sess, true)
+	if got := params.MatchType; got != "season_pack" {
+		t.Fatalf("MatchType = %q, want %q", got, "season_pack")
+	}
+}
+
+func TestRecordAttemptParamsDerivesCompletePackMatchType(t *testing.T) {
+	server := &Server{}
+	sess := &session.Session{
+		ContentType: "series",
+		ContentID:   "tt3032476:1:2",
+		Release: &release.Release{
+			Title: "The.Good.Place.Complete.Series.1080p.NF.WEB-DL.DD5.1.x264-GROUP",
+		},
+	}
+
+	params := server.recordAttemptParamsForOutcome(sess, true)
+	if got := params.MatchType; got != "complete_pack" {
+		t.Fatalf("MatchType = %q, want %q", got, "complete_pack")
 	}
 }
 
@@ -147,5 +180,13 @@ func TestCommitGoodAttemptIfQualifiedUsesAvailThresholds(t *testing.T) {
 
 	if committed := server.commitGoodAttemptIfQualified(sess, sess.ID, sess.ID, time.Now()); !committed {
 		t.Fatal("expected custom threshold to commit success")
+	}
+}
+
+func TestPendingAttemptResolutionReason(t *testing.T) {
+	got := pendingAttemptResolutionReason("Playback ended too early to classify this release as good.")
+	want := "Playback probe ended before the good threshold was reached. Playback ended too early to classify this release as good."
+	if got != want {
+		t.Fatalf("pendingAttemptResolutionReason() = %q, want %q", got, want)
 	}
 }

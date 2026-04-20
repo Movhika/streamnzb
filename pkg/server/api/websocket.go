@@ -767,6 +767,21 @@ func (s *Server) validateConfigWithPlan(cfg *config.Config, plan configValidatio
 			if mode != "id" && mode != "text" {
 				errors[fmt.Sprintf("%s.%d.search_mode", prefix, i)] = "Search mode must be id or text"
 			}
+			if prefix == "series_search_queries" {
+				rawScope := strings.ToLower(strings.TrimSpace(query.SeriesSearchScope))
+				if rawScope != "" {
+					normalizedScope := config.NormalizeSeriesSearchScope(rawScope)
+					switch rawScope {
+					case normalizedScope,
+						"episode_param",
+						"episode_query",
+						"season_param",
+						"season_query":
+					default:
+						errors[fmt.Sprintf("%s.%d.series_search_scope", prefix, i)] = "TV scope must be season_episode, season, or none"
+					}
+				}
+			}
 		}
 	}
 

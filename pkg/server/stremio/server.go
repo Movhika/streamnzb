@@ -46,6 +46,7 @@ type Server struct {
 	recordedPreloadSessionIDs sync.Map // session ID -> struct{}; record preload only once per session lifetime
 	recordedFailureSessionIDs sync.Map // session ID -> struct{}; record failure only once per session lifetime (prevents concurrent goroutines from inserting duplicate rows)
 	loggedThresholdSkipIDs    sync.Map // session ID -> struct{}; keep threshold-below logs to a single line per session
+	pendingAttemptResolutions sync.Map // session ID -> int64 token; delayed finalization for short plays/probes
 	nextReleaseIndex          sync.Map // key: streamToken|key.CacheKey() → *nextReleaseCursor; tracks manual "next" progression
 	webHandler                http.Handler
 	apiHandler                http.Handler

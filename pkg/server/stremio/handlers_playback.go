@@ -29,6 +29,7 @@ import (
 	"streamnzb/pkg/media/nzb"
 	"streamnzb/pkg/media/seek"
 	"streamnzb/pkg/media/unpack"
+	searchparser "streamnzb/pkg/search/parser"
 	"streamnzb/pkg/services/availnzb"
 	"streamnzb/pkg/session"
 )
@@ -564,6 +565,9 @@ func streamIndexerOverrides(stream *auth.Stream) map[string]config.IndexerSearch
 }
 
 func streamResultsMode(stream *auth.Stream) string {
+	if streamUsesAIOStreamsProfile(stream) {
+		return "display_all"
+	}
 	if stream == nil || strings.TrimSpace(stream.ResultsMode) == "" {
 		return "combined_stream"
 	}
@@ -615,8 +619,19 @@ func hasResolvedIdentifiers(req indexer.SearchRequest) bool {
 	return strings.TrimSpace(req.IMDbID) != "" || strings.TrimSpace(req.TMDBID) != "" || strings.TrimSpace(req.TVDBID) != ""
 }
 
+func hasUsableIDSearchIdentifier(req indexer.SearchRequest, contentType string) bool {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "movie":
+		return strings.TrimSpace(req.IMDbID) != "" || strings.TrimSpace(req.TMDBID) != ""
+	case "series":
+		return strings.TrimSpace(req.TVDBID) != "" || strings.TrimSpace(req.TMDBID) != "" || strings.TrimSpace(req.IMDbID) != ""
+	default:
+		return hasResolvedIdentifiers(req)
+	}
+}
+
 func hasPreparedTextQueries(req indexer.SearchRequest) bool {
-	return strings.TrimSpace(req.Query) != "" || strings.TrimSpace(req.FilterQuery) != ""
+	return strings.TrimSpace(req.Query) != ""
 }
 
 func looksLikeTMDBID(value string) bool {
@@ -1538,7 +1553,7 @@ func cacheReturnedPlaybackBlueprint(sess *session.Session, bp interface{}) {
 // request-local body stream for a single /play response.
 func (s *Server) openPlaybackSource(ctx context.Context, sess *session.Session) (io.ReadSeekCloser, string, int64, error) {
 	sessionID := sess.ID
-	if _, err := sess.GetOrDownloadNZB(s.sessionManager); err != nil {
+	if _, err := sess.GetOrDownloadNZBWithContext(ctx, s.sessionManager); err != nil {
 		logger.Error("Failed to lazy load NZB", "id", sessionID, "err", err)
 		return nil, "", 0, err
 	}
@@ -1623,7 +1638,7 @@ func (s *Server) prefetchNextFallbackNZB(nextSlotID string, stream *auth.Stream)
 		if err != nil {
 			return
 		}
-		if _, err := sess.GetOrDownloadNZB(s.sessionManager); err != nil {
+		if _, err := sess.GetOrDownloadNZBWithContext(ctx, s.sessionManager); err != nil {
 			logger.Trace("Prefetch NZB failed (next fallback)", "slot", id, "err", err)
 		}
 	}(nextSlotID, stream)
@@ -1851,8 +1866,77 @@ func (s *Server) recordAttemptParamsForOutcome(sess *session.Session, success bo
 		ReleaseURL:   sess.ReleaseURL(),
 		ReleaseSize:  sess.ReportSize(),
 		ServedFile:   sess.SelectedPlaybackFile(),
+		MatchType:    matchTypeForSession(sess, contentType),
 		SlotPath:     sess.ID,
 	}
+}
+
+func matchTypeForSession(sess *session.Session, contentType string) string {
+	if sess == nil || contentType != "series" {
+		return ""
+	}
+	releaseTitle := strings.TrimSpace(sess.ReportReleaseName())
+	if releaseTitle == "" {
+		return ""
+	}
+	targetSeason, targetEpisode := sessionTargetFromAttemptContext(sess)
+	if targetSeason <= 0 {
+		return ""
+	}
+	parsed := searchparser.ParseReleaseTitle(releaseTitle)
+	if parsed == nil {
+		return ""
+	}
+	if targetEpisode > 0 {
+		switch parsed.EpisodeMatchRank(targetSeason, targetEpisode) {
+		case 4:
+			return "exact_episode"
+		case 3:
+			return "multi_episode"
+		case 2:
+			return "season_pack"
+		case 1:
+			return "complete_pack"
+		default:
+			return ""
+		}
+	}
+	switch {
+	case parsed.IsShowPack():
+		return "complete_pack"
+	case parsed.IsSeasonPack(targetSeason):
+		return "season_pack"
+	case parsed.HasSeason(targetSeason):
+		return "season_match"
+	default:
+		return ""
+	}
+}
+
+func sessionTargetFromAttemptContext(sess *session.Session) (int, int) {
+	if sess == nil {
+		return 0, 0
+	}
+	if sess.ContentIDs != nil && sess.ContentIDs.Season > 0 {
+		return sess.ContentIDs.Season, sess.ContentIDs.Episode
+	}
+	contentID := strings.TrimSpace(sess.ContentID)
+	if contentID == "" {
+		return 0, 0
+	}
+	parts := strings.Split(contentID, ":")
+	if len(parts) < 3 {
+		return 0, 0
+	}
+	season, err := strconv.Atoi(strings.TrimSpace(parts[len(parts)-2]))
+	if err != nil || season <= 0 {
+		return 0, 0
+	}
+	episode, err := strconv.Atoi(strings.TrimSpace(parts[len(parts)-1]))
+	if err != nil || episode < 0 {
+		return season, 0
+	}
+	return season, episode
 }
 
 func providerNameFromHosts(hosts []string) string {
@@ -1898,6 +1982,7 @@ func (s *Server) recordAttempt(sess *session.Session, success bool, failureReaso
 	if s.attemptRecorder == nil || sess == nil {
 		return
 	}
+	s.clearPendingAttemptResolution(sess.ID)
 	p := s.recordAttemptParamsForOutcome(sess, success)
 	p.Success = success
 	p.FailureReason = normalizeAttemptReason(failureReason)
@@ -1913,6 +1998,7 @@ func (s *Server) recordFailureAttempt(sess *session.Session, streamErr error, av
 	if s.attemptRecorder == nil || sess == nil {
 		return
 	}
+	s.clearPendingAttemptResolution(sess.ID)
 	p := s.recordAttemptParamsForFailure(sess)
 	p.Success = false
 	p.FailureReason = normalizeAttemptReason(streamErr.Error())
@@ -1936,6 +2022,62 @@ func (s *Server) recordPendingAttempt(sess *session.Session, reason string, avai
 	if s.onAttemptRecorded != nil {
 		s.onAttemptRecorded()
 	}
+	s.schedulePendingAttemptResolution(sess, reason, availOutcome)
+}
+
+const pendingAttemptResolutionDelay = 3 * time.Second
+
+func pendingAttemptResolutionReason(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return "Playback probe ended before the good threshold was reached."
+	}
+	return "Playback probe ended before the good threshold was reached. " + trimmed
+}
+
+func (s *Server) clearPendingAttemptResolution(sessionID string) {
+	if s == nil || sessionID == "" {
+		return
+	}
+	s.pendingAttemptResolutions.Delete(sessionID)
+}
+
+func (s *Server) schedulePendingAttemptResolution(sess *session.Session, reason string, availOutcome availnzb.ReportOutcome) {
+	if s == nil || s.attemptRecorder == nil || sess == nil || sess.ID == "" {
+		return
+	}
+	sessionID := sess.ID
+	token := time.Now().UnixNano()
+	s.pendingAttemptResolutions.Store(sessionID, token)
+	finalReason := pendingAttemptResolutionReason(reason)
+	go func() {
+		ticker := time.NewTicker(pendingAttemptResolutionDelay)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			current, ok := s.pendingAttemptResolutions.Load(sessionID)
+			if !ok || current != token {
+				return
+			}
+			if !sess.IsActivelyServing() {
+				break
+			}
+		}
+
+		s.pendingAttemptResolutions.Delete(sessionID)
+
+		p := s.recordAttemptParamsForOutcome(sess, false)
+		p.Success = false
+		p.FailureReason = normalizeAttemptReason(finalReason)
+		p.AvailStatus = availOutcome.Status
+		p.AvailReason = availOutcome.Reason
+		s.attemptRecorder.ResolvePendingAttempt(p)
+		if s.onAttemptRecorded != nil {
+			s.onAttemptRecorded()
+		}
+		logger.Debug("Resolved stale pending attempt", "session", sessionID, "reason", finalReason)
+	}()
 }
 
 func (s *Server) logBelowGoodThresholdOnce(sess *session.Session, sessionID, requestedSessionID string, serveDuration time.Duration, minBytes int64, minDuration time.Duration, reason string) {

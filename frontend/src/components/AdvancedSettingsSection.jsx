@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
-import { Loader2, Info, AlertTriangle, Save, Paintbrush } from "lucide-react"
+import { Loader2, AlertTriangle, Save, Paintbrush } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -9,6 +9,7 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDes
 import { PasswordInput } from "@/components/ui/password-input"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
+import { normalizeAvailNZBMode } from "@/lib/availnzb"
 import { cn } from "@/lib/utils"
 
 const CARD_FIELDS = {
@@ -33,7 +34,7 @@ function pickInitialValues(values = {}) {
     nzb_history_retention_days: Number.isFinite(parsedRetentionDays) ? parsedRetentionDays : 90,
     memory_limit_mb: Number(values.memory_limit_mb ?? 512),
     playback_startup_timeout_seconds: Number.isFinite(parsedPlaybackStartupTimeout) ? parsedPlaybackStartupTimeout : 5,
-    availnzb_mode: values.availnzb_mode ?? 'on',
+    availnzb_mode: normalizeAvailNZBMode(values.availnzb_mode),
     tmdb_api_key: values.tmdb_api_key ?? '',
     tvdb_api_key: values.tvdb_api_key ?? '',
   }
@@ -59,9 +60,6 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
   initialValues,
   envOverrides,
   isSaving,
-  availNZBStatus,
-  availNZBStatusLoading,
-  availNZBStatusError,
   onPersist,
   onClearCache,
   onRefreshAvailNZBStatus,
@@ -186,12 +184,6 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
       setClearingCache(false)
     }
   }
-
-  const availNZBStatusMessage = availNZBStatusError || availNZBStatus?.status_error || ''
-  const availNZBTrustScore = Number(availNZBStatus?.status?.trust_score)
-  const availNZBInfoClass = Number.isFinite(availNZBTrustScore) && availNZBTrustScore < 100
-    ? 'text-red-600 dark:text-red-300'
-    : 'text-muted-foreground'
 
   return (
     <Form {...form}>
@@ -319,31 +311,15 @@ export const AdvancedSettingsSection = forwardRef(function AdvancedSettingsSecti
                   <FormField control={control} name="availnzb_mode" render={({ field }) => (
                     <FormItem className="rounded-none border-0 p-3">
                       <div className={stackedFieldRowClass}>
-                        <FormLabel className={cn(labelClass, "flex items-center gap-2 sm:flex-1")}>
-                          <span>AvailNZB mode</span>
-                          <TooltipProvider delayDuration={150}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className={cn("inline-flex cursor-help items-center justify-center", availNZBInfoClass)}>
-                                  <span className="sr-only">AvailNZB scoring info</span>
-                                  <Info className="h-4 w-4" />
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent side="bottom" align="start" className="max-w-xs p-3">
-                                <div className="space-y-1 text-xs font-normal">
-                                  <div className="font-medium">{availNZBStatusMessage ? 'AvailNZB status' : 'AvailNZB scoring'}</div>
-                                  <div>"ON" fetches availability data and reports playback results.</div>
-                                  <div>"OFF" skips AvailNZB entirely.</div>
-                                </div>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </FormLabel>
+                        <div className="sm:flex-1">
+                          <FormLabel className={labelClass}>AvailNZB mode</FormLabel>
+                        </div>
                         <FormControl>
-                          <select className={fieldClassName('availnzb_mode', controlSelectClass)} {...field}>
-                            <option value="on">ON</option>
-                            <option value="off">OFF</option>
-                          </select>
+                          <Switch
+                            checked={normalizeAvailNZBMode(field.value) === 'on'}
+                            onCheckedChange={(checked) => field.onChange(checked ? 'on' : 'off')}
+                            className={showUnsavedHighlights && formState.dirtyFields?.availnzb_mode ? 'ring-2 ring-destructive ring-offset-2 ring-offset-background' : ''}
+                          />
                         </FormControl>
                       </div>
                       <FormDescription className="mt-3">Controls whether StreamNZB uses AvailNZB. API key management is automatic.</FormDescription>

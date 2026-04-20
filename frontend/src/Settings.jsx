@@ -8,6 +8,7 @@ import { NetworkSettingsSection } from "@/components/NetworkSettingsSection"
 import { AdvancedSettingsSection } from "@/components/AdvancedSettingsSection"
 import { cn } from "@/lib/utils"
 import { useSettingsState } from './hooks/useSettingsState'
+import { normalizeAvailNZBMode } from './lib/availnzb'
 
 const TABS = [
   { id: 'network', label: 'Network', icon: Network },
@@ -19,15 +20,25 @@ const TABS = [
 
 const ACTIVE_TAB_STORAGE_KEY = 'streamnzb.settings.activeTab'
 
+function normalizeQueryYearSetting(searchMode, includeYear, legacyIncludeYearInTextSearch) {
+  if (includeYear != null) return includeYear === true
+  if (legacyIncludeYearInTextSearch != null) return legacyIncludeYearInTextSearch === true
+  return String(searchMode || '').trim().toLowerCase() !== 'id'
+}
+
+function normalizeSeriesScopeFromLegacy(scope, legacyUseSeasonEpisodeParams) {
+  const normalizedScope = String(scope || '').trim().toLowerCase()
+  if (normalizedScope) return normalizedScope
+  if (legacyUseSeasonEpisodeParams != null) return 'season_episode'
+  return ''
+}
+
 function Settings({
   initialConfig,
   sendCommand,
   saveStatus,
   clearSaveStatus,
   isSaving,
-  availNZBStatus,
-  availNZBStatusLoading,
-  availNZBStatusError,
   onRefreshAvailNZBStatus,
   adminToken,
   indexerCaps,
@@ -83,7 +94,7 @@ function Settings({
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
         proxy_enabled: initialConfig.proxy_enabled !== false,
-        availnzb_mode: initialConfig.availnzb_mode ?? 'on',
+        availnzb_mode: normalizeAvailNZBMode(initialConfig.availnzb_mode),
         tmdb_api_key: initialConfig.tmdb_api_key ?? '',
         tvdb_api_key: initialConfig.tvdb_api_key ?? '',
         indexer_query_header: initialConfig.indexer_query_header ?? '',
@@ -92,7 +103,6 @@ function Settings({
         movie_categories: initialConfig.movie_categories ?? '',
         tv_categories: initialConfig.tv_categories ?? '',
         extra_search_terms: initialConfig.extra_search_terms ?? '',
-        use_season_episode_params: initialConfig.use_season_episode_params,
         memory_limit_mb: Number(initialConfig.memory_limit_mb || 0),
         keep_log_files: Number(initialConfig.keep_log_files ?? 9) || 9,
         nzb_history_retention_days: initialConfig.nzb_history_retention_days == null ? 90 : Number(initialConfig.nzb_history_retention_days),
@@ -117,25 +127,23 @@ function Settings({
           disable_string_search: idx.disable_string_search === true
         })) || [],
         movie_search_queries: initialConfig.movie_search_queries?.map((query) => ({
-          ...query,
           name: query.name || '',
           search_mode: query.search_mode || 'id',
           movie_categories: query.movie_categories || '',
           extra_search_terms: query.extra_search_terms || '',
           search_result_limit: Number(query.search_result_limit || 0),
           search_title_language: query.search_title_language || '',
-          include_year_in_text_search: query.include_year_in_text_search ?? true,
+          include_year: normalizeQueryYearSetting(query.search_mode, query.include_year, query.include_year_in_text_search),
         })) || [],
         series_search_queries: initialConfig.series_search_queries?.map((query) => ({
-          ...query,
           name: query.name || '',
           search_mode: query.search_mode || 'id',
           tv_categories: query.tv_categories || '',
           extra_search_terms: query.extra_search_terms || '',
           search_result_limit: Number(query.search_result_limit || 0),
           search_title_language: query.search_title_language || '',
-          include_year_in_text_search: query.include_year_in_text_search ?? true,
-          use_season_episode_params: query.use_season_episode_params ?? true,
+          include_year: normalizeQueryYearSetting(query.search_mode, query.include_year, query.include_year_in_text_search),
+          series_search_scope: normalizeSeriesScopeFromLegacy(query.series_search_scope, query.use_season_episode_params),
         })) || []
       }
       reset({
@@ -273,9 +281,6 @@ function Settings({
           initialValues={advancedInitialValues}
           envOverrides={envOverrides}
           isSaving={isSaving}
-          availNZBStatus={availNZBStatus}
-          availNZBStatusLoading={availNZBStatusLoading}
-          availNZBStatusError={availNZBStatusError}
           onDirtyChange={handleAdvancedDirtyChange}
           onProceedTabChange={handleAdvancedProceedTabChange}
           onPersist={handleAdvancedPersist}
