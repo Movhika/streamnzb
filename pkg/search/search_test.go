@@ -212,6 +212,21 @@ func TestValidateSearchResultsWithStatsAllowsOptionalAndWordMatches(t *testing.T
 	}
 }
 
+func TestValidateSearchResultsWithStatsRejectsExtraTrailingTitleWords(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "The.Rookie.Feds.S01E01.1080p.WEB-DL.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "series", "The Rookie", "1", "1", true, false)
+
+	if len(filtered) != 0 {
+		t.Fatalf("expected trailing title words to be rejected, got %d results", len(filtered))
+	}
+	if stats.DroppedTitle != 1 {
+		t.Fatalf("expected title rejection for extra trailing words, got %+v", stats)
+	}
+}
+
 func TestRunIndexerSearchesQueryWithIDsDoesNotAlsoRunIDSearch(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{

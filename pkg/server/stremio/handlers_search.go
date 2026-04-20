@@ -99,6 +99,11 @@ func hasUsableResolvedMetadata(params *SearchParams, contentType string) bool {
 	return strings.TrimSpace(metadataDisplayTitle(params.Metadata, contentType)) != ""
 }
 
+func useOriginalTitleLanguage(language string) bool {
+	trimmed := strings.TrimSpace(language)
+	return trimmed == "" || strings.EqualFold(trimmed, "original")
+}
+
 func localizedMovieTitleForLanguage(translations *tmdb.MovieTranslationsResponse, language string) string {
 	if translations == nil || language == "" {
 		return ""
@@ -199,8 +204,13 @@ func buildMovieSearchQueryFromMetadata(metadata *resolvedSearchMetadata, languag
 		return ""
 	}
 	title := strings.TrimSpace(metadata.MovieDetails.Title)
-	if localized := localizedMovieTitleForLanguage(metadata.MovieTranslations, language); localized != "" {
+	if useOriginalTitleLanguage(language) {
+		title = strings.TrimSpace(metadata.MovieDetails.OriginalTitle)
+	} else if localized := localizedMovieTitleForLanguage(metadata.MovieTranslations, language); localized != "" {
 		title = localized
+	}
+	if title == "" {
+		title = strings.TrimSpace(metadata.MovieDetails.Title)
 	}
 	if title == "" {
 		return ""
@@ -292,8 +302,13 @@ func buildSeriesSearchTitleFromMetadata(metadata *resolvedSearchMetadata, langua
 		return ""
 	}
 	title := strings.TrimSpace(metadata.TVDetails.Name)
-	if localized := localizedTVTitleForLanguage(metadata.TVTranslations, language); localized != "" {
+	if useOriginalTitleLanguage(language) {
+		title = strings.TrimSpace(metadata.TVDetails.OriginalName)
+	} else if localized := localizedTVTitleForLanguage(metadata.TVTranslations, language); localized != "" {
 		title = localized
+	}
+	if title == "" {
+		title = strings.TrimSpace(metadata.TVDetails.Name)
 	}
 	if title == "" {
 		return ""

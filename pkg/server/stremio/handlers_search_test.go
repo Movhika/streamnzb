@@ -84,6 +84,35 @@ func TestBuildMovieQueriesFromMetadataAddsGermanTransliterationVariant(t *testin
 	}
 }
 
+func TestBuildMovieQueriesFromMetadataUsesOriginalTitleWhenRequested(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		MovieDetails: &tmdb.MovieDetails{
+			Title:            "Downfall",
+			OriginalTitle:    "Der Untergang",
+			OriginalLanguage: "de",
+			ReleaseDate:      "2004-09-16",
+		},
+		MovieTranslations: &tmdb.MovieTranslationsResponse{
+			Translations: []tmdb.MovieTranslationEntry{
+				{
+					ISO639_1:  "en",
+					ISO3166_1: "US",
+					Data: tmdb.MovieTranslationData{
+						Title: "Downfall",
+					},
+				},
+			},
+		},
+	}
+
+	got := buildMovieQueriesFromMetadata(metadata, "original", false)
+	want := []string{"Der Untergang"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildMovieQueriesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
 func TestBuildSeriesQueriesFromMetadataAddsGermanTransliterationVariant(t *testing.T) {
 	metadata := &resolvedSearchMetadata{
 		TVDetails: &tmdb.TVDetails{
@@ -107,6 +136,35 @@ func TestBuildSeriesQueriesFromMetadataAddsGermanTransliterationVariant(t *testi
 
 	got := buildSeriesQueriesFromMetadata(metadata, "de-DE", false, "1", "2", config.SeriesSearchScopeSeasonEpisode)
 	want := []string{"Koenig der Loewen S01E02"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSeriesQueriesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildSeriesQueriesFromMetadataUsesOriginalTitleWhenRequested(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "Money Heist",
+			OriginalName:     "La Casa de Papel",
+			OriginalLanguage: "es",
+			FirstAirDate:     "2017-05-02",
+		},
+		TVTranslations: &tmdb.TVTranslationsResponse{
+			Translations: []tmdb.TVTranslationEntry{
+				{
+					ISO639_1:  "en",
+					ISO3166_1: "US",
+					Data: tmdb.TVTranslationData{
+						Name: "Money Heist",
+					},
+				},
+			},
+		},
+	}
+
+	got := buildSeriesQueriesFromMetadata(metadata, "original", false, "1", "2", config.SeriesSearchScopeSeasonEpisode)
+	want := []string{"La Casa de Papel S01E02"}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("buildSeriesQueriesFromMetadata() = %#v, want %#v", got, want)

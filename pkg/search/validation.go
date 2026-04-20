@@ -122,10 +122,24 @@ func fuzzyTitleMatches(expect, gotTitle string) bool {
 					return false
 				}
 			}
+			for _, post := range gotWords[i+len(expectWords):] {
+				if !isAllowedTrailingTitleWord(post) {
+					return false
+				}
+			}
 			return true
 		}
 	}
 	return false
+}
+
+func isAllowedTrailingTitleWord(word string) bool {
+	if titleArticles[word] {
+		return true
+	}
+	// Keep short franchise suffixes such as "SVU" or "CI" matching their
+	// base title, while still rejecting broader spin-off titles like "Feds".
+	return len(word) > 0 && len(word) <= 3
 }
 
 func normalizedTitleMatches(expect, gotTitle string) bool {
