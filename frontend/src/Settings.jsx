@@ -20,9 +20,10 @@ const TABS = [
 
 const ACTIVE_TAB_STORAGE_KEY = 'streamnzb.settings.activeTab'
 
-function normalizeValidationTitleLanguage(value) {
-  if (value == null) return ''
-  return String(value)
+function normalizeQueryYearSetting(searchMode, includeYear, legacyIncludeYearInTextSearch) {
+  if (includeYear != null) return includeYear === true
+  if (legacyIncludeYearInTextSearch != null) return legacyIncludeYearInTextSearch === true
+  return String(searchMode || '').trim().toLowerCase() !== 'id'
 }
 
 function Settings({
@@ -95,7 +96,6 @@ function Settings({
         movie_categories: initialConfig.movie_categories ?? '',
         tv_categories: initialConfig.tv_categories ?? '',
         extra_search_terms: initialConfig.extra_search_terms ?? '',
-        use_season_episode_params: initialConfig.use_season_episode_params,
         memory_limit_mb: Number(initialConfig.memory_limit_mb || 0),
         keep_log_files: Number(initialConfig.keep_log_files ?? 9) || 9,
         nzb_history_retention_days: initialConfig.nzb_history_retention_days == null ? 90 : Number(initialConfig.nzb_history_retention_days),
@@ -120,32 +120,23 @@ function Settings({
           disable_string_search: idx.disable_string_search === true
         })) || [],
         movie_search_queries: initialConfig.movie_search_queries?.map((query) => ({
-          ...query,
           name: query.name || '',
           search_mode: query.search_mode || 'id',
           movie_categories: query.movie_categories || '',
           extra_search_terms: query.extra_search_terms || '',
           search_result_limit: Number(query.search_result_limit || 0),
           search_title_language: query.search_title_language || '',
-          include_year_in_text_search: query.include_year_in_text_search ?? true,
-          enable_result_validation: query.enable_result_validation ?? false,
-          validation_title_language: normalizeValidationTitleLanguage(query.validation_title_language),
-          include_year_in_validation: query.include_year_in_validation ?? false,
+          include_year: normalizeQueryYearSetting(query.search_mode, query.include_year, query.include_year_in_text_search),
         })) || [],
         series_search_queries: initialConfig.series_search_queries?.map((query) => ({
-          ...query,
           name: query.name || '',
           search_mode: query.search_mode || 'id',
           tv_categories: query.tv_categories || '',
           extra_search_terms: query.extra_search_terms || '',
           search_result_limit: Number(query.search_result_limit || 0),
           search_title_language: query.search_title_language || '',
-          include_year_in_text_search: query.include_year_in_text_search ?? true,
-          use_season_episode_params: query.use_season_episode_params ?? true,
+          include_year: normalizeQueryYearSetting(query.search_mode, query.include_year, query.include_year_in_text_search),
           series_search_scope: query.series_search_scope || '',
-          enable_result_validation: query.enable_result_validation ?? false,
-          validation_title_language: normalizeValidationTitleLanguage(query.validation_title_language),
-          include_year_in_validation: query.include_year_in_validation ?? false,
         })) || []
       }
       reset({

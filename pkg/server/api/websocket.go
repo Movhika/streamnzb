@@ -770,23 +770,16 @@ func (s *Server) validateConfigWithPlan(cfg *config.Config, plan configValidatio
 			if prefix == "series_search_queries" {
 				rawScope := strings.ToLower(strings.TrimSpace(query.SeriesSearchScope))
 				if rawScope != "" {
+					normalizedScope := config.NormalizeSeriesSearchScope(rawScope)
 					switch rawScope {
-					case config.SeriesSearchScopeEpisodeParam,
-						config.SeriesSearchScopeEpisodeQuery,
-						config.SeriesSearchScopeSeasonParam,
-						config.SeriesSearchScopeSeasonQuery,
-						config.SeriesSearchScopeNone:
+					case normalizedScope,
+						"episode_param",
+						"episode_query",
+						"season_param",
+						"season_query":
 					default:
-						errors[fmt.Sprintf("%s.%d.series_search_scope", prefix, i)] = "TV scope must be episode_param, episode_query, season_param, season_query, or none"
+						errors[fmt.Sprintf("%s.%d.series_search_scope", prefix, i)] = "TV scope must be season_episode, season, or none"
 					}
-				}
-				scope := config.NormalizeSeriesSearchScope(query.SeriesSearchScope, query.UseSeasonEpisodeParams)
-				validationEnabled := true
-				if query.EnableResultValidation != nil {
-					validationEnabled = *query.EnableResultValidation
-				}
-				if config.SeriesSearchScopeRequiresValidation(scope) && !validationEnabled {
-					errors[fmt.Sprintf("%s.%d.enable_result_validation", prefix, i)] = "Validation is required for season and none TV scopes"
 				}
 			}
 		}

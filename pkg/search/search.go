@@ -2,63 +2,13 @@ package search
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/release"
-	"streamnzb/pkg/session"
 )
-
-type TMDBResolver interface {
-	GetMovieTitle(imdbID, tmdbID string) (string, error)
-	GetMovieTitleAndYear(imdbID, tmdbID string) (title, year string, err error)
-	GetMovieTitleForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (string, error)
-	GetTVShowName(tmdbID, imdbID string) (string, error)
-}
-
-type SearchConfig interface {
-	GetSearchTitleLanguage() string
-}
-
-// BuildValidationQuery is a fallback that derives the expected title (and year
-// for movies) from TMDB metadata when the request did not already provide a
-// prepared ValidationQuery. The returned string is empty when TMDB metadata is
-// unavailable.
-func BuildValidationQuery(tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string) string {
-	if tmdbClient == nil {
-		return ""
-	}
-	if contentType == "movie" && contentIDs != nil {
-		if t, y, err := tmdbClient.GetMovieTitleAndYear(contentIDs.ImdbID, req.TMDBID); err == nil && t != "" {
-			if y != "" {
-				return t + " " + y
-			}
-			return t
-		}
-	} else if contentType == "series" {
-		if name, err := tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil && name != "" {
-			seasonNum, seasonErr := strconv.Atoi(req.Season)
-			epNum, episodeErr := strconv.Atoi(req.Episode)
-			switch {
-			case req.Season != "" && req.Episode != "":
-				if seasonErr == nil && episodeErr == nil {
-					return fmt.Sprintf("%s S%02dE%02d", name, seasonNum, epNum)
-				}
-				return fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
-			case req.Season != "":
-				if seasonNum > 0 {
-					return fmt.Sprintf("%s S%02d", name, seasonNum)
-				}
-				return fmt.Sprintf("%s S%s", name, req.Season)
-			}
-			return name
-		}
-	}
-	return ""
-}
 
 func compactValidationQueryForLog(query string) string {
 	query = strings.Join(strings.Fields(strings.TrimSpace(query)), " ")
@@ -68,19 +18,15 @@ func compactValidationQueryForLog(query string) string {
 	return strings.TrimSpace(query[:93]) + "..."
 }
 
-func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string, cfg SearchConfig) ([]*release.Release, error) {
+func RunIndexerSearches(idx indexer.Indexer, req indexer.SearchRequest, contentType string) ([]*release.Release, error) {
 	if idx == nil {
 		return nil, nil
 	}
-	_ = cfg
 
 	runIDSearch := strings.EqualFold(strings.TrimSpace(req.SearchMode), "id")
 	searchReq := req
 
 	validationQuery := req.ValidationQuery
-	if req.EnableResultValidation && (req.EnableTitleValidation || req.EnableYearValidation) && validationQuery == "" {
-		validationQuery = BuildValidationQuery(tmdbClient, req, contentType, contentIDs, imdbForText, tmdbForText)
-	}
 
 	if !runIDSearch && strings.TrimSpace(req.Query) != "" {
 		searchReq.SearchMode = "text"
@@ -153,46 +99,39 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 	}
 
 	var validationStats ValidationStats
-	if req.EnableResultValidation {
-		releases, validationStats = ValidateSearchResultsWithStats(releases, contentType, validationQuery, req.Season, req.Episode, req.EnableTitleValidation, req.EnableYearValidation)
-		validationAttrs := []any{
-			"stream", req.StreamLabel,
-			"request", req.RequestLabel,
-			"mode", func() string {
-				if runIDSearch {
-					return "id"
-				}
-				return "text"
-			}(),
-			"type", contentType,
-			"validation_query", compactValidationQueryForLog(validationQuery),
-			"validation_query_length", len(strings.TrimSpace(validationQuery)),
-			"title_validation", validationStats.TitleValidationApplied,
-			"year_validation", validationStats.YearValidationApplied,
-			"expected_title", validationStats.ExpectedTitle,
-			"expected_year", validationStats.ExpectedYear,
-			"raw_results", validationStats.RawResults,
-			"final_results", validationStats.FinalResults,
-			"rejected_results", validationStats.RejectedResults,
-			"dropped_title", validationStats.DroppedTitle,
+	releases, validationStats = ValidateSearchResultsWithStats(releases, contentType, validationQuery, req.Season, req.Episode, true, req.EnableYearValidation)
+	validationAttrs := []any{
+		"stream", req.StreamLabel,
+		"request", req.RequestLabel,
+		"mode", func() string {
+			if runIDSearch {
+				return "id"
+			}
+			return "text"
+		}(),
+		"type", contentType,
+		"validation_query", compactValidationQueryForLog(validationQuery),
+		"raw_results", validationStats.RawResults,
+		"final_results", validationStats.FinalResults,
+		"rejected_results", validationStats.RejectedResults,
+		"dropped_title", validationStats.DroppedTitle,
+		"dropped_year", validationStats.DroppedYear,
+	}
+	if contentType == "series" {
+		validationAttrs = append(validationAttrs,
+			"scope", config.NormalizeSeriesSearchScope(req.SeriesSearchScope),
+			"expected_season", validationStats.ExpectedSeason,
+			"expected_episode", validationStats.ExpectedEpisode,
 			"dropped_episode_request", validationStats.DroppedEpisodeRequest,
 			"dropped_season", validationStats.DroppedSeason,
-			"dropped_year", validationStats.DroppedYear,
 			"accepted_exact_episode", validationStats.AcceptedExactEpisode,
 			"accepted_multi_episode", validationStats.AcceptedMultiEpisode,
 			"accepted_season_pack", validationStats.AcceptedSeasonPack,
 			"accepted_complete_pack", validationStats.AcceptedCompletePack,
 			"accepted_season_match", validationStats.AcceptedSeasonMatch,
-		}
-		if contentType == "series" {
-			validationAttrs = append(validationAttrs,
-				"scope", config.NormalizeSeriesSearchScope(req.SeriesSearchScope, nil),
-				"expected_season", validationStats.ExpectedSeason,
-				"expected_episode", validationStats.ExpectedEpisode,
-			)
-		}
-		logger.Debug("Search request validation", validationAttrs...)
+		)
 	}
+	logger.Debug("Search request validation", validationAttrs...)
 
 	switch {
 	case !runIDSearch:
@@ -202,7 +141,6 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 			"mode", "text",
 			"raw_results", len(rawReleases),
 			"final_results", len(releases),
-			"validation_enabled", req.EnableResultValidation,
 		)
 	default:
 		logger.Debug("Search request finished",
@@ -211,7 +149,6 @@ func RunIndexerSearches(idx indexer.Indexer, tmdbClient TMDBResolver, req indexe
 			"mode", "id",
 			"raw_results", len(rawReleases),
 			"final_results", len(releases),
-			"validation_enabled", req.EnableResultValidation,
 		)
 	}
 	return releases, nil

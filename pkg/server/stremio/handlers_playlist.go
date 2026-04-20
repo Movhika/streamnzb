@@ -2,7 +2,6 @@ package stremio
 
 import (
 	"context"
-	"sort"
 	"strings"
 	"time"
 
@@ -239,48 +238,9 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 		unified = append(unified, releaseWithAvail{rel: r, avail: avail})
 	}
 
-	releasesOnly := make([]*release.Release, 0, len(unified))
-	for _, u := range unified {
-		releasesOnly = append(releasesOnly, u.rel)
-	}
-	candidates := s.triageService.Filter(releasesOnly)
-	releaseScores := make(map[string]struct {
-		Fits  bool
-		Score int
-	}, len(candidates))
-	for _, c := range candidates {
-		if c.Release == nil {
-			continue
-		}
-		releaseScores[release.Key(c.Release)] = struct {
-			Fits  bool
-			Score int
-		}{Fits: true, Score: c.Score}
-	}
-
-	streamInfos := []SearchStreamInfo{{ID: defaultStreamID, Name: "StreamNZB"}}
-
-	sort.Slice(unified, func(i, j int) bool {
-		si := releaseScores[release.Key(unified[i].rel)].Score
-		sj := releaseScores[release.Key(unified[j].rel)].Score
-		if si != sj {
-			return si > sj
-		}
-		availOrder := map[string]int{"Available": 2, "Unknown": 1, "Unavailable": 0}
-		return availOrder[unified[i].avail] > availOrder[unified[j].avail]
-	})
-
 	releasesOut := make([]SearchReleaseTag, 0, len(unified))
 	for _, u := range unified {
 		r := u.rel
-		key := release.Key(r)
-		ts := releaseScores[key]
-		tags := []SearchStreamTag{{
-			StreamID:   defaultStreamID,
-			StreamName: "StreamNZB",
-			Fits:       ts.Fits,
-			Score:      ts.Score,
-		}}
 		idxName := r.Indexer
 		if idxName == "" && r.SourceIndexer != nil {
 			if idx, ok := r.SourceIndexer.(indexer.Indexer); ok {
@@ -297,11 +257,10 @@ func (s *Server) GetSearchReleases(ctx context.Context, contentType, id string) 
 			Size:         r.Size,
 			Indexer:      idxName,
 			Availability: u.avail,
-			StreamTags:   tags,
 		})
 	}
 
-	return &SearchReleasesResponse{Streams: streamInfos, Releases: releasesOut}, nil
+	return &SearchReleasesResponse{Releases: releasesOut}, nil
 }
 
 func populateAvailable(raw *rawSearchResult) {

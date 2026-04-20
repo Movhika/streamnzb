@@ -12,6 +12,7 @@ import (
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/release"
 )
 
 func init() {
@@ -56,7 +57,7 @@ func TestGetUsageRefreshesDailyCountersAfterRollover(t *testing.T) {
 	usageData.AllTimeAPIHitsUsed = 30
 	usageData.AllTimeDownloadsUsed = 12
 
-	client, err := NewClient("user", "pass", name, "", 8, 4, 0, usageManager)
+	client, err := NewClient("user", "pass", name, "", 8, 4, 0, 0, usageManager)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestLimitChecksRefreshDailyUsageAfterRollover(t *testing.T) {
 	usageData.APIHitsUsed = 8
 	usageData.DownloadsUsed = 4
 
-	client, err := NewClient("user", "pass", name, "", 8, 4, 0, usageManager)
+	client, err := NewClient("user", "pass", name, "", 8, 4, 0, 0, usageManager)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -119,7 +120,7 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			query:    "The Last of Us",
 			season:   "1",
 			episode:  "2",
-			scope:    config.SeriesSearchScopeEpisodeParam,
+			scope:    config.SeriesSearchScopeSeasonEpisode,
 			category: "5000",
 			want:     "The Last of Us S01E02",
 		},
@@ -128,7 +129,7 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			query:    "The Last of Us S01E02",
 			season:   "1",
 			episode:  "2",
-			scope:    config.SeriesSearchScopeEpisodeQuery,
+			scope:    config.SeriesSearchScopeSeasonEpisode,
 			category: "5000",
 			want:     "The Last of Us S01E02",
 		},
@@ -136,7 +137,7 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			name:     "season param appends season only",
 			query:    "The Last of Us",
 			season:   "1",
-			scope:    config.SeriesSearchScopeSeasonParam,
+			scope:    config.SeriesSearchScopeSeason,
 			category: "5000",
 			want:     "The Last of Us S01",
 		},
@@ -144,7 +145,7 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			name:     "season query keeps prepared season query unchanged",
 			query:    "The Last of Us S01",
 			season:   "1",
-			scope:    config.SeriesSearchScopeSeasonQuery,
+			scope:    config.SeriesSearchScopeSeason,
 			category: "5000",
 			want:     "The Last of Us S01",
 		},
@@ -153,7 +154,7 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			query:    "The Age of Adaline 2015",
 			season:   "1",
 			episode:  "2",
-			scope:    config.SeriesSearchScopeEpisodeParam,
+			scope:    config.SeriesSearchScopeSeasonEpisode,
 			category: "2000",
 			want:     "The Age of Adaline 2015",
 		},
@@ -162,7 +163,7 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			query:    "The King Who Never Was",
 			season:   "1",
 			episode:  "1",
-			scope:    config.SeriesSearchScopeEpisodeParam,
+			scope:    config.SeriesSearchScopeSeasonEpisode,
 			category: "5030",
 			want:     "The King Who Never Was S01E01",
 		},
@@ -171,7 +172,7 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			query:    "The Last of Us",
 			season:   "1",
 			episode:  "2",
-			scope:    config.SeriesSearchScopeEpisodeParam,
+			scope:    config.SeriesSearchScopeSeasonEpisode,
 			category: " 5000",
 			want:     "The Last of Us S01E02",
 		},
@@ -180,7 +181,7 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 			query:    "",
 			season:   "1",
 			episode:  "2",
-			scope:    config.SeriesSearchScopeEpisodeParam,
+			scope:    config.SeriesSearchScopeSeasonEpisode,
 			category: "5000",
 			want:     "S01E02",
 		},
@@ -216,7 +217,7 @@ func TestBuildEasynewsGPSQuery(t *testing.T) {
 	}
 }
 
-func TestNormalizeEasynewsQuery(t *testing.T) {
+func TestNormalizeTitleForSearchQuery(t *testing.T) {
 	tests := []struct {
 		in   string
 		want string
@@ -224,11 +225,12 @@ func TestNormalizeEasynewsQuery(t *testing.T) {
 		{"Bube, Dame, König, grAS", "Bube Dame Koenig grAS"},
 		{"Lock, Stock & Two Smoking Barrels", "Lock Stock Two Smoking Barrels"},
 		{"Avatar: Fire and Ash", "Avatar Fire and Ash"},
+		{"Good Luck, Have Fun, Don't Die", "Good Luck Have Fun Dont Die"},
 	}
 
 	for _, tt := range tests {
-		if got := normalizeEasynewsQuery(tt.in); got != tt.want {
-			t.Fatalf("normalizeEasynewsQuery(%q) = %q, want %q", tt.in, got, tt.want)
+		if got := release.NormalizeTitleForSearchQuery(tt.in); got != tt.want {
+			t.Fatalf("NormalizeTitleForSearchQuery(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }

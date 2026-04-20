@@ -37,10 +37,8 @@ export function fieldToTab(fieldName) {
       'disable_string_search',
       'search_result_limit',
       'search_title_language',
+      'include_year',
       'series_search_scope',
-      'enable_result_validation',
-      'validation_title_language',
-      'include_year_in_validation',
     ]
     if (searchQueryFields.some((suffix) => fieldName.endsWith(`.${suffix}`))) return 'search_query'
     return 'indexers'
@@ -94,6 +92,12 @@ function summarizeConfigErrors(errors, sourceTab, values) {
   }
   if (sourceTab === 'indexers') {
     return buildNamedValidationSummary(errors, 'indexers', values?.indexers, 'Indexer')
+  }
+  if (sourceTab === 'search_query') {
+    const movieSummary = buildNamedValidationSummary(errors, 'movie_search_queries', values?.movie_search_queries, 'Movie Query')
+    const seriesSummary = buildNamedValidationSummary(errors, 'series_search_queries', values?.series_search_queries, 'Show Query')
+    if (movieSummary && seriesSummary) return `${movieSummary} | ${seriesSummary}`
+    return movieSummary || seriesSummary
   }
   return ''
 }
@@ -292,9 +296,16 @@ export function useSettingsState({
       const summary = summarizeConfigErrors(error?.fieldErrors, sourceTab, {
         providers: getValues('providers'),
         indexers: getValues('indexers'),
+        movie_search_queries: getValues('movie_search_queries'),
+        series_search_queries: getValues('series_search_queries'),
       })
       if (summary) {
         error.message = summary
+      } else if (error?.fieldErrors) {
+        const firstFieldError = Object.values(error.fieldErrors).find((message) => typeof message === 'string' && message.trim() !== '')
+        if (firstFieldError) {
+          error.message = firstFieldError
+        }
       }
       console.error('Error saving configuration:', error)
       if (sourceTab !== 'network' && sourceTab !== 'advanced' && sourceTab !== 'providers' && sourceTab !== 'indexers') {

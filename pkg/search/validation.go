@@ -21,7 +21,7 @@ func movieYearMatches(expectYear, gotYear int) bool {
 }
 
 func parseValidationQuery(validationQuery string) (normTitle string, year int) {
-	norm := release.NormalizeTitle(validationQuery)
+	norm := strings.ToLower(strings.TrimSpace(release.NormalizeTitleForSearchQuery(validationQuery)))
 	norm = strings.TrimSpace(norm)
 	if norm == "" {
 		return "", 0
@@ -44,7 +44,7 @@ func parseValidationQuery(validationQuery string) (normTitle string, year int) {
 }
 
 func parseSeriesValidationQuery(validationQuery string) (string, int) {
-	norm := release.NormalizeTitle(validationQuery)
+	norm := strings.ToLower(strings.TrimSpace(release.NormalizeTitleForSearchQuery(validationQuery)))
 	norm = strings.TrimSpace(norm)
 	if norm == "" {
 		return "", 0
@@ -61,6 +61,21 @@ func parseSeriesValidationQuery(validationQuery string) (string, int) {
 }
 
 var titleArticles = map[string]bool{"the": true, "a": true, "an": true}
+var optionalTitleWords = map[string]bool{"and": true}
+
+func filterOptionalTitleWords(words []string) []string {
+	if len(words) == 0 {
+		return words
+	}
+	filtered := make([]string, 0, len(words))
+	for _, word := range words {
+		if optionalTitleWords[word] {
+			continue
+		}
+		filtered = append(filtered, word)
+	}
+	return filtered
+}
 
 func titleWordsForMatch(s string) []string {
 	if parsed := parser.ParseReleaseTitle(s); parsed != nil {
@@ -68,7 +83,7 @@ func titleWordsForMatch(s string) []string {
 			s = parsedTitle
 		}
 	}
-	return release.NormalizeTitleWordsForMatch(s)
+	return filterOptionalTitleWords(release.NormalizeTitleWordsForMatch(s))
 }
 
 func fuzzyTitleMatches(expect, gotTitle string) bool {

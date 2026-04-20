@@ -105,7 +105,7 @@ func TestBuildSeriesQueriesFromMetadataAddsGermanTransliterationVariant(t *testi
 		},
 	}
 
-	got := buildSeriesQueriesFromMetadata(metadata, "de-DE", false, "1", "2", config.SeriesSearchScopeEpisodeQuery)
+	got := buildSeriesQueriesFromMetadata(metadata, "de-DE", false, "1", "2", config.SeriesSearchScopeSeasonEpisode)
 	want := []string{"Koenig der Loewen S01E02"}
 
 	if !reflect.DeepEqual(got, want) {
@@ -128,8 +128,7 @@ func TestBuildSearchParamsFromBaseSeriesIDQueryModeMovesSeasonEpisodeIntoQuery(t
 	}
 
 	params, err := srv.buildSearchParamsFromBase(base, &config.SearchQueryConfig{
-		SearchMode:             "id",
-		UseSeasonEpisodeParams: boolPtr(false),
+		SearchMode: "id",
 	})
 	if err != nil {
 		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
@@ -161,8 +160,7 @@ func TestBuildSearchParamsFromBaseSeriesTextQueryModeKeepsSeasonEpisodeForLaterD
 	}
 
 	params, err := srv.buildSearchParamsFromBase(base, &config.SearchQueryConfig{
-		SearchMode:             "text",
-		UseSeasonEpisodeParams: boolPtr(false),
+		SearchMode: "text",
 	})
 	if err != nil {
 		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
@@ -219,12 +217,9 @@ func TestBuildSearchParamsFromBaseTextModeUsesRequestLanguageNotPerIndexerOverri
 	}
 
 	params, err := srv.buildSearchParamsFromBase(base, &config.SearchQueryConfig{
-		SearchMode:              "text",
-		SearchTitleLanguage:     "de-DE",
-		IncludeYearInTextSearch: boolPtr(false),
-		ValidationTitleLanguage: "de-DE",
-		IncludeYearInValidation: boolPtr(false),
-		EnableResultValidation:  boolPtr(true),
+		SearchMode:          "text",
+		SearchTitleLanguage: "de-DE",
+		IncludeYear:         boolPtr(false),
 	})
 	if err != nil {
 		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
@@ -233,8 +228,95 @@ func TestBuildSearchParamsFromBaseTextModeUsesRequestLanguageNotPerIndexerOverri
 	if params.Req.Query != "Koenig der Loewen" {
 		t.Fatalf("expected request-level localized query, got %q", params.Req.Query)
 	}
-	if params.Req.ValidationQuery != "König der Löwen" {
-		t.Fatalf("expected validation query to match request query, got %q", params.Req.ValidationQuery)
+	if params.Req.ValidationQuery != "Koenig der Loewen" {
+		t.Fatalf("expected validation query to use the normalized localized title, got %q", params.Req.ValidationQuery)
+	}
+}
+
+func TestSearchRequestNormalisationLogValuesIncludesOriginalTitle(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		MovieDetails: &tmdb.MovieDetails{
+			Title:            "The Lion King",
+			OriginalTitle:    "The Lion King",
+			OriginalLanguage: "en",
+			ReleaseDate:      "1994-06-15",
+		},
+		MovieTranslations: &tmdb.MovieTranslationsResponse{
+			Translations: []tmdb.MovieTranslationEntry{
+				{
+					ISO639_1:  "de",
+					ISO3166_1: "DE",
+					Data: tmdb.MovieTranslationData{
+						Title: "König der Löwen",
+					},
+				},
+			},
+		},
+	}
+
+	originalTitle, inputTitle, normalizedTitle, ok := searchRequestNormalisationLogValues(
+		metadata,
+		"movie",
+		"de-DE",
+		true,
+		"",
+		"",
+		"",
+	)
+	if !ok {
+		t.Fatal("expected normalisation log values")
+	}
+	if originalTitle != "The Lion King" {
+		t.Fatalf("originalTitle = %q, want %q", originalTitle, "The Lion King")
+	}
+	if inputTitle != "König der Löwen" {
+		t.Fatalf("inputTitle = %q, want %q", inputTitle, "König der Löwen")
+	}
+	if normalizedTitle != "Koenig der Loewen" {
+		t.Fatalf("normalizedTitle = %q, want %q", normalizedTitle, "Koenig der Loewen")
+	}
+}
+
+func TestSearchRequestNormalisationLogValuesOmitsSeriesScopeSuffix(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "The Rookie",
+			OriginalName:     "The Rookie",
+			OriginalLanguage: "en",
+			FirstAirDate:     "2018-10-16",
+		},
+		TVTranslations: &tmdb.TVTranslationsResponse{
+			Translations: []tmdb.TVTranslationEntry{
+				{
+					ISO639_1: "de",
+					Data: tmdb.TVTranslationData{
+						Name: "König der Löwen",
+					},
+				},
+			},
+		},
+	}
+
+	originalTitle, inputTitle, normalizedTitle, ok := searchRequestNormalisationLogValues(
+		metadata,
+		"series",
+		"de-DE",
+		false,
+		"1",
+		"2",
+		config.SeriesSearchScopeSeasonEpisode,
+	)
+	if !ok {
+		t.Fatal("expected normalisation log values")
+	}
+	if originalTitle != "The Rookie" {
+		t.Fatalf("originalTitle = %q, want %q", originalTitle, "The Rookie")
+	}
+	if inputTitle != "König der Löwen" {
+		t.Fatalf("inputTitle = %q, want %q", inputTitle, "König der Löwen")
+	}
+	if normalizedTitle != "Koenig der Loewen" {
+		t.Fatalf("normalizedTitle = %q, want %q", normalizedTitle, "Koenig der Loewen")
 	}
 }
 
@@ -257,7 +339,7 @@ func TestBuildSearchParamsBaseNumericIDMapsToTMDBID(t *testing.T) {
 	}
 }
 
-func TestBuildSearchParamsFromBaseLeavesLegacyValidationOffByDefault(t *testing.T) {
+func TestBuildSearchParamsFromBaseAlwaysBuildsValidationInputs(t *testing.T) {
 	srv := &Server{config: &config.Config{}}
 	base := &SearchParams{
 		ContentType: "movie",
@@ -286,11 +368,11 @@ func TestBuildSearchParamsFromBaseLeavesLegacyValidationOffByDefault(t *testing.
 		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
 	}
 
-	if params.Req.EnableResultValidation {
-		t.Fatalf("expected legacy search query validation to stay disabled by default")
+	if params.Req.EnableYearValidation {
+		t.Fatalf("expected year validation to stay disabled by default for ID searches")
 	}
-	if params.Req.ValidationQuery != "" {
-		t.Fatalf("expected no validation query when validation is off, got %q", params.Req.ValidationQuery)
+	if params.Req.ValidationQuery != "The Lion King" {
+		t.Fatalf("expected validation query to use the metadata title, got %q", params.Req.ValidationQuery)
 	}
 }
 
@@ -300,13 +382,10 @@ func TestRunConfiguredSearchRequestsKeepsMetadataValidationQueryForTextSearch(t 
 		config: &config.Config{
 			MovieSearchQueries: []config.SearchQueryConfig{
 				{
-					Name:                    "MovieQuery03",
-					SearchMode:              "text",
-					SearchTitleLanguage:     "de-DE",
-					IncludeYearInTextSearch: boolPtr(false),
-					EnableResultValidation:  boolPtr(true),
-					ValidationTitleLanguage: "de-DE",
-					IncludeYearInValidation: boolPtr(true),
+					Name:                "MovieQuery03",
+					SearchMode:          "text",
+					SearchTitleLanguage: "de-DE",
+					IncludeYear:         boolPtr(true),
 				},
 			},
 		},
@@ -349,15 +428,15 @@ func TestRunConfiguredSearchRequestsKeepsMetadataValidationQueryForTextSearch(t 
 		},
 	}
 
-	_, executed, err := srv.runConfiguredSearchRequests("movie", "tmdb:1084242", "Stream01", nil, []string{"MovieQuery03"}, params, nil)
+	_, executed, err := srv.runConfiguredSearchRequests("movie", "tmdb:1084242", "Stream01", nil, []string{"MovieQuery03"}, params)
 	if err != nil {
 		t.Fatalf("runConfiguredSearchRequests() error = %v", err)
 	}
 	if executed != 1 {
 		t.Fatalf("executedRequests = %d, want 1", executed)
 	}
-	if rec.lastReq.Query != "Zoomania 2" {
-		t.Fatalf("Query = %q, want %q", rec.lastReq.Query, "Zoomania 2")
+	if rec.lastReq.Query != "Zoomania 2 2025" {
+		t.Fatalf("Query = %q, want %q", rec.lastReq.Query, "Zoomania 2 2025")
 	}
 	if rec.lastReq.ValidationQuery != "Zoomania 2 2025" {
 		t.Fatalf("ValidationQuery = %q, want %q", rec.lastReq.ValidationQuery, "Zoomania 2 2025")

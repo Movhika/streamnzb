@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/env"
@@ -36,6 +37,64 @@ type Client struct {
 	usageManager      *indexer.UsageManager
 	requestLimiter    *indexer.RequestLimiter
 	mu                sync.RWMutex
+}
+
+var orderedSearchQueryKeys = []string{
+	"apikey",
+	"t",
+	"cat",
+	"imdbid",
+	"tmdbid",
+	"tvdbid",
+	"rid",
+	"season",
+	"ep",
+	"q",
+	"offset",
+	"limit",
+	"o",
+}
+
+func encodeOrderedQuery(params url.Values, orderedKeys []string) string {
+	if len(params) == 0 {
+		return ""
+	}
+
+	pairs := make([]string, 0, len(params))
+	seen := make(map[string]struct{}, len(params))
+	appendKey := func(key string) {
+		values, ok := params[key]
+		if !ok {
+			return
+		}
+		seen[key] = struct{}{}
+		escapedKey := url.QueryEscape(key)
+		if len(values) == 0 {
+			pairs = append(pairs, escapedKey+"=")
+			return
+		}
+		for _, value := range values {
+			pairs = append(pairs, escapedKey+"="+url.QueryEscape(value))
+		}
+	}
+
+	for _, key := range orderedKeys {
+		appendKey(key)
+	}
+
+	extraKeys := make([]string, 0, len(params))
+	for key := range params {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		extraKeys = append(extraKeys, key)
+	}
+	sort.Strings(extraKeys)
+	for _, key := range extraKeys {
+		appendKey(key)
+	}
+
+	return strings.Join(pairs, "&")
 }
 
 var _ indexer.Indexer = (*Client)(nil)
@@ -380,26 +439,12 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	isMovieSearch := strings.HasPrefix(req.Cat, "2")
 	isTVSearch := strings.HasPrefix(req.Cat, "5")
 
-	query := req.Query
+	rawQuery := req.Query
+	query := rawQuery
 	isTextMode := !strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") && query != ""
 	extraTerms := c.cfg.ExtraSearchTerms
 	if o := req.OptionalOverrides; o != nil && o.ExtraSearchTerms != nil {
 		extraTerms = *o.ExtraSearchTerms
-	}
-	if extraTerms != "" {
-		if strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") {
-			if query != "" {
-				query = extraTerms + " " + query
-			} else {
-				query = extraTerms
-			}
-		} else {
-			if query != "" {
-				query = query + " " + extraTerms
-			} else {
-				query = extraTerms
-			}
-		}
 	}
 
 	useTVSearchParams := false
@@ -411,8 +456,8 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			params.Set("t", "search")
 		}
 	} else if isTVSearch && (caps == nil || caps.Searching.TVSearch) {
-		searchSeason, searchEpisode = config.SeriesSearchScopeSearchTarget(req.SeriesSearchScope, req.Season, req.Episode)
-		useTVSearchParams = config.SeriesSearchScopeUsesSeasonParams(req.SeriesSearchScope) && (searchSeason != "" || searchEpisode != "")
+		searchSeason, searchEpisode = config.SeriesSearchScopeSearchTarget(req.SeriesSearchScope, req.SearchMode, req.Season, req.Episode)
+		useTVSearchParams = config.SeriesSearchScopeUsesSeasonParams(req.SeriesSearchScope, req.SearchMode) && (searchSeason != "" || searchEpisode != "")
 		if isTextMode {
 			params.Set("t", "search")
 		} else {
@@ -420,10 +465,6 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		}
 	} else {
 		params.Set("t", "search")
-	}
-
-	if query != "" {
-		params.Set("q", query)
 	}
 
 	if !isTextMode && isMovieSearch && req.IMDbID != "" {
@@ -460,7 +501,30 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		}
 	}
 
-	apiURL := fmt.Sprintf("%s%s?%s", c.baseURL, c.apiPath, params.Encode())
+	if extraTerms != "" {
+		switch {
+		case !isTextMode && useTVSearchParams:
+			query = extraTerms
+		case strings.EqualFold(strings.TrimSpace(req.SearchMode), "id"):
+			if query != "" {
+				query = extraTerms + " " + query
+			} else {
+				query = extraTerms
+			}
+		default:
+			if query != "" {
+				query = query + " " + extraTerms
+			} else {
+				query = extraTerms
+			}
+		}
+	}
+
+	if query != "" && (isTextMode || !useTVSearchParams || (!isTextMode && useTVSearchParams && query != rawQuery)) {
+		params.Set("q", query)
+	}
+
+	apiURL := fmt.Sprintf("%s%s?%s", c.baseURL, c.apiPath, encodeOrderedQuery(params, orderedSearchQueryKeys))
 	logger.Debug("Search request",
 		"stream", req.StreamLabel,
 		"request", req.RequestLabel,
@@ -481,6 +545,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("User-Agent", env.IndexerQueryHeader())
+	startedAt := time.Now()
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query %s: %w", c.Name(), err)
@@ -538,6 +603,26 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if len(result.Channel.Items) > limit {
 		result.Channel.Items = result.Channel.Items[:limit]
 	}
+	totalResults := result.Channel.Response.Total
+	if totalResults <= 0 {
+		totalResults = len(result.Channel.Items)
+	}
+	logger.Debug("Search request result",
+		"stream", req.StreamLabel,
+		"request", req.RequestLabel,
+		"mode", func() string {
+			if strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") {
+				return "id"
+			}
+			return "text"
+		}(),
+		"indexer", c.Name(),
+		"type", "newznab",
+		"raw_results", len(result.Channel.Items),
+		"result_offset", result.Channel.Response.Offset,
+		"total_results", totalResults,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
 	return &result, nil
 }
 

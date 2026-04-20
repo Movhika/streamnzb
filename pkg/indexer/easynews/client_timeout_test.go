@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewClientConfiguresSeparateSearchAndDownloadTimeouts(t *testing.T) {
-	client, err := NewClient("user", "pass", "Easynews", "", 0, 0, 0, nil)
+	client, err := NewClient("user", "pass", "Easynews", "", 0, 0, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("NewClient returned error: %v", err)
 	}
@@ -19,11 +20,24 @@ func TestNewClientConfiguresSeparateSearchAndDownloadTimeouts(t *testing.T) {
 	if client.downloadClient == nil {
 		t.Fatal("expected download client to be configured")
 	}
-	if client.client.Timeout != searchTimeout {
-		t.Fatalf("expected search timeout %v, got %v", searchTimeout, client.client.Timeout)
+	if client.client.Timeout != 15*time.Second {
+		t.Fatalf("expected default search timeout %v, got %v", 15*time.Second, client.client.Timeout)
 	}
-	if client.downloadClient.Timeout != downloadTimeout {
-		t.Fatalf("expected download timeout %v, got %v", downloadTimeout, client.downloadClient.Timeout)
+	if client.downloadClient.Timeout != 30*time.Second {
+		t.Fatalf("expected default download timeout %v, got %v", 30*time.Second, client.downloadClient.Timeout)
+	}
+}
+
+func TestNewClientUsesConfiguredTimeoutAndDoublesDownloadTimeout(t *testing.T) {
+	client, err := NewClient("user", "pass", "Easynews", "", 0, 0, 0, 12, nil)
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	if client.client.Timeout != 12*time.Second {
+		t.Fatalf("expected configured search timeout %v, got %v", 12*time.Second, client.client.Timeout)
+	}
+	if client.downloadClient.Timeout != 24*time.Second {
+		t.Fatalf("expected doubled download timeout %v, got %v", 24*time.Second, client.downloadClient.Timeout)
 	}
 }
 
@@ -34,7 +48,7 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestSearchInternalUsesSearchClient(t *testing.T) {
-	client, err := NewClient("user", "pass", "Easynews", "", 0, 0, 0, nil)
+	client, err := NewClient("user", "pass", "Easynews", "", 0, 0, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("NewClient returned error: %v", err)
 	}
@@ -51,13 +65,13 @@ func TestSearchInternalUsesSearchClient(t *testing.T) {
 		return nil, nil
 	})
 
-	if _, err := client.searchInternal(context.Background(), "test", "", "", "", "", false); err != nil {
+	if _, _, err := client.searchInternal(context.Background(), "test", "", "", "", "", false); err != nil {
 		t.Fatalf("searchInternal returned error: %v", err)
 	}
 }
 
 func TestDownloadNZBInternalUsesDownloadClient(t *testing.T) {
-	client, err := NewClient("user", "pass", "Easynews", "", 0, 0, 0, nil)
+	client, err := NewClient("user", "pass", "Easynews", "", 0, 0, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("NewClient returned error: %v", err)
 	}

@@ -51,6 +51,7 @@ const INDEXER_PRESETS = [
 
 const PROWLARR_INDEXER_ID_PLACEHOLDER = '{indexer_id}'
 const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
+const EASYNEWS_TIMEOUT_HINT = 'Applies to Easynews searches. NZB downloads use double this timeout.'
 
 function normalizeIndexerDraft(draft) {
   const value = draft || {}
@@ -75,6 +76,7 @@ function emptyIndexerDraft() {
 }
 
 function getDefaultIndexerTimeoutSeconds(type) {
+  if (type === 'easynews') return 15
   return type === 'aggregator' ? 10 : 5
 }
 
@@ -395,13 +397,18 @@ function IndexerDialog({ open, onOpenChange, initialValue, onSave, onClearStatus
 
           <div className="rounded-md border border-border/60">
             <div className="p-3">
-              <div className={rowClass}>
-                <div className={labelClass}>
-                  <Label className="text-sm font-medium">Timeout (seconds)</Label>
+              <div className="space-y-3">
+                <div className={rowClass}>
+                  <div className={labelClass}>
+                    <Label className="text-sm font-medium">Timeout (seconds)</Label>
+                  </div>
+                  <div className={controlNarrowClass}>
+                    <Input className={`h-9 ${fieldClass('timeout_seconds')}`} type="number" min={0} value={draft.timeout_seconds === 0 ? '' : draft.timeout_seconds} onChange={(event) => update('timeout_seconds', event.target.value === '' ? 0 : Number(event.target.value))} placeholder={String(getDefaultIndexerTimeoutSeconds(draft.type))} />
+                  </div>
                 </div>
-                <div className={controlNarrowClass}>
-                  <Input className={`h-9 ${fieldClass('timeout_seconds')}`} type="number" min={0} value={draft.timeout_seconds === 0 ? '' : draft.timeout_seconds} onChange={(event) => update('timeout_seconds', event.target.value === '' ? 0 : Number(event.target.value))} placeholder={String(getDefaultIndexerTimeoutSeconds(draft.type))} />
-                </div>
+                {isEasynews && (
+                  <p className="text-sm text-muted-foreground">{EASYNEWS_TIMEOUT_HINT}</p>
+                )}
               </div>
             </div>
             <div className="relative p-3">

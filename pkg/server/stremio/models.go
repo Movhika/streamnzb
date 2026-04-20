@@ -41,28 +41,14 @@ type BehaviorHints struct {
 }
 
 type SearchReleasesResponse struct {
-	Streams  []SearchStreamInfo `json:"streams"`
 	Releases []SearchReleaseTag `json:"releases"`
 }
 
-type SearchStreamInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
 type SearchReleaseTag struct {
-	Title        string            `json:"title"`
-	Link         string            `json:"link"`
-	DetailsURL   string            `json:"details_url"`
-	Size         int64             `json:"size"`
-	Indexer      string            `json:"indexer"`
-	Availability string            `json:"availability"`
-	StreamTags   []SearchStreamTag `json:"stream_tags"`
-}
-
-type SearchStreamTag struct {
-	StreamID   string `json:"stream_id"`
-	StreamName string `json:"stream_name"`
-	Fits       bool   `json:"fits"`
-	Score      int    `json:"score"`
+	Title        string `json:"title"`
+	Link         string `json:"link"`
+	DetailsURL   string `json:"details_url"`
+	Size         int64  `json:"size"`
+	Indexer      string `json:"indexer"`
+	Availability string `json:"availability"`
 }

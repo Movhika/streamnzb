@@ -9,7 +9,6 @@ import (
 
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/release"
-	"streamnzb/pkg/session"
 )
 
 type recordingIndexer struct {
@@ -58,39 +57,18 @@ func (e *errIndexer) Ping() error                                         { retu
 func (e *errIndexer) Name() string                                        { return e.name }
 func (e *errIndexer) GetUsage() indexer.Usage                             { return indexer.Usage{} }
 
-type fakeTMDBResolver struct {
-	tvName string
-}
-
-func (f *fakeTMDBResolver) GetMovieTitle(imdbID, tmdbID string) (string, error) {
-	return "", nil
-}
-
-func (f *fakeTMDBResolver) GetMovieTitleAndYear(imdbID, tmdbID string) (string, string, error) {
-	return "", "", nil
-}
-
-func (f *fakeTMDBResolver) GetMovieTitleForSearch(imdbID, tmdbID, language string, includeYear, normalize bool) (string, error) {
-	return "", nil
-}
-
-func (f *fakeTMDBResolver) GetTVShowName(tmdbID, imdbID string) (string, error) {
-	return f.tvName, nil
-}
-
 func TestRunIndexerSearchesTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{
-		Cat:                    "5000",
-		Limit:                  100,
-		IMDbID:                 "tt1234567",
-		Season:                 "1",
-		Episode:                "5",
-		UseSeasonEpisodeParams: true,
-		Query:                  "The Walking Dead",
+		Cat:     "5000",
+		Limit:   100,
+		IMDbID:  "tt1234567",
+		Season:  "1",
+		Episode: "5",
+		Query:   "The Walking Dead",
 	}
 
-	if _, err := RunIndexerSearches(idx, nil, req, "series", nil, "", "", nil); err != nil {
+	if _, err := RunIndexerSearches(idx, req, "series"); err != nil {
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
 
@@ -107,7 +85,7 @@ func TestRunIndexerSearchesTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing
 	}
 }
 
-func TestRunIndexerSearchesSkipsPostFilterWhenValidationDisabled(t *testing.T) {
+func TestRunIndexerSearchesAlwaysAppliesValidation(t *testing.T) {
 	idx := &staticIndexer{
 		name: "SceneNZBs",
 		resp: &indexer.SearchResponse{
@@ -119,83 +97,20 @@ func TestRunIndexerSearchesSkipsPostFilterWhenValidationDisabled(t *testing.T) {
 		},
 	}
 	req := indexer.SearchRequest{
-		Cat:                    "2100",
-		IMDbID:                 "tt0187393",
-		TMDBID:                 "2024",
-		Query:                  "Der Patriot 2000",
-		ValidationQuery:        "The Patriot 2000",
-		EnableResultValidation: false,
+		Cat:                  "2100",
+		IMDbID:               "tt0187393",
+		TMDBID:               "2024",
+		Query:                "Der Patriot 2000",
+		ValidationQuery:      "The Patriot 2000",
+		EnableYearValidation: true,
 	}
 
-	got, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil)
-	if err != nil {
-		t.Fatalf("RunIndexerSearches() error = %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("expected 1 result with validation disabled, got %d: %+v", len(got), got)
-	}
-}
-
-func TestRunIndexerSearchesAppliesValidationWhenEnabled(t *testing.T) {
-	idx := &staticIndexer{
-		name: "SceneNZBs",
-		resp: &indexer.SearchResponse{
-			Channel: indexer.Channel{
-				Items: []indexer.Item{
-					{Title: "Der.Patriot.2000.German.DL.1080p.BluRay.x264.iNTERNAL-VideoStar", ActualIndexer: "SceneNZBs"},
-				},
-			},
-		},
-	}
-	req := indexer.SearchRequest{
-		Cat:                    "2100",
-		IMDbID:                 "tt0187393",
-		TMDBID:                 "2024",
-		Query:                  "Der Patriot 2000",
-		ValidationQuery:        "The Patriot 2000",
-		EnableResultValidation: true,
-		EnableTitleValidation:  true,
-		EnableYearValidation:   true,
-	}
-
-	got, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil)
+	got, err := RunIndexerSearches(idx, req, "movie")
 	if err != nil {
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected validation to remove mismatched title, got %d: %+v", len(got), got)
-	}
-}
-
-func TestRunIndexerSearchesKeepsEpisodePackValidationWhenTitleValidationOff(t *testing.T) {
-	idx := &staticIndexer{
-		name: "SceneNZBs",
-		resp: &indexer.SearchResponse{
-			Channel: indexer.Channel{
-				Items: []indexer.Item{
-					{Title: "Wrong.Show.S01.COMPLETE.1080p.WEB-DL.x264-GROUP", ActualIndexer: "SceneNZBs"},
-					{Title: "Right.Show.S01.COMPLETE.1080p.WEB-DL.x264-GROUP", ActualIndexer: "SceneNZBs"},
-				},
-			},
-		},
-	}
-	req := indexer.SearchRequest{
-		Cat:                    "5000",
-		Query:                  "Right Show",
-		Season:                 "1",
-		Episode:                "2",
-		ValidationQuery:        "",
-		EnableResultValidation: true,
-		EnableTitleValidation:  false,
-		EnableYearValidation:   false,
-	}
-
-	got, err := RunIndexerSearches(idx, nil, req, "series", nil, "", "", nil)
-	if err != nil {
-		t.Fatalf("RunIndexerSearches() error = %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("expected both season packs to remain when title validation is off, got %d: %+v", len(got), got)
 	}
 }
 
@@ -278,6 +193,24 @@ func TestValidateSearchResultsWithStatsSkipsYearWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestValidateSearchResultsWithStatsAllowsOptionalAndWordMatches(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "Your.Friends.Neighbors.S01E01.1080p.WEB-DL.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStats(releases, "series", "Your Friends & Neighbors", "1", "1", true, false)
+
+	if len(filtered) != 1 {
+		t.Fatalf("expected optional '&/and' title match to pass, got %d results", len(filtered))
+	}
+	if stats.DroppedTitle != 0 {
+		t.Fatalf("expected no title rejection, got %+v", stats)
+	}
+	if stats.AcceptedExactEpisode != 1 {
+		t.Fatalf("expected exact episode match, got %+v", stats)
+	}
+}
+
 func TestRunIndexerSearchesQueryWithIDsDoesNotAlsoRunIDSearch(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{
@@ -288,7 +221,7 @@ func TestRunIndexerSearchesQueryWithIDsDoesNotAlsoRunIDSearch(t *testing.T) {
 		TMDBID: "1649758",
 	}
 
-	if _, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil); err != nil {
+	if _, err := RunIndexerSearches(idx, req, "movie"); err != nil {
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
 
@@ -314,7 +247,7 @@ func TestRunIndexerSearchesIDModePreservesPreparedQuery(t *testing.T) {
 		Query:      "The Age of Adaline",
 	}
 
-	if _, err := RunIndexerSearches(idx, nil, req, "movie", nil, "", "", nil); err != nil {
+	if _, err := RunIndexerSearches(idx, req, "movie"); err != nil {
 		t.Fatalf("RunIndexerSearches() error = %v", err)
 	}
 
@@ -329,19 +262,6 @@ func TestRunIndexerSearchesIDModePreservesPreparedQuery(t *testing.T) {
 	}
 }
 
-func TestBuildValidationQueryPreservesRawSeasonEpisodeWhenOnlyOnePartParses(t *testing.T) {
-	resolver := &fakeTMDBResolver{tvName: "Example Show"}
-	req := indexer.SearchRequest{
-		Season:  "special",
-		Episode: "1",
-	}
-
-	got := BuildValidationQuery(resolver, req, "series", &session.AvailReportMeta{}, "tt123", "76479")
-	if got != "Example Show SspecialE1" {
-		t.Fatalf("BuildValidationQuery() = %q, want %q", got, "Example Show SspecialE1")
-	}
-}
-
 func TestRunIndexerSearchesReturnsTextSearchErrors(t *testing.T) {
 	idx := &errIndexer{name: "BrokenIndexer", err: fmt.Errorf("backend unavailable")}
 	req := indexer.SearchRequest{
@@ -351,7 +271,7 @@ func TestRunIndexerSearchesReturnsTextSearchErrors(t *testing.T) {
 		RequestLabel: "Text Request",
 	}
 
-	_, err := RunIndexerSearches(idx, nil, req, "series", nil, "", "", nil)
+	_, err := RunIndexerSearches(idx, req, "series")
 	if err == nil {
 		t.Fatalf("expected text search error, got nil")
 	}

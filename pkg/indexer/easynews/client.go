@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/core/env"
@@ -27,17 +26,17 @@ import (
 const (
 	easynewsBaseURL   = "https://members.easynews.com"
 	maxResultsPerPage = 250
-	searchTimeout     = 15 * time.Second
-	downloadTimeout   = 30 * time.Second
 )
 
 type Client struct {
-	username       string
-	password       string
-	name           string
-	client         *http.Client
-	downloadClient *http.Client
-	downloadBase   string
+	username        string
+	password        string
+	name            string
+	client          *http.Client
+	downloadClient  *http.Client
+	downloadBase    string
+	searchTimeout   time.Duration
+	downloadTimeout time.Duration
 
 	apiLimit          int
 	apiUsed           int
@@ -52,10 +51,15 @@ type Client struct {
 
 var _ indexer.Indexer = (*Client)(nil)
 
-func NewClient(username, password, name string, downloadBase string, apiLimit, downloadLimit, rateLimitRPS int, um *indexer.UsageManager) (*Client, error) {
+func NewClient(username, password, name string, downloadBase string, apiLimit, downloadLimit, rateLimitRPS, timeoutSeconds int, um *indexer.UsageManager) (*Client, error) {
 	if username == "" || password == "" {
 		return nil, fmt.Errorf("easynews username and password are required")
 	}
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = config.DefaultEasynewsIndexerTimeoutSeconds
+	}
+	searchTimeout := time.Duration(timeoutSeconds) * time.Second
+	downloadTimeout := searchTimeout * 2
 
 	transport := &http.Transport{
 		MaxIdleConns:        100,
@@ -69,6 +73,8 @@ func NewClient(username, password, name string, downloadBase string, apiLimit, d
 		password:          password,
 		name:              name,
 		downloadBase:      downloadBase,
+		searchTimeout:     searchTimeout,
+		downloadTimeout:   downloadTimeout,
 		usageManager:      um,
 		apiLimit:          apiLimit,
 		apiUsed:           0,
@@ -160,14 +166,14 @@ func (c *Client) refreshUsageFromManager() *indexer.UsageData {
 }
 
 func (c *Client) Ping() error {
-	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), c.searchTimeout)
 	defer cancel()
 	if err := c.requestLimiter.Wait(ctx); err != nil {
 		return err
 	}
 
 	testQuery := "dune"
-	_, err := c.searchInternal(ctx, testQuery, "", "", config.SeriesSearchScopeNone, "", false)
+	_, _, err := c.searchInternal(ctx, testQuery, "", "", config.SeriesSearchScopeNone, "", false)
 	if err != nil {
 		return fmt.Errorf("easynews credentials invalid: %w", err)
 	}
@@ -178,7 +184,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if err := c.checkAPILimit(); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), c.searchTimeout)
 	defer cancel()
 	if err := c.requestLimiter.Wait(ctx); err != nil {
 		return nil, err
@@ -205,7 +211,8 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		"gps", buildEasynewsGPSQuery(query, season, episode, req.SeriesSearchScope, req.Cat),
 	)
 
-	results, err := c.searchInternal(ctx, query, season, episode, req.SeriesSearchScope, req.Cat, false)
+	startedAt := time.Now()
+	results, totalResults, err := c.searchInternal(ctx, query, season, episode, req.SeriesSearchScope, req.Cat, false)
 	if err != nil {
 		return nil, fmt.Errorf("easynews search failed: %w", err)
 	}
@@ -234,6 +241,25 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		}
 		items = append(items, item)
 	}
+	if totalResults <= 0 {
+		totalResults = len(items)
+	}
+	logger.Debug("Search request result",
+		"stream", req.StreamLabel,
+		"request", req.RequestLabel,
+		"mode", func() string {
+			if strings.EqualFold(strings.TrimSpace(req.SearchMode), "id") {
+				return "id"
+			}
+			return "text"
+		}(),
+		"indexer", c.name,
+		"type", "easynews",
+		"filtered_results", len(items),
+		"result_offset", 0,
+		"total_results", totalResults,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
 
 	return &indexer.SearchResponse{
 		Channel: indexer.Channel{
@@ -243,7 +269,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 }
 
 func prepareEasynewsQuery(baseQuery, searchMode string, overrides *config.IndexerSearchConfig) string {
-	query := normalizeEasynewsQuery(baseQuery)
+	query := release.NormalizeTitleForSearchQuery(baseQuery)
 	extraTerms := ""
 	if overrides != nil && overrides.ExtraSearchTerms != nil {
 		extraTerms = strings.TrimSpace(*overrides.ExtraSearchTerms)
@@ -273,7 +299,7 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.downloadTimeout)
 	defer cancel()
 	if err := c.requestLimiter.Wait(ctx); err != nil {
 		return nil, err
@@ -317,37 +343,13 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	return nzbData, nil
 }
 
-func normalizeEasynewsQuery(query string) string {
-	query = strings.TrimSpace(release.NormalizeTitleForFilename(query))
-	var b strings.Builder
-	lastSpace := false
-	for _, r := range query {
-		switch {
-		case unicode.IsLetter(r), unicode.IsNumber(r):
-			b.WriteRune(r)
-			lastSpace = false
-		case unicode.IsSpace(r):
-			if !lastSpace {
-				b.WriteRune(' ')
-				lastSpace = true
-			}
-		default:
-			if !lastSpace {
-				b.WriteRune(' ')
-				lastSpace = true
-			}
-		}
-	}
-	return strings.Join(strings.Fields(b.String()), " ")
-}
-
 func buildEasynewsGPSQuery(query, season, episode, scope, category string) string {
-	query = normalizeEasynewsQuery(query)
+	query = release.NormalizeTitleForSearchQuery(query)
 	if !strings.HasPrefix(strings.TrimSpace(category), "5") {
 		return query
 	}
-	switch config.NormalizeSeriesSearchScope(scope, nil) {
-	case config.SeriesSearchScopeEpisodeParam, config.SeriesSearchScopeEpisodeQuery:
+	switch config.NormalizeSeriesSearchScope(scope) {
+	case config.SeriesSearchScopeSeasonEpisode:
 		if season == "" || episode == "" {
 			return query
 		}
@@ -364,7 +366,7 @@ func buildEasynewsGPSQuery(query, season, episode, scope, category string) strin
 			return suffix
 		}
 		return fmt.Sprintf("%s %s", query, suffix)
-	case config.SeriesSearchScopeSeasonParam, config.SeriesSearchScopeSeasonQuery:
+	case config.SeriesSearchScopeSeason:
 		if season == "" {
 			return query
 		}
@@ -385,38 +387,38 @@ func buildEasynewsGPSQuery(query, season, episode, scope, category string) strin
 	}
 }
 
-func (c *Client) searchInternal(ctx context.Context, query, season, episode, scope, category string, strictMode bool) ([]easynewsResult, error) {
+func (c *Client) searchInternal(ctx context.Context, query, season, episode, scope, category string, strictMode bool) ([]easynewsResult, int, error) {
 	searchURL := buildEasynewsSearchURL(query, season, episode, scope, category)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	req.SetBasicAuth(c.username, c.password)
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("easynews search request failed: %w", err)
+		return nil, 0, fmt.Errorf("easynews search request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return nil, fmt.Errorf("easynews rejected credentials")
+		return nil, 0, fmt.Errorf("easynews rejected credentials")
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("easynews search failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, 0, fmt.Errorf("easynews search failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var data easynewsSearchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("failed to parse Easynews response: %w", err)
+		return nil, 0, fmt.Errorf("failed to parse Easynews response: %w", err)
 	}
 
 	results := c.filterAndMapResults(data, query, season, episode, strictMode)
 
-	return results, nil
+	return results, data.Results, nil
 }
 
 func buildEasynewsSearchURL(query, season, episode, scope, category string) string {

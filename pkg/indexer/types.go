@@ -18,10 +18,6 @@ type Indexer interface {
 	GetUsage() Usage
 }
 
-type IndexerWithResolve interface {
-	ResolveDownloadURL(ctx context.Context, directURL, title string, size int64, cat string) (resolvedURL string, err error)
-}
-
 type Usage struct {
 	APIHitsLimit         int
 	APIHitsUsed          int
@@ -42,12 +38,9 @@ type SearchRequest struct {
 	Limit                  int
 	Season                 string
 	Episode                string
-	UseSeasonEpisodeParams bool
 	SeriesSearchScope      string
 	SearchMode             string
 	DisableResultFiltering bool
-	EnableResultValidation bool
-	EnableTitleValidation  bool
 	EnableYearValidation   bool
 	IndexerMode            string
 	ValidationQuery        string
