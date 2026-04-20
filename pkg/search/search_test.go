@@ -60,12 +60,13 @@ func (e *errIndexer) GetUsage() indexer.Usage                             { retu
 func TestRunIndexerSearchesTextRequestCarriesSeasonEpisodeWhenEnabled(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{
-		Cat:     "5000",
-		Limit:   100,
-		IMDbID:  "tt1234567",
-		Season:  "1",
-		Episode: "5",
-		Query:   "The Walking Dead",
+		Cat:             "5000",
+		Limit:           100,
+		IMDbID:          "tt1234567",
+		Season:          "1",
+		Episode:         "5",
+		Query:           "The Walking Dead",
+		ValidationQuery: "The Walking Dead",
 	}
 
 	if _, err := RunIndexerSearches(idx, req, "series"); err != nil {
@@ -214,11 +215,12 @@ func TestValidateSearchResultsWithStatsAllowsOptionalAndWordMatches(t *testing.T
 func TestRunIndexerSearchesQueryWithIDsDoesNotAlsoRunIDSearch(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{
-		Query:  "Meal Ticket 2026",
-		Cat:    "2000",
-		Limit:  100,
-		IMDbID: "tt40232255",
-		TMDBID: "1649758",
+		Query:           "Meal Ticket 2026",
+		Cat:             "2000",
+		Limit:           100,
+		IMDbID:          "tt40232255",
+		TMDBID:          "1649758",
+		ValidationQuery: "Meal Ticket 2026",
 	}
 
 	if _, err := RunIndexerSearches(idx, req, "movie"); err != nil {
@@ -239,12 +241,13 @@ func TestRunIndexerSearchesQueryWithIDsDoesNotAlsoRunIDSearch(t *testing.T) {
 func TestRunIndexerSearchesIDModePreservesPreparedQuery(t *testing.T) {
 	idx := &recordingIndexer{name: "TestIndexer"}
 	req := indexer.SearchRequest{
-		Cat:        "2000",
-		Limit:      100,
-		SearchMode: "id",
-		IMDbID:     "tt1655441",
-		TMDBID:     "1655441",
-		Query:      "The Age of Adaline",
+		Cat:             "2000",
+		Limit:           100,
+		SearchMode:      "id",
+		IMDbID:          "tt1655441",
+		TMDBID:          "1655441",
+		Query:           "The Age of Adaline",
+		ValidationQuery: "The Age of Adaline",
 	}
 
 	if _, err := RunIndexerSearches(idx, req, "movie"); err != nil {
@@ -265,10 +268,11 @@ func TestRunIndexerSearchesIDModePreservesPreparedQuery(t *testing.T) {
 func TestRunIndexerSearchesReturnsTextSearchErrors(t *testing.T) {
 	idx := &errIndexer{name: "BrokenIndexer", err: fmt.Errorf("backend unavailable")}
 	req := indexer.SearchRequest{
-		SearchMode:   "text",
-		Query:        "The King Who Never Was",
-		StreamLabel:  "TestStream",
-		RequestLabel: "Text Request",
+		SearchMode:      "text",
+		Query:           "The King Who Never Was",
+		ValidationQuery: "The King Who Never Was",
+		StreamLabel:     "TestStream",
+		RequestLabel:    "Text Request",
 	}
 
 	_, err := RunIndexerSearches(idx, req, "series")
@@ -277,5 +281,25 @@ func TestRunIndexerSearchesReturnsTextSearchErrors(t *testing.T) {
 	}
 	if got := err.Error(); got == "" || !strings.Contains(got, "text search failed") {
 		t.Fatalf("expected wrapped text search error, got %q", got)
+	}
+}
+
+func TestRunIndexerSearchesSkipsWithoutValidationBasis(t *testing.T) {
+	idx := &recordingIndexer{name: "TestIndexer"}
+	req := indexer.SearchRequest{
+		SearchMode: "id",
+		Cat:        "2000",
+		IMDbID:     "tt1655441",
+	}
+
+	got, err := RunIndexerSearches(idx, req, "movie")
+	if err != nil {
+		t.Fatalf("RunIndexerSearches() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no releases without validation basis, got %d", len(got))
+	}
+	if len(idx.reqs) != 0 {
+		t.Fatalf("expected no Search call without validation basis, got %d", len(idx.reqs))
 	}
 }

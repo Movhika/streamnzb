@@ -27,9 +27,28 @@ func RunIndexerSearches(idx indexer.Indexer, req indexer.SearchRequest, contentT
 	searchReq := req
 
 	validationQuery := req.ValidationQuery
+	if strings.TrimSpace(validationQuery) == "" {
+		mode := "text"
+		if runIDSearch {
+			mode = "id"
+		}
+		logger.Debug("Skipping search request without validation basis",
+			"stream", req.StreamLabel,
+			"request", req.RequestLabel,
+			"mode", mode,
+		)
+		return nil, nil
+	}
 
 	if !runIDSearch && strings.TrimSpace(req.Query) != "" {
 		searchReq.SearchMode = "text"
+	}
+	if !runIDSearch && strings.TrimSpace(searchReq.Query) == "" {
+		logger.Debug("Skipping search request without prepared text query",
+			"stream", req.StreamLabel,
+			"request", req.RequestLabel,
+		)
+		return nil, nil
 	}
 
 	filterAggregator := func(base indexer.Indexer, request indexer.SearchRequest, textMode bool) indexer.Indexer {

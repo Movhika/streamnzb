@@ -525,8 +525,8 @@ func TestHasPreparedTextQueries(t *testing.T) {
 	if !hasPreparedTextQueries(indexer.SearchRequest{Query: "Invincible"}) {
 		t.Fatal("expected explicit query to count as prepared text query")
 	}
-	if !hasPreparedTextQueries(indexer.SearchRequest{ValidationQuery: "Invincible S01E04"}) {
-		t.Fatal("expected validation query to count as prepared text query")
+	if hasPreparedTextQueries(indexer.SearchRequest{ValidationQuery: "Invincible S01E04"}) {
+		t.Fatal("expected validation query alone not to count as prepared text query")
 	}
 }
 
@@ -537,8 +537,8 @@ func TestHasUsableResolvedMetadata(t *testing.T) {
 	if hasUsableResolvedMetadata(&SearchParams{}, "series") {
 		t.Fatal("expected empty params not to have usable resolved metadata")
 	}
-	if !hasUsableResolvedMetadata(&SearchParams{Req: indexer.SearchRequest{IMDbID: "tt1234567"}}, "series") {
-		t.Fatal("expected IMDb ID to count as usable series metadata")
+	if hasUsableResolvedMetadata(&SearchParams{Req: indexer.SearchRequest{IMDbID: "tt1234567"}}, "series") {
+		t.Fatal("expected bare identifiers alone not to count as usable series metadata")
 	}
 	if !hasUsableResolvedMetadata(&SearchParams{
 		Metadata: &resolvedSearchMetadata{

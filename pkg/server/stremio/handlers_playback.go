@@ -631,7 +631,7 @@ func hasUsableIDSearchIdentifier(req indexer.SearchRequest, contentType string) 
 }
 
 func hasPreparedTextQueries(req indexer.SearchRequest) bool {
-	return strings.TrimSpace(req.Query) != "" || strings.TrimSpace(req.ValidationQuery) != ""
+	return strings.TrimSpace(req.Query) != ""
 }
 
 func looksLikeTMDBID(value string) bool {
