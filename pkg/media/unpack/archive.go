@@ -84,11 +84,11 @@ func blueprintTargetMatches(cachedTarget, requestedTarget EpisodeTarget) bool {
 }
 
 func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interface{}, password string) (ReadSeekCloser, string, int64, interface{}, error) {
-	return GetMediaStreamForEpisodeWithHints(ctx, files, cachedBP, password, EpisodeTarget{}, StreamSelectionHints{})
+	return GetMediaStreamForEpisodeWithHints(ctx, files, cachedBP, password, EpisodeTarget{}, StreamSelectionHints{AllowLargestDirectFallback: true})
 }
 
 func GetMediaStreamForEpisode(ctx context.Context, files []UnpackableFile, cachedBP interface{}, password string, target EpisodeTarget) (ReadSeekCloser, string, int64, interface{}, error) {
-	return GetMediaStreamForEpisodeWithHints(ctx, files, cachedBP, password, target, StreamSelectionHints{})
+	return GetMediaStreamForEpisodeWithHints(ctx, files, cachedBP, password, target, StreamSelectionHints{AllowLargestDirectFallback: true})
 }
 
 func GetMediaStreamForEpisodeWithHints(ctx context.Context, files []UnpackableFile, cachedBP interface{}, password string, target EpisodeTarget, hints StreamSelectionHints) (ReadSeekCloser, string, int64, interface{}, error) {
@@ -230,13 +230,22 @@ func GetMediaStreamForEpisodeWithHints(ctx context.Context, files []UnpackableFi
 			}
 		}
 		extractedName := ExtractFilename(largestFile.Name())
-		if target.Valid() && !hints.AllowLargestDirectFallback {
-			err := fmt.Errorf("%w: no direct media candidate matched season=%d episode=%d", ErrEpisodeTargetNotFound, target.Season, target.Episode)
-			logger.Warn("Refusing largest-file fallback for targeted episode request",
-				"target", target,
-				"name", extractedName,
-				"index", largestIdx,
-				"size", largestFile.Size())
+		if !hints.AllowLargestDirectFallback {
+			err := fmt.Errorf("%w: largest direct fallback disabled", io.EOF)
+			if target.Valid() {
+				err = fmt.Errorf("%w: no direct media candidate matched season=%d episode=%d", ErrEpisodeTargetNotFound, target.Season, target.Episode)
+				logger.Warn("Refusing largest-file fallback for targeted episode request",
+					"target", target,
+					"name", extractedName,
+					"index", largestIdx,
+					"size", largestFile.Size())
+			} else {
+				logger.Warn("Refusing largest-file fallback by selection hints",
+					"target", target,
+					"name", extractedName,
+					"index", largestIdx,
+					"size", largestFile.Size())
+			}
 			return nil, "", 0, &FailedBlueprint{Err: err, Target: target}, err
 		}
 		if !isPlausibleLargestDirectFallbackName(extractedName) {

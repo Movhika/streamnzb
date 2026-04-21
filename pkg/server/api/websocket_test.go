@@ -157,3 +157,20 @@ func TestValidateConfigRejectsOutOfRangePlaybackStartupTimeout(t *testing.T) {
 		t.Fatalf("expected playback startup timeout validation error, got %#v", errs)
 	}
 }
+
+func TestValidateConfigWithPlanAllowsLegacyOriginalIDTitleLanguage(t *testing.T) {
+	s := &Server{}
+
+	cfg := &config.Config{
+		MovieSearchQueries: []config.SearchQueryConfig{{
+			Name:                "MovieQuery01",
+			SearchMode:          "id",
+			SearchTitleLanguage: "original",
+		}},
+	}
+
+	errs := s.validateConfigWithPlan(cfg, configValidationPlan{validateMovieSearchQueries: true})
+	if got := errs["movie_search_queries.0.search_title_languages"]; got != "" {
+		t.Fatalf("expected legacy original title language to be accepted, got %q", got)
+	}
+}

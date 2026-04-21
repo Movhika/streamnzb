@@ -768,10 +768,15 @@ func (s *Server) validateConfigWithPlan(cfg *config.Config, plan configValidatio
 				errors[fmt.Sprintf("%s.%d.search_mode", prefix, i)] = "Search mode must be id or text"
 			}
 			titleLanguages := config.NormalizeSearchTitleLanguages(query.SearchTitleLanguages)
+			if mode == "id" && len(titleLanguages) == 0 {
+				if rawSingle := strings.TrimSpace(query.SearchTitleLanguage); rawSingle != "" {
+					titleLanguages = []string{config.NormalizeSearchTitleLanguage(rawSingle)}
+				}
+			}
 			if mode == "text" && len(titleLanguages) > 1 {
 				errors[fmt.Sprintf("%s.%d.search_title_languages", prefix, i)] = "Text search can use only one title language"
 			}
-			if mode == "id" && len(titleLanguages) == 0 && config.NormalizeSearchTitleLanguage(query.SearchTitleLanguage) == "" {
+			if mode == "id" && len(titleLanguages) == 0 {
 				errors[fmt.Sprintf("%s.%d.search_title_languages", prefix, i)] = "Add at least one title language"
 			}
 			if prefix == "series_search_queries" {

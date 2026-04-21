@@ -381,6 +381,21 @@ func TestRunIndexerSearchesUsesValidationQueriesWhenPresent(t *testing.T) {
 	}
 }
 
+func TestValidationQueriesForRequestUsesProfiles(t *testing.T) {
+	req := indexer.SearchRequest{
+		ValidationQueryProfiles: []indexer.ValidationQueryProfile{
+			{Languages: []string{"en-US"}, Query: "Witch Hat Atelier"},
+			{Languages: []string{"original"}, Query: "Tongari Boushi no Atelier"},
+		},
+	}
+
+	got := validationQueriesForRequest(req)
+	want := []string{"Witch Hat Atelier", "Tongari Boushi no Atelier"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("validationQueriesForRequest() = %#v, want %#v", got, want)
+	}
+}
+
 func TestValidationProfilesForRequestPreferExplicitProfiles(t *testing.T) {
 	req := indexer.SearchRequest{
 		ValidationQueryProfiles: []indexer.ValidationQueryProfile{

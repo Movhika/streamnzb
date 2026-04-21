@@ -1431,11 +1431,7 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 	req.ValidationQueryProfiles = nil
 	req.ValidationQueries = nil
 	validationLanguages := validationTitleLanguages(searchMode, searchTitleLanguage, searchTitleLanguages)
-	if contentType == "movie" {
-		req.ValidationQueryProfiles = validationQueryProfilesFromMetadata(params.Metadata, contentType, validationLanguages, includeYear)
-	} else {
-		req.ValidationQueryProfiles = validationQueryProfilesFromMetadata(params.Metadata, contentType, validationLanguages, includeYear)
-	}
+	req.ValidationQueryProfiles = validationQueryProfilesFromMetadata(params.Metadata, contentType, validationLanguages, includeYear)
 	req.ValidationQueries = validationQueriesFromProfiles(req.ValidationQueryProfiles)
 	req.ValidationQuery = ""
 	if len(req.ValidationQueries) > 0 {

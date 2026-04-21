@@ -11,23 +11,15 @@ import (
 )
 
 func validationQueriesForRequest(req indexer.SearchRequest) []string {
-	if len(req.ValidationQueries) > 0 {
-		queries := make([]string, 0, len(req.ValidationQueries))
-		for _, query := range req.ValidationQueries {
-			trimmed := strings.TrimSpace(query)
-			if trimmed == "" {
-				continue
-			}
-			queries = append(queries, trimmed)
-		}
-		if len(queries) > 0 {
-			return queries
-		}
+	profiles := validationProfilesForRequest(req)
+	if len(profiles) == 0 {
+		return nil
 	}
-	if trimmed := strings.TrimSpace(req.ValidationQuery); trimmed != "" {
-		return []string{trimmed}
+	queries := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		queries = append(queries, profile.Query)
 	}
-	return nil
+	return queries
 }
 
 func validationProfilesForRequest(req indexer.SearchRequest) []indexer.ValidationQueryProfile {

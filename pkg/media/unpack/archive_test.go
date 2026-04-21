@@ -138,6 +138,41 @@ func TestGetMediaStreamAllowsPlausibleLargestDirectFallback(t *testing.T) {
 	}
 }
 
+func TestGetMediaStreamForEpisodeWithHintsRefusesLargestDirectFallbackWhenDisabled(t *testing.T) {
+	discardTestLogger(t)
+
+	files := []UnpackableFile{
+		&sizedUnpackableFile{
+			memoryUnpackableFile: &memoryUnpackableFile{name: "abc12345", data: []byte("video")},
+			size:                 80 * 1024 * 1024,
+		},
+	}
+
+	stream, name, _, _, err := GetMediaStreamForEpisodeWithHints(
+		context.Background(),
+		files,
+		nil,
+		"",
+		EpisodeTarget{},
+		StreamSelectionHints{AllowLargestDirectFallback: false},
+	)
+	if err == nil {
+		if stream != nil {
+			stream.Close()
+		}
+		t.Fatal("expected disabled largest direct fallback to fail")
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected io.EOF, got %v", err)
+	}
+	if name != "" {
+		t.Fatalf("expected no selected file, got %q", name)
+	}
+	if stream != nil {
+		t.Fatal("expected no stream when fallback is disabled")
+	}
+}
+
 func TestGetMediaStreamForEpisodeAllowsLargestDirectFallbackWhenHinted(t *testing.T) {
 	discardTestLogger(t)
 
