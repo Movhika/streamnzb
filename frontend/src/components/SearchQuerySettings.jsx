@@ -1,13 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, focusDialogCloseButton } from "@/components/ui/dialog"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { apiFetch } from "@/api"
-import { Copy, Plus, Settings, Trash2 } from "lucide-react"
+import { CircleHelp, Copy, Plus, Settings, Trash2, X } from "lucide-react"
 
 const CACHE_CLEARED_SUFFIX = ' Search cache cleared.'
 
@@ -45,36 +47,74 @@ const SERIES_SCOPE_OPTIONS = [
   { value: 'none', label: 'None' },
 ]
 
-const YEAR_HINT = 'Adds the metadata year to text searches and also checks it during result validation. With ID searches it only affects validation.'
+const YEAR_HINT_ITEMS = [
+  {
+    label: 'Text Search',
+    text: 'Adds the metadata year to the outgoing query and also checks it during validation.',
+  },
+  {
+    label: 'ID Search',
+    text: 'Does not change the ID request itself. It only affects validation.',
+  },
+]
 const TV_SCOPE_HINT_ITEMS = [
   {
     label: 'Season/Episode',
-    text: 'Targets one episode. ID mode uses season and episode params, and Text mode searches with an S01E01-style query.',
+    text: 'Targets one episode. ID uses params, Text uses an S01E01-style query.',
   },
   {
     label: 'Season',
-    text: 'Broadens to the whole season. Validation still keeps only releases that can contain the requested episode.',
+    text: 'Broadens to the whole season, then validation trims back to releases that can contain the episode.',
   },
   {
     label: 'None',
-    text: 'Searches only by series title or ID. Validation trims the broader results back to releases that can contain the requested episode.',
+    text: 'Searches only by series title or ID. Validation trims the broader results back to episode-capable releases.',
   },
 ]
 const TITLE_LANGUAGE_HINT_ITEMS = [
   {
     label: 'Text Search',
-    text: 'Builds the outgoing search title from the selected metadata language.',
+    text: 'Uses exactly one metadata language for the outgoing query.',
   },
   {
     label: 'ID Search',
-    text: 'Does not change the ID request itself. It only changes which metadata title is used for result validation.',
+    text: 'Does not change the ID request itself. Selected languages are used only for validation.',
   },
   {
     label: 'Normalization',
-    text: 'Uses the same normalized title basis for search and validation. Examples: `König der Löwen` becomes `Koenig der Loewen`, and `Your Friends & Neighbors` becomes `Your Friends Neighbors`.',
+    text: 'Search and validation use the same normalized title basis.',
   },
 ]
-const SEARCH_LIMIT_HINT = '0 uses Max. For Newznab indexers, StreamNZB reads the max from caps. If caps are unavailable, it falls back to 2000. Any explicit value is sent as-is.'
+const SEARCH_LIMIT_HINT_ITEMS = [
+  {
+    label: 'Max',
+    text: '0 uses Max.',
+  },
+  {
+    label: 'Newznab',
+    text: 'Reads the max from caps. If caps are unavailable, it falls back to 2000.',
+  },
+  {
+    label: 'Explicit',
+    text: 'Any explicit value is sent as-is.',
+  },
+]
+const EXTRA_TERMS_HINT_ITEMS = [
+  {
+    label: 'Usage',
+    text: 'Optional terms for text and ID searches.',
+  },
+  {
+    label: 'Syntax',
+    text: 'Use quotes for exact phrases, `!term` to exclude words, `*` as wildcard, `|` or `OR` for alternatives, and parentheses for groups like `(1080p|720p)`.',
+  },
+]
+const DEFAULT_ID_TITLE_LANGUAGES = ['en-US', '']
+
+function normalizeDraftSearchTitleLanguage(value) {
+  if (value === null) return null
+  return normalizeSearchTitleLanguage(value)
+}
 
 function normalizeSeriesSearchScope(scope) {
   switch ((scope || '').trim().toLowerCase()) {
@@ -143,8 +183,75 @@ function normalizeQueryYearSetting(searchMode, includeYear, legacyIncludeYearInT
   return String(searchMode || '').trim().toLowerCase() !== 'id'
 }
 
+function normalizeSearchTitleLanguage(value) {
+  const trimmed = String(value || '').trim()
+  return trimmed.toLowerCase() === 'original' ? '' : trimmed
+}
+
+function normalizeSearchTitleLanguages(values) {
+  const list = Array.isArray(values) ? values : []
+  const normalized = []
+  const seen = new Set()
+  for (const value of list) {
+    const language = normalizeSearchTitleLanguage(value)
+    const key = language.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    normalized.push(language)
+  }
+  return normalized
+}
+
+function defaultIDTitleLanguages() {
+  return [...DEFAULT_ID_TITLE_LANGUAGES]
+}
+
+function resolvedIDTitleLanguages(searchMode, singleLanguage, languages) {
+  if (String(searchMode || '').trim().toLowerCase() !== 'id') {
+    return []
+  }
+  const normalizedLanguages = normalizeSearchTitleLanguages(languages)
+  if (normalizedLanguages.length > 0) {
+    return normalizedLanguages
+  }
+  const normalizedSingle = normalizeSearchTitleLanguage(singleLanguage)
+  if (normalizedSingle === '') {
+    return defaultIDTitleLanguages()
+  }
+  return [normalizedSingle]
+}
+
+function draftTitleLanguages(searchMode, singleLanguage, languages) {
+  if (String(searchMode || '').trim().toLowerCase() !== 'id') {
+    return []
+  }
+  if (Array.isArray(languages)) {
+    return normalizeSearchTitleLanguages(languages)
+  }
+  return resolvedIDTitleLanguages(searchMode, singleLanguage, languages)
+}
+
+function remainingTitleLanguageOptions(selectedLanguages) {
+  const selected = new Set(normalizeSearchTitleLanguages(selectedLanguages).map((value) => value.toLowerCase()))
+  return TITLE_LANGUAGE_OPTIONS.filter((option) => !selected.has(normalizeSearchTitleLanguage(option.value).toLowerCase()))
+}
+
 function titleLanguageLabel(value) {
-  return TITLE_LANGUAGE_OPTIONS.find((option) => option.value === value)?.label || 'Original'
+  return TITLE_LANGUAGE_OPTIONS.find((option) => option.value === normalizeSearchTitleLanguage(value))?.label || 'Original'
+}
+
+function titleLanguagesSummary(values) {
+  const labels = normalizeSearchTitleLanguages(values).map((value) => titleLanguageLabel(value))
+  if (labels.length === 0) return 'Original'
+  return labels.join(' + ')
+}
+
+function selectedTitleLanguagesForMode(searchMode, singleLanguage, languages) {
+  if (String(searchMode || '').trim().toLowerCase() === 'id') {
+    return draftTitleLanguages(searchMode, singleLanguage, languages)
+  }
+  if (singleLanguage === null) return []
+  return [normalizeSearchTitleLanguage(singleLanguage)]
 }
 
 function assignedStreamsForQuery(streamsByName, kind, queryName) {
@@ -174,6 +281,7 @@ function emptyDraft(kind) {
     extra_search_terms: '',
     search_result_limit: 0,
     search_title_language: '',
+    search_title_languages: defaultIDTitleLanguages(),
     include_year: false,
     series_search_scope: kind === 'series' ? 'season_episode' : undefined,
   }
@@ -182,6 +290,7 @@ function emptyDraft(kind) {
 function normalizeDraft(kind, draft) {
   const value = draft || {}
   const searchMode = value.search_mode || 'id'
+  const searchTitleLanguage = normalizeDraftSearchTitleLanguage(value.search_title_language)
   return {
     name: (value.name || '').trim(),
     search_mode: searchMode,
@@ -189,7 +298,8 @@ function normalizeDraft(kind, draft) {
     search_result_limit: value.search_result_limit ?? 0,
     movie_categories: kind === 'movie' ? (value.movie_categories ?? '2000') : undefined,
     tv_categories: kind === 'series' ? (value.tv_categories ?? '5000') : undefined,
-    search_title_language: value.search_title_language || '',
+    search_title_language: searchTitleLanguage,
+    search_title_languages: draftTitleLanguages(searchMode, searchTitleLanguage, value.search_title_languages),
     include_year: normalizeQueryYearSetting(searchMode, value.include_year, value.include_year_in_text_search),
     series_search_scope: kind === 'series'
       ? normalizeSeriesScopeSelection(value.series_search_scope)
@@ -199,6 +309,12 @@ function normalizeDraft(kind, draft) {
 
 function persistableDraft(kind, draft) {
   const next = normalizeDraft(kind, draft)
+  next.search_title_language = next.search_mode === 'text'
+    ? normalizeSearchTitleLanguage(next.search_title_language ?? '')
+    : (normalizeSearchTitleLanguages(next.search_title_languages)[0] ?? '')
+  next.search_title_languages = next.search_mode === 'id'
+    ? draftTitleLanguages(next.search_mode, next.search_title_language, next.search_title_languages)
+    : []
   if (kind === 'series') {
     const resolvedScope = resolveSeriesSearchScope(next.series_search_scope)
     next.series_search_scope = resolvedScope
@@ -214,7 +330,10 @@ function comparableQuerySignature(kind, draft) {
     tv_categories: kind === 'series' ? String(value.tv_categories ?? '').trim() : '',
     extra_search_terms: String(value.extra_search_terms || '').trim(),
     search_result_limit: Number(value.search_result_limit || 0),
-    search_title_language: String(value.search_title_language || '').trim(),
+    search_title_language: value.search_title_language === null
+      ? null
+      : normalizeSearchTitleLanguage(String(value.search_title_language || '').trim()),
+    search_title_languages: draftTitleLanguages(value.search_mode, value.search_title_language, value.search_title_languages),
     include_year: value.include_year !== false,
     series_search_scope: kind === 'series' ? normalizeSeriesScopeSelection(value.series_search_scope) : undefined,
   })
@@ -242,41 +361,249 @@ function extractScopedQueryFieldErrors(fieldErrors, kind, index) {
 }
 
 function summarizeQuery(query, kind) {
-  const search = []
-  if (query.search_mode) search.push(`Mode: ${query.search_mode.toUpperCase()}`)
-  if (kind === 'movie' && query.movie_categories) search.push(`Movie: ${query.movie_categories}`)
-  if (kind === 'series' && query.tv_categories) search.push(`TV: ${query.tv_categories}`)
-  search.push(`Limit: ${Number(query.search_result_limit || 0) === 0 ? 'Max' : query.search_result_limit}`)
+  const primary = []
+  const validation = []
+  const extra = []
+
+  if (query.search_mode) primary.push(`Mode: ${query.search_mode.toUpperCase()}`)
+  if (kind === 'movie' && query.movie_categories) primary.push(`Movie: ${query.movie_categories}`)
+  if (kind === 'series' && query.tv_categories) primary.push(`TV: ${query.tv_categories}`)
+  primary.push(`Limit: ${Number(query.search_result_limit || 0) === 0 ? 'Max' : query.search_result_limit}`)
+
+  if ((query.search_mode || 'id') === 'id') {
+    validation.push(`Title: ${titleLanguagesSummary(query.search_title_languages)}`)
+  } else {
+    validation.push(`Title: ${titleLanguageLabel(query.search_title_language || '')}`)
+  }
+  validation.push(`Year: ${query.include_year === false ? 'Off' : 'On'}`)
   if (kind === 'series') {
     const scope = normalizeSeriesScopeSelection(query.series_search_scope)
     const scopeLabel = SERIES_SCOPE_OPTIONS.find((option) => option.value === scope)?.label || 'Season/Episode'
-    search.push(`Scope: ${scopeLabel}`)
+    validation.push(`Scope: ${scopeLabel}`)
   }
-  search.push(`Year: ${query.include_year === false ? 'Off' : 'On'}`)
-  search.push(`Title: ${titleLanguageLabel(query.search_title_language || '')}`)
-  if (query.extra_search_terms) search.push(`Extra: ${truncateCompactValue(query.extra_search_terms)}`)
-  return search
+
+  if (query.extra_search_terms) extra.push(`Extra: ${truncateCompactValue(query.extra_search_terms)}`)
+
+  return { primary, validation, extra }
+}
+
+function CompactRow({ items = [] }) {
+  if (!Array.isArray(items) || items.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+      {items.map((part) => (
+        <span key={part} className="rounded-full border border-border px-2 py-1">{part}</span>
+      ))}
+    </div>
+  )
+}
+
+function LabelWithHelp({ label, items = [] }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+
+    const handlePointerDown = (event) => {
+      if (!containerRef.current?.contains(event.target)) {
+        setOpen(false)
+      }
+    }
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('touchstart', handlePointerDown)
+    document.addEventListener('keydown', handleEscape)
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('touchstart', handlePointerDown)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [open])
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return <Label className="text-sm font-medium">{label}</Label>
+  }
+
+  return (
+    <div ref={containerRef} className="relative flex items-center gap-2">
+      <Label className="text-sm font-medium">{label}</Label>
+      <button
+        type="button"
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={`${label} help`}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <CircleHelp className="h-4 w-4" />
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-full z-30 mt-2 w-72 rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-muted-foreground shadow-md">
+          <div className="space-y-1.5">
+            {items.map((item) => (
+              <div key={item.label}>
+                <span className="font-medium text-foreground/80">{item.label}:</span>{' '}
+                <span>{item.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function TitleLanguageSelector({ searchMode, singleLanguage, languages, onSingleChange, onLanguagesChange, onErrorChange, error }) {
+  const normalizedMode = String(searchMode || '').trim().toLowerCase()
+  const isIDMode = normalizedMode === 'id'
+  const selectedLanguages = selectedTitleLanguagesForMode(searchMode, singleLanguage, languages)
+  const availableValues = remainingTitleLanguageOptions(selectedLanguages)
+
+  const handleAdd = (value) => {
+    if (isIDMode) {
+      onErrorChange?.('')
+      onLanguagesChange([...selectedLanguages, value])
+      return
+    }
+    if (selectedLanguages.length > 0) {
+      onErrorChange?.('Text search can use only one title language.')
+      return
+    }
+    onErrorChange?.('')
+    onSingleChange(value)
+  }
+
+  const handleRemove = (value) => {
+    if (isIDMode) {
+      onErrorChange?.('')
+      onLanguagesChange(selectedLanguages.filter((currentValue) => currentValue !== value))
+      return
+    }
+    onErrorChange?.('')
+    onSingleChange(null)
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <LabelWithHelp label="Title Language" items={TITLE_LANGUAGE_HINT_ITEMS} />
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className={`h-8 w-8 ${error ? 'border-destructive text-destructive' : ''}`}
+                  disabled={availableValues.length === 0}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent>
+              {availableValues.length === 0 ? 'No more languages to add' : 'Add title language'}
+            </TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" className="max-h-80 w-60 overflow-y-auto">
+            {availableValues.length === 0 ? (
+              <DropdownMenuItem disabled>No more languages available</DropdownMenuItem>
+            ) : (
+              availableValues.map((option) => (
+                <DropdownMenuItem key={option.value || 'original'} onClick={() => handleAdd(option.value)}>
+                  {option.label}
+                </DropdownMenuItem>
+              ))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <div className={`min-h-14 rounded-md border px-3 py-3 ${error ? 'border-destructive/60 bg-destructive/5' : 'border-border/60'} flex items-center`}>
+        <div className="flex w-full flex-wrap items-center gap-2">
+          {selectedLanguages.map((language) => (
+            <Badge key={`${normalizedMode}-${language || 'original'}`} variant="secondary" className="flex items-center gap-1 rounded-full px-3 py-1">
+              <span>{titleLanguageLabel(language)}</span>
+              <button
+                type="button"
+                className="rounded-full text-muted-foreground transition hover:text-foreground"
+                onClick={() => handleRemove(language)}
+                aria-label={`Remove ${titleLanguageLabel(language)}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 
-function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors = {} }) {
+function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors = {}, onUIErrorChange }) {
   const normalizedScope = kind === 'series'
     ? normalizeSeriesScopeSelection(draft.series_search_scope)
     : ''
+  const titleLanguageFieldKey = draft.search_mode === 'id' ? 'search_title_languages' : 'search_title_language'
+  const [titleLanguageUIError, setTitleLanguageUIError] = useState('')
+
+  const clearTitleLanguageUIError = () => {
+    setTitleLanguageUIError('')
+    onUIErrorChange?.('')
+  }
 
   const update = (key, value) => {
+    if (key === 'search_mode' || key === 'search_title_language' || key === 'search_title_languages') {
+      clearTitleLanguageUIError()
+    }
     setDraft((current) => {
       if (key === 'search_mode') {
+        const nextMode = value
+        const nextTitleLanguages = nextMode === 'id'
+          ? resolvedIDTitleLanguages(nextMode, current.search_title_language, current.search_title_languages)
+          : current.search_title_language === null
+            ? []
+            : [normalizeSearchTitleLanguage(current.search_title_language)]
         return {
           ...current,
-          search_mode: value,
-          include_year: value === 'text' ? true : current.include_year,
+          search_mode: nextMode,
+          search_title_languages: nextTitleLanguages,
+          include_year: nextMode === 'text' ? true : current.include_year,
         }
       }
       if (key === 'series_search_scope') {
         return {
           ...current,
           series_search_scope: normalizeSeriesScopeSelection(value),
+        }
+      }
+      if (key === 'search_title_language') {
+        return {
+          ...current,
+          search_title_language: normalizeDraftSearchTitleLanguage(value),
+        }
+      }
+      if (key === 'search_title_languages') {
+        if (String(current.search_mode || '').trim().toLowerCase() === 'text') {
+          const nextLanguages = normalizeSearchTitleLanguages(value)
+          return {
+            ...current,
+            search_title_languages: nextLanguages.slice(0, 1),
+            search_title_language: nextLanguages.length > 0 ? nextLanguages[0] : null,
+          }
+        }
+        return {
+          ...current,
+          search_title_languages: normalizeSearchTitleLanguages(value),
         }
       }
       const next = { ...current, [key]: value }
@@ -295,10 +622,11 @@ function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors 
   const controlWideClass = `${controlBaseClass} min-[360px]:w-[14rem]`
   const controlMediumClass = `${controlBaseClass} min-[360px]:w-[13rem]`
   const controlNarrowClass = `${controlBaseClass} min-[360px]:w-[9rem]`
+  const sectionCardClass = "rounded-lg border border-border/60 bg-background/80"
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-md border border-border/60 p-3">
+    <div className="space-y-5">
+      <div className={`${sectionCardClass} p-3`}>
         <div className={rowClass}>
           <div className={inlineRowClass}>
             <div className={inlineLabelClass}>
@@ -311,7 +639,7 @@ function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors 
         </div>
       </div>
 
-      <div className="rounded-md border border-border/60">
+      <div className={sectionCardClass}>
         <div className="p-3">
           <div className={rowClass}>
             <div className={inlineRowClass}>
@@ -349,7 +677,7 @@ function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors 
           <div className={rowClass}>
             <div className={inlineRowClass}>
               <div className={inlineLabelClass}>
-                <Label className="text-sm font-medium">Limit</Label>
+                <LabelWithHelp label="Limit" items={SEARCH_LIMIT_HINT_ITEMS} />
               </div>
               <div className={controlNarrowClass}>
                 <Input
@@ -363,7 +691,45 @@ function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors 
                 />
               </div>
             </div>
-            <p className="text-sm text-muted-foreground">{SEARCH_LIMIT_HINT}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className={sectionCardClass}>
+        <div className="relative p-3">
+          <div className={rowClass}>
+            <TitleLanguageSelector
+              searchMode={draft.search_mode}
+              singleLanguage={draft.search_title_language}
+              languages={draft.search_title_languages}
+              onSingleChange={(value) => update('search_title_language', value)}
+              onLanguagesChange={(value) => update('search_title_languages', value)}
+              onErrorChange={(message) => {
+                setTitleLanguageUIError(message || '')
+                onUIErrorChange?.(message || '')
+              }}
+              error={titleLanguageUIError || fieldErrors[titleLanguageFieldKey]}
+            />
+          </div>
+        </div>
+        <div className="relative p-3">
+          <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
+          <div className={rowClass}>
+            <div className={inlineRowClass}>
+              <div className={inlineLabelClass}>
+                <LabelWithHelp label="Year" items={YEAR_HINT_ITEMS} />
+              </div>
+              <div className={controlMediumClass}>
+                <select
+                  className={`flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${fieldClass('include_year')}`}
+                  value={draft.include_year === false ? 'off' : 'on'}
+                  onChange={(event) => update('include_year', event.target.value === 'on')}
+                >
+                  <option value="on">{draft.search_mode === 'text' ? 'Search + Validation' : 'Validation'}</option>
+                  <option value="off">Ignore</option>
+                </select>
+              </div>
+            </div>
           </div>
         </div>
         {kind === 'series' && (
@@ -372,7 +738,7 @@ function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors 
             <div className={rowClass}>
               <div className={inlineRowClass}>
                 <div className={inlineLabelClass}>
-                  <Label className="text-sm font-medium">Scope</Label>
+                  <LabelWithHelp label="Scope" items={TV_SCOPE_HINT_ITEMS} />
                 </div>
                 <div className={controlMediumClass}>
                   <select
@@ -386,84 +752,21 @@ function QueryDraftFields({ kind, draft, setDraft, editing = false, fieldErrors 
                   </select>
                 </div>
               </div>
-              <div className="space-y-1 text-sm text-muted-foreground">
-                {TV_SCOPE_HINT_ITEMS.map((item) => (
-                  <p key={item.label}>
-                    <span className="font-medium text-foreground/80">{item.label}:</span>{' '}
-                    {item.text}
-                  </p>
-                ))}
-              </div>
             </div>
           </div>
         )}
       </div>
 
-      <div className="rounded-md border border-border/60">
-        <div className="p-3">
-          <div className={rowClass}>
-            <div className={inlineRowClass}>
-              <div className={inlineLabelClass}>
-                <Label className="text-sm font-medium">Year</Label>
-              </div>
-              <div className={controlMediumClass}>
-                <select
-                  className={`flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${fieldClass('include_year')}`}
-                  value={draft.include_year === false ? 'off' : 'on'}
-                  onChange={(event) => update('include_year', event.target.value === 'on')}
-                >
-                  <option value="on">{draft.search_mode === 'text' ? 'Search + Validation' : 'Validation'}</option>
-                  <option value="off">Ignore</option>
-                </select>
-              </div>
-            </div>
-            <p className="text-sm text-muted-foreground">{YEAR_HINT}</p>
-          </div>
-        </div>
-        <div className="relative p-3">
-          <div className="absolute left-3 right-3 top-0 border-t border-border/60" />
-          <div className={rowClass}>
-            <div className={inlineRowClass}>
-              <div className={inlineLabelClass}>
-                <Label className="text-sm font-medium">Title Language</Label>
-              </div>
-              <div className={controlMediumClass}>
-                <select
-                  className={`flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${fieldClass('search_title_language')}`}
-                  value={draft.search_title_language || ''}
-                  onChange={(event) => update('search_title_language', event.target.value)}
-                >
-                  {TITLE_LANGUAGE_OPTIONS.map((option) => (
-                    <option key={option.value || 'original'} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="space-y-1 text-sm text-muted-foreground">
-              {TITLE_LANGUAGE_HINT_ITEMS.map((item) => (
-                <p key={item.label}>
-                  <span className="font-medium text-foreground/80">{item.label}:</span>{' '}
-                  {item.text}
-                </p>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-md border border-border/60 p-3">
+      <div className={`${sectionCardClass} p-3`}>
         <div className={rowClass}>
           <div className="space-y-3">
             <div>
-              <Label className="text-sm font-medium">Extra Terms</Label>
+              <LabelWithHelp label="Extra Terms" items={EXTRA_TERMS_HINT_ITEMS} />
             </div>
             <div className="w-full">
               <Input className={`h-9 ${fieldClass('extra_search_terms')}`} placeholder={'"The Walking Dead" !cam (1080p|720p)'} value={draft.extra_search_terms || ''} onChange={(event) => update('extra_search_terms', event.target.value)} />
             </div>
           </div>
-          <p className="text-sm text-muted-foreground">Optional terms for text and ID searches. Use quotes for exact phrases, `!term` to exclude words, `*` as wildcard, `|` or `OR` for alternatives, and parentheses to group like `(1080p|720p)`.</p>
         </div>
       </div>
     </div>
@@ -489,6 +792,7 @@ function QueryDialog({ open, onOpenChange, kind, initialValue, existingNames = [
   const [draft, setDraft] = useState(() => normalizeDraft(kind, initialValue))
   const [wasOpen, setWasOpen] = useState(open)
   const [validationError, setValidationError] = useState('')
+  const [uiValidationError, setUIValidationError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -501,6 +805,7 @@ function QueryDialog({ open, onOpenChange, kind, initialValue, existingNames = [
       }
       setDraft(nextDraft)
       setValidationError('')
+      setUIValidationError('')
       setFieldErrors({})
     }
     setWasOpen(open)
@@ -520,6 +825,7 @@ function QueryDialog({ open, onOpenChange, kind, initialValue, existingNames = [
       return
     }
     onClearStatus?.()
+    setUIValidationError('')
     onOpenChange(false)
   }
 
@@ -537,6 +843,12 @@ function QueryDialog({ open, onOpenChange, kind, initialValue, existingNames = [
     if (!category || category === '0') {
       nextFieldErrors[kind === 'movie' ? 'movie_categories' : 'tv_categories'] = 'Category is required.'
     }
+    if (next.search_mode === 'id' && draftTitleLanguages(next.search_mode, next.search_title_language, next.search_title_languages).length === 0) {
+      nextFieldErrors.search_title_languages = 'Add at least one title language.'
+    }
+    if (next.search_mode === 'text' && selectedTitleLanguagesForMode(next.search_mode, next.search_title_language, next.search_title_languages).length === 0) {
+      nextFieldErrors.search_title_language = 'Add at least one title language.'
+    }
     if (Number.isNaN(limit) || limit < 0) {
       nextFieldErrors.search_result_limit = 'Limit must be 0 or greater.'
     }
@@ -546,6 +858,7 @@ function QueryDialog({ open, onOpenChange, kind, initialValue, existingNames = [
       return
     }
     setFieldErrors({})
+    setUIValidationError('')
     setValidationError('')
     next.search_result_limit = limit
     setSaving(true)
@@ -581,12 +894,12 @@ function QueryDialog({ open, onOpenChange, kind, initialValue, existingNames = [
           <DialogDescription>{dialogDescription(kind)}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-          <QueryDraftFields kind={kind} draft={draft} setDraft={setDraft} editing={editing} fieldErrors={fieldErrors} />
+          <QueryDraftFields kind={kind} draft={draft} setDraft={setDraft} editing={editing} fieldErrors={fieldErrors} onUIErrorChange={setUIValidationError} />
         </div>
         <DialogFooter className="flex items-center justify-between gap-3">
           <div className="min-h-9 flex-1">
-            {validationError && (
-              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{validationError}</div>
+            {(uiValidationError || validationError) && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{uiValidationError || validationError}</div>
             )}
           </div>
           <div className="flex flex-row items-center justify-end gap-2">
@@ -739,13 +1052,13 @@ function QuerySection({ title, description, kind, items, names, update, remove, 
                       </div>
                       <div className="min-w-0 font-semibold sm:order-1">{query.name || defaultQueryName(kind, index)}</div>
                     </div>
-                    {summary.length === 0 ? (
+                    {!summary.primary.length && !summary.validation.length && !summary.extra.length ? (
                       <p className="text-sm text-muted-foreground">No values set.</p>
                     ) : (
-                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                        {summary.map((part) => (
-                          <span key={part} className="rounded-full border border-border px-2 py-1">{part}</span>
-                        ))}
+                      <div className="space-y-3">
+                        <CompactRow items={summary.primary} />
+                        <CompactRow items={summary.validation} />
+                        <CompactRow items={summary.extra} />
                       </div>
                     )}
                   </div>

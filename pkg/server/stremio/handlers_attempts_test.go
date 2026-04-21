@@ -97,6 +97,48 @@ func TestRecordAttemptParamsDerivesCompletePackMatchType(t *testing.T) {
 	}
 }
 
+func TestAllowLargestDirectFallbackForSessionMovie(t *testing.T) {
+	sess := &session.Session{ContentType: "movie"}
+	if !allowLargestDirectFallbackForSession(sess) {
+		t.Fatal("expected movie sessions to allow largest direct fallback")
+	}
+}
+
+func TestAllowLargestDirectFallbackForSessionExactEpisodeOnly(t *testing.T) {
+	exact := &session.Session{
+		ContentType: "series",
+		ContentID:   "tt2261227:2:3",
+		Release: &release.Release{
+			Title: "Altered.Carbon.S02E03.1080p.NF.WEB-DL.DDP5.1.Atmos.H.264.mkv",
+		},
+	}
+	if !allowLargestDirectFallbackForSession(exact) {
+		t.Fatal("expected exact episode sessions to allow largest direct fallback")
+	}
+
+	seasonPack := &session.Session{
+		ContentType: "series",
+		ContentID:   "tt2261227:2:3",
+		Release: &release.Release{
+			Title: "Altered.Carbon.S02.COMPLETE.1080p.NF.WEB-DL.DDP5.1.Atmos.H.264.mkv",
+		},
+	}
+	if allowLargestDirectFallbackForSession(seasonPack) {
+		t.Fatal("did not expect season pack sessions to allow largest direct fallback")
+	}
+
+	completePack := &session.Session{
+		ContentType: "series",
+		ContentID:   "tt3032476:1:2",
+		Release: &release.Release{
+			Title: "The.Good.Place.Complete.Series.1080p.NF.WEB-DL.DD5.1.x264-GROUP",
+		},
+	}
+	if allowLargestDirectFallbackForSession(completePack) {
+		t.Fatal("did not expect complete pack sessions to allow largest direct fallback")
+	}
+}
+
 func TestCacheReturnedPlaybackBlueprintReplacesStaleBlueprint(t *testing.T) {
 	sess := &session.Session{}
 	stale := &unpack.DirectBlueprint{FileName: "Show.S01E04.mkv", FileIndex: 1, Target: unpack.EpisodeTarget{Season: 1, Episode: 4}}

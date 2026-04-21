@@ -55,6 +55,120 @@ func TestBuildSeriesQueriesWithOptionsCanOmitYear(t *testing.T) {
 	}
 }
 
+func TestSearchRequestNormalisationLogEntriesSplitMultipleLanguages(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "Witch Hat Atelier",
+			OriginalName:     "とんがり帽子のアトリエ",
+			OriginalLanguage: "ja",
+		},
+		TVAlternativeTitles: &tmdb.TVAlternativeTitlesResponse{
+			Results: []tmdb.AlternativeTitle{
+				{ISO3166_1: "JP", Title: "Tongari Boushi no Atelier", Type: "Romaji"},
+			},
+		},
+	}
+
+	got, ok := searchRequestNormalisationLogEntries(metadata, "series", []string{"en-US", ""})
+	if !ok {
+		t.Fatalf("expected normalisation log entries to be emitted")
+	}
+
+	want := []titleLogEntry{
+		{Languages: []string{"en-US"}, InputTitle: "Witch Hat Atelier", NormalizedTitle: "Witch Hat Atelier"},
+		{Languages: []string{"original"}, InputTitle: "Tongari Boushi no Atelier", NormalizedTitle: "Tongari Boushi no Atelier"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("searchRequestNormalisationLogEntries() = %#v, want %#v", got, want)
+	}
+}
+
+func TestValidationQueryProfilesFromMetadataSplitMultipleLanguages(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "Witch Hat Atelier",
+			OriginalName:     "とんがり帽子のアトリエ",
+			OriginalLanguage: "ja",
+		},
+		TVAlternativeTitles: &tmdb.TVAlternativeTitlesResponse{
+			Results: []tmdb.AlternativeTitle{
+				{ISO3166_1: "JP", Title: "Tongari Boushi no Atelier", Type: "Romaji"},
+			},
+		},
+	}
+
+	got := validationQueryProfilesFromMetadata(metadata, "series", []string{"en-US", ""}, false)
+	want := []indexer.ValidationQueryProfile{
+		{Languages: []string{"en-US"}, Query: "Witch Hat Atelier"},
+		{Languages: []string{"original"}, Query: "Tongari Boushi no Atelier"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("validationQueryProfilesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
+func TestValidationQueryProfilesFromMetadataMergesDuplicateQueriesAcrossLanguages(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "Dragon Ball Z",
+			OriginalName:     "ドラゴンボールゼット",
+			OriginalLanguage: "ja",
+		},
+		TVTranslations: &tmdb.TVTranslationsResponse{
+			Translations: []tmdb.TVTranslationEntry{
+				{
+					ISO639_1:  "en",
+					ISO3166_1: "US",
+					Data: tmdb.TVTranslationData{
+						Name: "Dragon Ball Z",
+					},
+				},
+			},
+		},
+	}
+
+	got := validationQueryProfilesFromMetadata(metadata, "series", []string{"en-US", ""}, false)
+	want := []indexer.ValidationQueryProfile{
+		{Languages: []string{"en-US", "original"}, Query: "Dragon Ball Z"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("validationQueryProfilesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSearchRequestNormalisationLogEntriesMergesDuplicateTitlesAcrossLanguages(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "Dragon Ball Z",
+			OriginalName:     "ドラゴンボールゼット",
+			OriginalLanguage: "ja",
+		},
+		TVTranslations: &tmdb.TVTranslationsResponse{
+			Translations: []tmdb.TVTranslationEntry{
+				{
+					ISO639_1:  "en",
+					ISO3166_1: "US",
+					Data: tmdb.TVTranslationData{
+						Name: "Dragon Ball Z",
+					},
+				},
+			},
+		},
+	}
+
+	got, ok := searchRequestNormalisationLogEntries(metadata, "series", []string{"en-US", ""})
+	if !ok {
+		t.Fatalf("expected normalisation log entries to be emitted")
+	}
+
+	want := []titleLogEntry{
+		{Languages: []string{"en-US", "original"}, InputTitle: "Dragon Ball Z", NormalizedTitle: "Dragon Ball Z"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("searchRequestNormalisationLogEntries() = %#v, want %#v", got, want)
+	}
+}
+
 func TestMetadataLogTitlesPreferOriginalAndJapaneseRomajiAlternative(t *testing.T) {
 	metadata := &resolvedSearchMetadata{
 		MovieDetails: &tmdb.MovieDetails{
@@ -127,6 +241,34 @@ func TestMetadataLogTitlesHandleMissingJapaneseAlternativeTitles(t *testing.T) {
 	}()
 
 	logMetadataLookupFinished("Stream01", "movie", "tt0245429", params)
+}
+
+func TestMetadataFallbackTitleReturnsEnglishWhenJapaneseRomajiMissing(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "Dragon Ball Z",
+			OriginalName:     "ドラゴンボールゼット",
+			OriginalLanguage: "ja",
+		},
+		TVTranslations: &tmdb.TVTranslationsResponse{
+			Translations: []tmdb.TVTranslationEntry{
+				{
+					ISO639_1:  "en",
+					ISO3166_1: "US",
+					Data: tmdb.TVTranslationData{
+						Name: "Dragon Ball Z",
+					},
+				},
+			},
+		},
+	}
+
+	if got := metadataAlternativeTitle(metadata, "series"); got != "" {
+		t.Fatalf("metadataAlternativeTitle() = %q, want empty", got)
+	}
+	if got := metadataFallbackTitle(metadata, "series"); got != "Dragon Ball Z" {
+		t.Fatalf("metadataFallbackTitle() = %q, want %q", got, "Dragon Ball Z")
+	}
 }
 
 func TestBuildMovieQueriesFromMetadataAddsGermanTransliterationVariant(t *testing.T) {
@@ -210,6 +352,40 @@ func TestBuildMovieQueriesFromMetadataUsesRomanizedJapaneseOriginalTitle(t *test
 	}
 }
 
+func TestBuildMovieQueriesFromMetadataFallsBackToEnglishWhenJapaneseRomajiMissing(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		MovieDetails: &tmdb.MovieDetails{
+			Title:            "Spirited Away",
+			OriginalTitle:    "千と千尋の神隠し",
+			OriginalLanguage: "ja",
+			ReleaseDate:      "2001-07-20",
+		},
+		MovieTranslations: &tmdb.MovieTranslationsResponse{
+			Translations: []tmdb.MovieTranslationEntry{
+				{
+					ISO639_1:  "en",
+					ISO3166_1: "US",
+					Data: tmdb.MovieTranslationData{
+						Title: "Spirited Away",
+					},
+				},
+			},
+		},
+		MovieAlternativeTitles: &tmdb.MovieAlternativeTitlesResponse{
+			Titles: []tmdb.AlternativeTitle{
+				{ISO3166_1: "JP", Title: "SenChihi", Type: "Romaji (Short)"},
+			},
+		},
+	}
+
+	got := buildMovieQueriesFromMetadata(metadata, "original", false)
+	want := []string{"Spirited Away"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildMovieQueriesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
 func TestBuildSeriesQueriesFromMetadataAddsGermanTransliterationVariant(t *testing.T) {
 	metadata := &resolvedSearchMetadata{
 		TVDetails: &tmdb.TVDetails{
@@ -285,6 +461,40 @@ func TestBuildSeriesQueriesFromMetadataUsesRomanizedJapaneseOriginalTitle(t *tes
 
 	got := buildSeriesQueriesFromMetadata(metadata, "original", false, "1", "2", config.SeriesSearchScopeSeasonEpisode)
 	want := []string{"Shingeki no Kyojin S01E02"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSeriesQueriesFromMetadata() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildSeriesQueriesFromMetadataFallsBackToEnglishWhenJapaneseRomajiMissing(t *testing.T) {
+	metadata := &resolvedSearchMetadata{
+		TVDetails: &tmdb.TVDetails{
+			Name:             "Witch Hat Atelier",
+			OriginalName:     "とんがり帽子のアトリエ",
+			OriginalLanguage: "ja",
+			FirstAirDate:     "2025-01-01",
+		},
+		TVTranslations: &tmdb.TVTranslationsResponse{
+			Translations: []tmdb.TVTranslationEntry{
+				{
+					ISO639_1:  "en",
+					ISO3166_1: "US",
+					Data: tmdb.TVTranslationData{
+						Name: "Witch Hat Atelier",
+					},
+				},
+			},
+		},
+		TVAlternativeTitles: &tmdb.TVAlternativeTitlesResponse{
+			Results: []tmdb.AlternativeTitle{
+				{ISO3166_1: "JP", Title: "Tongari", Type: "Romaji (Short)"},
+			},
+		},
+	}
+
+	got := buildSeriesQueriesFromMetadata(metadata, "original", false, "1", "2", config.SeriesSearchScopeSeasonEpisode)
+	want := []string{"Witch Hat Atelier S01E02"}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("buildSeriesQueriesFromMetadata() = %#v, want %#v", got, want)
@@ -423,7 +633,7 @@ func TestBuildSearchParamsFromBaseTextModeUsesRequestLanguageNotPerIndexerOverri
 	}
 }
 
-func TestSearchRequestNormalisationLogValuesIncludesOriginalTitle(t *testing.T) {
+func TestSearchRequestNormalisationLogEntriesIncludeSingleMovieTitle(t *testing.T) {
 	metadata := &resolvedSearchMetadata{
 		MovieDetails: &tmdb.MovieDetails{
 			Title:            "The Lion King",
@@ -444,30 +654,23 @@ func TestSearchRequestNormalisationLogValuesIncludesOriginalTitle(t *testing.T) 
 		},
 	}
 
-	originalTitle, inputTitle, normalizedTitle, ok := searchRequestNormalisationLogValues(
+	entries, ok := searchRequestNormalisationLogEntries(
 		metadata,
 		"movie",
-		"de-DE",
-		true,
-		"",
-		"",
-		"",
+		[]string{"de-DE"},
 	)
 	if !ok {
-		t.Fatal("expected normalisation log values")
+		t.Fatal("expected normalisation log entries")
 	}
-	if originalTitle != "The Lion King" {
-		t.Fatalf("originalTitle = %q, want %q", originalTitle, "The Lion King")
+	want := []titleLogEntry{
+		{Languages: []string{"de-DE"}, InputTitle: "König der Löwen", NormalizedTitle: "Koenig der Loewen"},
 	}
-	if inputTitle != "König der Löwen" {
-		t.Fatalf("inputTitle = %q, want %q", inputTitle, "König der Löwen")
-	}
-	if normalizedTitle != "Koenig der Loewen" {
-		t.Fatalf("normalizedTitle = %q, want %q", normalizedTitle, "Koenig der Loewen")
+	if !reflect.DeepEqual(entries, want) {
+		t.Fatalf("entries = %#v, want %#v", entries, want)
 	}
 }
 
-func TestSearchRequestNormalisationLogValuesOmitsSeriesScopeSuffix(t *testing.T) {
+func TestSearchRequestNormalisationLogEntriesOmitSeriesScopeSuffix(t *testing.T) {
 	metadata := &resolvedSearchMetadata{
 		TVDetails: &tmdb.TVDetails{
 			Name:             "The Rookie",
@@ -487,26 +690,19 @@ func TestSearchRequestNormalisationLogValuesOmitsSeriesScopeSuffix(t *testing.T)
 		},
 	}
 
-	originalTitle, inputTitle, normalizedTitle, ok := searchRequestNormalisationLogValues(
+	entries, ok := searchRequestNormalisationLogEntries(
 		metadata,
 		"series",
-		"de-DE",
-		false,
-		"1",
-		"2",
-		config.SeriesSearchScopeSeasonEpisode,
+		[]string{"de-DE"},
 	)
 	if !ok {
-		t.Fatal("expected normalisation log values")
+		t.Fatal("expected normalisation log entries")
 	}
-	if originalTitle != "The Rookie" {
-		t.Fatalf("originalTitle = %q, want %q", originalTitle, "The Rookie")
+	want := []titleLogEntry{
+		{Languages: []string{"de-DE"}, InputTitle: "König der Löwen", NormalizedTitle: "Koenig der Loewen"},
 	}
-	if inputTitle != "König der Löwen" {
-		t.Fatalf("inputTitle = %q, want %q", inputTitle, "König der Löwen")
-	}
-	if normalizedTitle != "Koenig der Loewen" {
-		t.Fatalf("normalizedTitle = %q, want %q", normalizedTitle, "Koenig der Loewen")
+	if !reflect.DeepEqual(entries, want) {
+		t.Fatalf("entries = %#v, want %#v", entries, want)
 	}
 }
 
@@ -563,6 +759,66 @@ func TestBuildSearchParamsFromBaseAlwaysBuildsValidationInputs(t *testing.T) {
 	}
 	if params.Req.ValidationQuery != "The Lion King" {
 		t.Fatalf("expected validation query to use the metadata title, got %q", params.Req.ValidationQuery)
+	}
+	if !reflect.DeepEqual(params.Req.ValidationQueries, []string{"The Lion King"}) {
+		t.Fatalf("expected validation queries to keep the deduped metadata title, got %#v", params.Req.ValidationQueries)
+	}
+}
+
+func TestBuildSearchParamsFromBaseIDModeBuildsValidationQueriesForMultipleLanguages(t *testing.T) {
+	srv := &Server{config: &config.Config{}}
+	base := &SearchParams{
+		ContentType: "movie",
+		ID:          "tmdb:123",
+		Req: indexer.SearchRequest{
+			TMDBID: "123",
+			Cat:    "2000",
+			Limit:  1000,
+		},
+		Metadata: &resolvedSearchMetadata{
+			MovieDetails: &tmdb.MovieDetails{
+				Title:            "The Lion King",
+				OriginalTitle:    "The Lion King",
+				OriginalLanguage: "en",
+				ReleaseDate:      "1994-06-15",
+			},
+			MovieTranslations: &tmdb.MovieTranslationsResponse{
+				Translations: []tmdb.MovieTranslationEntry{
+					{
+						ISO639_1:  "de",
+						ISO3166_1: "DE",
+						Data: tmdb.MovieTranslationData{
+							Title: "König der Löwen",
+						},
+					},
+				},
+			},
+		},
+		MovieTitleQueries:  make(map[string][]string),
+		SeriesTitleQueries: make(map[string][]string),
+	}
+
+	params, err := srv.buildSearchParamsFromBase(base, &config.SearchQueryConfig{
+		SearchMode:           "id",
+		SearchTitleLanguage:  "",
+		SearchTitleLanguages: []string{"", "de-DE"},
+		IncludeYear:          boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("buildSearchParamsFromBase() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(params.Req.ValidationQueries, []string{"The Lion King", "Koenig der Loewen"}) {
+		t.Fatalf("ValidationQueries = %#v, want %#v", params.Req.ValidationQueries, []string{"The Lion King", "Koenig der Loewen"})
+	}
+	if !reflect.DeepEqual(params.Req.ValidationQueryProfiles, []indexer.ValidationQueryProfile{
+		{Languages: []string{"original"}, Query: "The Lion King"},
+		{Languages: []string{"de-DE"}, Query: "Koenig der Loewen"},
+	}) {
+		t.Fatalf("ValidationQueryProfiles = %#v", params.Req.ValidationQueryProfiles)
+	}
+	if params.Req.ValidationQuery != "The Lion King" {
+		t.Fatalf("ValidationQuery = %q, want %q", params.Req.ValidationQuery, "The Lion King")
 	}
 }
 

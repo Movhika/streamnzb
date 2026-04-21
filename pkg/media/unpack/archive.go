@@ -32,6 +32,10 @@ type FailedBlueprint struct {
 	Target EpisodeTarget
 }
 
+type StreamSelectionHints struct {
+	AllowLargestDirectFallback bool
+}
+
 func isPlausibleLargestDirectFallbackName(name string) bool {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
@@ -80,10 +84,14 @@ func blueprintTargetMatches(cachedTarget, requestedTarget EpisodeTarget) bool {
 }
 
 func GetMediaStream(ctx context.Context, files []UnpackableFile, cachedBP interface{}, password string) (ReadSeekCloser, string, int64, interface{}, error) {
-	return GetMediaStreamForEpisode(ctx, files, cachedBP, password, EpisodeTarget{})
+	return GetMediaStreamForEpisodeWithHints(ctx, files, cachedBP, password, EpisodeTarget{}, StreamSelectionHints{})
 }
 
 func GetMediaStreamForEpisode(ctx context.Context, files []UnpackableFile, cachedBP interface{}, password string, target EpisodeTarget) (ReadSeekCloser, string, int64, interface{}, error) {
+	return GetMediaStreamForEpisodeWithHints(ctx, files, cachedBP, password, target, StreamSelectionHints{})
+}
+
+func GetMediaStreamForEpisodeWithHints(ctx context.Context, files []UnpackableFile, cachedBP interface{}, password string, target EpisodeTarget, hints StreamSelectionHints) (ReadSeekCloser, string, int64, interface{}, error) {
 	if err := contextErr(ctx); err != nil {
 		return nil, "", 0, nil, err
 	}
@@ -222,7 +230,7 @@ func GetMediaStreamForEpisode(ctx context.Context, files []UnpackableFile, cache
 			}
 		}
 		extractedName := ExtractFilename(largestFile.Name())
-		if target.Valid() {
+		if target.Valid() && !hints.AllowLargestDirectFallback {
 			err := fmt.Errorf("%w: no direct media candidate matched season=%d episode=%d", ErrEpisodeTargetNotFound, target.Season, target.Episode)
 			logger.Warn("Refusing largest-file fallback for targeted episode request",
 				"target", target,

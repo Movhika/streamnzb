@@ -77,12 +77,13 @@ type SearchQueryConfig struct {
 	SearchResultLimit int    `json:"search_result_limit,omitempty"`
 	IncludeYear       *bool  `json:"include_year,omitempty"`
 	// Legacy transport-vs-query hint kept only so older local draft configs still load cleanly.
-	UseSeasonEpisodeParams     *bool  `json:"use_season_episode_params,omitempty"`
-	SeriesSearchScope          string `json:"series_search_scope,omitempty"`
-	EnableSeriesSeasonSearch   *bool  `json:"enable_series_season_search,omitempty"`
-	EnableSeriesCompleteSearch *bool  `json:"enable_series_complete_search,omitempty"`
-	EnableSeriesPackSearch     *bool  `json:"enable_series_pack_search,omitempty"`
-	SearchTitleLanguage        string `json:"search_title_language,omitempty"`
+	UseSeasonEpisodeParams     *bool    `json:"use_season_episode_params,omitempty"`
+	SeriesSearchScope          string   `json:"series_search_scope,omitempty"`
+	EnableSeriesSeasonSearch   *bool    `json:"enable_series_season_search,omitempty"`
+	EnableSeriesCompleteSearch *bool    `json:"enable_series_complete_search,omitempty"`
+	EnableSeriesPackSearch     *bool    `json:"enable_series_pack_search,omitempty"`
+	SearchTitleLanguage        string   `json:"search_title_language,omitempty"`
+	SearchTitleLanguages       []string `json:"search_title_languages,omitempty"`
 	// Legacy year field kept only so older local draft configs still load cleanly.
 	LegacyIncludeYearInTextSearch *bool  `json:"include_year_in_text_search,omitempty"`
 	MovieCategories               string `json:"movie_categories,omitempty"`
@@ -163,6 +164,39 @@ func NormalizeAvailNZBMode(mode string) string {
 	default:
 		return "on"
 	}
+}
+
+func NormalizeSearchTitleLanguage(language string) string {
+	trimmed := strings.TrimSpace(language)
+	if strings.EqualFold(trimmed, "original") {
+		return ""
+	}
+	return trimmed
+}
+
+func NormalizeSearchTitleLanguages(languages []string) []string {
+	if len(languages) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(languages))
+	seen := make(map[string]bool, len(languages))
+	for _, language := range languages {
+		value := NormalizeSearchTitleLanguage(language)
+		key := strings.ToLower(value)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		normalized = append(normalized, value)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func DefaultIDSearchTitleLanguages() []string {
+	return []string{"en-US", ""}
 }
 
 func NormalizeSeriesSearchScope(scope string) string {
@@ -332,8 +366,7 @@ func (sq *SearchQueryConfig) AsIndexerSearchConfig() *IndexerSearchConfig {
 		out.DisableIdSearch = sq.DisableIdSearch
 		out.DisableStringSearch = sq.DisableStringSearch
 	}
-	if sq.SearchTitleLanguage != "" {
-		s := sq.SearchTitleLanguage
+	if s := NormalizeSearchTitleLanguage(sq.SearchTitleLanguage); s != "" {
 		out.SearchTitleLanguage = &s
 	}
 	if sq.MovieCategories != "" {
@@ -606,40 +639,44 @@ func (c *Config) applyStreamModelUpgradeDefaults() bool {
 func (c *Config) ensureDefaultMigrationSearchQueries() bool {
 	changed := false
 	if c.ensureMovieSearchQuery(SearchQueryConfig{
-		Name:              "DefaultMovieText",
-		SearchMode:        "text",
-		SearchResultLimit: 0,
-		MovieCategories:   "2000",
-		IncludeYear:       ptrBool(true),
+		Name:                "DefaultMovieText",
+		SearchMode:          "text",
+		SearchResultLimit:   0,
+		MovieCategories:     "2000",
+		IncludeYear:         ptrBool(true),
+		SearchTitleLanguage: "",
 	}) {
 		changed = true
 	}
 	if c.ensureMovieSearchQuery(SearchQueryConfig{
-		Name:              "DefaultMovieID",
-		SearchMode:        "id",
-		SearchResultLimit: 0,
-		MovieCategories:   "2000",
-		IncludeYear:       ptrBool(false),
+		Name:                 "DefaultMovieID",
+		SearchMode:           "id",
+		SearchResultLimit:    0,
+		MovieCategories:      "2000",
+		IncludeYear:          ptrBool(false),
+		SearchTitleLanguages: DefaultIDSearchTitleLanguages(),
 	}) {
 		changed = true
 	}
 	if c.ensureSeriesSearchQuery(SearchQueryConfig{
-		Name:              "DefaultTVText",
-		SearchMode:        "text",
-		SearchResultLimit: 0,
-		TVCategories:      "5000",
-		IncludeYear:       ptrBool(true),
-		SeriesSearchScope: SeriesSearchScopeSeasonEpisode,
+		Name:                "DefaultTVText",
+		SearchMode:          "text",
+		SearchResultLimit:   0,
+		TVCategories:        "5000",
+		IncludeYear:         ptrBool(true),
+		SeriesSearchScope:   SeriesSearchScopeSeasonEpisode,
+		SearchTitleLanguage: "",
 	}) {
 		changed = true
 	}
 	if c.ensureSeriesSearchQuery(SearchQueryConfig{
-		Name:              "DefaultTVID",
-		SearchMode:        "id",
-		SearchResultLimit: 0,
-		TVCategories:      "5000",
-		IncludeYear:       ptrBool(false),
-		SeriesSearchScope: SeriesSearchScopeSeasonEpisode,
+		Name:                 "DefaultTVID",
+		SearchMode:           "id",
+		SearchResultLimit:    0,
+		TVCategories:         "5000",
+		IncludeYear:          ptrBool(false),
+		SeriesSearchScope:    SeriesSearchScopeSeasonEpisode,
+		SearchTitleLanguages: DefaultIDSearchTitleLanguages(),
 	}) {
 		changed = true
 	}
@@ -664,6 +701,24 @@ func backfillLegacySearchQuerySettingsForQuery(query *SearchQueryConfig, isSerie
 	}
 	if query.LegacyIncludeYearInTextSearch != nil {
 		query.LegacyIncludeYearInTextSearch = nil
+		changed = true
+	}
+	normalizedSingleLanguage := NormalizeSearchTitleLanguage(query.SearchTitleLanguage)
+	if query.SearchTitleLanguage != normalizedSingleLanguage {
+		query.SearchTitleLanguage = normalizedSingleLanguage
+		changed = true
+	}
+	normalizedLanguages := NormalizeSearchTitleLanguages(query.SearchTitleLanguages)
+	if len(query.SearchTitleLanguages) != len(normalizedLanguages) || strings.Join(query.SearchTitleLanguages, "\x00") != strings.Join(normalizedLanguages, "\x00") {
+		query.SearchTitleLanguages = normalizedLanguages
+		changed = true
+	}
+	if strings.EqualFold(strings.TrimSpace(query.SearchMode), "id") && len(query.SearchTitleLanguages) == 0 {
+		if query.SearchTitleLanguage == "" {
+			query.SearchTitleLanguages = DefaultIDSearchTitleLanguages()
+		} else {
+			query.SearchTitleLanguages = NormalizeSearchTitleLanguages([]string{query.SearchTitleLanguage})
+		}
 		changed = true
 	}
 	if isSeries {

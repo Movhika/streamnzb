@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -212,6 +213,21 @@ func TestValidateSearchResultsWithStatsAllowsOptionalAndWordMatches(t *testing.T
 	}
 }
 
+func TestValidateSearchResultsWithStatsForQueriesMatchesAnyExpectedTitle(t *testing.T) {
+	releases := []*release.Release{
+		{Title: "Koenig.der.Loewen.1994.1080p.BluRay.x264-GROUP"},
+	}
+
+	filtered, stats := ValidateSearchResultsWithStatsForQueries(releases, "movie", []string{"The Lion King 1994", "Koenig der Loewen 1994"}, "", "", true, true)
+
+	if len(filtered) != 1 {
+		t.Fatalf("expected multilingual validation to accept a matching alternate title, got %d results", len(filtered))
+	}
+	if stats.DroppedTitle != 0 || stats.DroppedYear != 0 {
+		t.Fatalf("expected no validation drops, got %+v", stats)
+	}
+}
+
 func TestValidateSearchResultsWithStatsAllowsDashedSeasonEpisodePattern(t *testing.T) {
 	releases := []*release.Release{
 		{Title: "[SubsPlease] Tensei Shitara Slime Datta Ken S4 - 03 (720p) [370B1C65]"},
@@ -334,5 +350,52 @@ func TestRunIndexerSearchesSkipsWithoutValidationBasis(t *testing.T) {
 	}
 	if len(idx.reqs) != 0 {
 		t.Fatalf("expected no Search call without validation basis, got %d", len(idx.reqs))
+	}
+}
+
+func TestRunIndexerSearchesUsesValidationQueriesWhenPresent(t *testing.T) {
+	idx := &staticIndexer{
+		name: "SceneNZBs",
+		resp: &indexer.SearchResponse{
+			Channel: indexer.Channel{
+				Items: []indexer.Item{
+					{Title: "Koenig.der.Loewen.1994.1080p.BluRay.x264-GROUP", ActualIndexer: "SceneNZBs"},
+				},
+			},
+		},
+	}
+	req := indexer.SearchRequest{
+		SearchMode:           "id",
+		IMDbID:               "tt0110357",
+		TMDBID:               "8587",
+		ValidationQueries:    []string{"The Lion King 1994", "Koenig der Loewen 1994"},
+		EnableYearValidation: true,
+	}
+
+	got, err := RunIndexerSearches(idx, req, "movie")
+	if err != nil {
+		t.Fatalf("RunIndexerSearches() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected multilingual validation queries to keep the result, got %d", len(got))
+	}
+}
+
+func TestValidationProfilesForRequestPreferExplicitProfiles(t *testing.T) {
+	req := indexer.SearchRequest{
+		ValidationQueryProfiles: []indexer.ValidationQueryProfile{
+			{Languages: []string{"en-US"}, Query: "Witch Hat Atelier"},
+			{Languages: []string{"original"}, Query: "Tongari Boushi no Atelier"},
+		},
+		ValidationQueries: []string{"ignored"},
+	}
+
+	got := validationProfilesForRequest(req)
+	want := []indexer.ValidationQueryProfile{
+		{Languages: []string{"en-US"}, Query: "Witch Hat Atelier"},
+		{Languages: []string{"original"}, Query: "Tongari Boushi no Atelier"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("validationProfilesForRequest() = %#v, want %#v", got, want)
 	}
 }

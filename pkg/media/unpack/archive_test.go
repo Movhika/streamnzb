@@ -138,6 +138,34 @@ func TestGetMediaStreamAllowsPlausibleLargestDirectFallback(t *testing.T) {
 	}
 }
 
+func TestGetMediaStreamForEpisodeAllowsLargestDirectFallbackWhenHinted(t *testing.T) {
+	discardTestLogger(t)
+
+	files := []UnpackableFile{
+		&sizedUnpackableFile{
+			memoryUnpackableFile: &memoryUnpackableFile{name: "abc12345", data: []byte("video")},
+			size:                 80 * 1024 * 1024,
+		},
+	}
+
+	stream, name, _, _, err := GetMediaStreamForEpisodeWithHints(
+		context.Background(),
+		files,
+		nil,
+		"",
+		EpisodeTarget{Season: 1, Episode: 1},
+		StreamSelectionHints{AllowLargestDirectFallback: true},
+	)
+	if err != nil {
+		t.Fatalf("expected hinted targeted fallback to succeed, got %v", err)
+	}
+	defer stream.Close()
+
+	if name != "abc12345" {
+		t.Fatalf("expected plausible fallback name, got %q", name)
+	}
+}
+
 func TestPlausibleLargestDirectFallbackAllowsCommonReleasePunctuation(t *testing.T) {
 	if !isPlausibleLargestDirectFallbackName("Movie, Title '11 [1080p]") {
 		t.Fatal("expected common release punctuation to remain plausible")
