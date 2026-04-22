@@ -108,6 +108,29 @@ func metadataAlternativeTitle(metadata *resolvedSearchMetadata, contentType stri
 	return ""
 }
 
+func metadataFallbackTitle(metadata *resolvedSearchMetadata, contentType string) string {
+	original := strings.TrimSpace(metadataOriginalTitle(metadata, contentType))
+	if metadata == nil || original == "" || hasLatinLetter(original) {
+		return ""
+	}
+	if metadataAlternativeTitle(metadata, contentType) != "" {
+		return ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(metadataOriginalLanguage(metadata, contentType)), "ja") {
+		return ""
+	}
+	if contentType == "movie" {
+		if fallback := strings.TrimSpace(preferredMovieEnglishTitle(metadata)); fallback != "" && !strings.EqualFold(fallback, original) {
+			return fallback
+		}
+		return ""
+	}
+	if fallback := strings.TrimSpace(preferredSeriesEnglishTitle(metadata)); fallback != "" && !strings.EqualFold(fallback, original) {
+		return fallback
+	}
+	return ""
+}
+
 func metadataDisplayYear(metadata *resolvedSearchMetadata, contentType string) string {
 	if metadata == nil {
 		return ""
@@ -197,6 +220,16 @@ func pickRomanizedAlternativeTitle(alternatives []tmdb.AlternativeTitle) string 
 	return ""
 }
 
+func preferredMovieEnglishTitle(metadata *resolvedSearchMetadata) string {
+	if metadata == nil || metadata.MovieDetails == nil {
+		return ""
+	}
+	if localized := localizedMovieTitleForLanguage(metadata.MovieTranslations, "en-US"); localized != "" {
+		return localized
+	}
+	return strings.TrimSpace(metadata.MovieDetails.Title)
+}
+
 func preferredMovieOriginalTitle(metadata *resolvedSearchMetadata) string {
 	if metadata == nil || metadata.MovieDetails == nil {
 		return ""
@@ -216,7 +249,20 @@ func preferredMovieOriginalTitle(metadata *resolvedSearchMetadata) string {
 			return alt
 		}
 	}
+	if english := preferredMovieEnglishTitle(metadata); english != "" {
+		return english
+	}
 	return title
+}
+
+func preferredSeriesEnglishTitle(metadata *resolvedSearchMetadata) string {
+	if metadata == nil || metadata.TVDetails == nil {
+		return ""
+	}
+	if localized := localizedTVTitleForLanguage(metadata.TVTranslations, "en-US"); localized != "" {
+		return localized
+	}
+	return strings.TrimSpace(metadata.TVDetails.Name)
 }
 
 func preferredSeriesOriginalTitle(metadata *resolvedSearchMetadata) string {
@@ -237,6 +283,9 @@ func preferredSeriesOriginalTitle(metadata *resolvedSearchMetadata) string {
 		if alt := pickRomanizedAlternativeTitle(metadata.TVAlternativeTitles.Results); alt != "" {
 			return alt
 		}
+	}
+	if english := preferredSeriesEnglishTitle(metadata); english != "" {
+		return english
 	}
 	return title
 }
@@ -365,6 +414,24 @@ func buildMovieValidationQueryFromMetadata(metadata *resolvedSearchMetadata, lan
 	return title
 }
 
+func buildMovieValidationQueriesFromMetadata(metadata *resolvedSearchMetadata, languages []string, includeYear bool) []string {
+	queries := make([]string, 0, len(languages))
+	seen := make(map[string]bool, len(languages))
+	for _, language := range languages {
+		query := strings.TrimSpace(buildMovieValidationQueryFromMetadata(metadata, language, includeYear))
+		if query == "" {
+			continue
+		}
+		key := strings.ToLower(query)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		queries = append(queries, query)
+	}
+	return queries
+}
+
 func buildMovieOriginalQueryFromMetadata(metadata *resolvedSearchMetadata) string {
 	return strings.TrimSpace(preferredMovieOriginalTitle(metadata))
 }
@@ -438,29 +505,207 @@ func buildSeriesValidationQueryFromMetadata(metadata *resolvedSearchMetadata, la
 	return title
 }
 
+func buildSeriesValidationQueriesFromMetadata(metadata *resolvedSearchMetadata, languages []string, includeYear bool) []string {
+	queries := make([]string, 0, len(languages))
+	seen := make(map[string]bool, len(languages))
+	for _, language := range languages {
+		query := strings.TrimSpace(buildSeriesValidationQueryFromMetadata(metadata, language, includeYear))
+		if query == "" {
+			continue
+		}
+		key := strings.ToLower(query)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		queries = append(queries, query)
+	}
+	return queries
+}
+
 func buildSeriesOriginalQueryFromMetadata(metadata *resolvedSearchMetadata) string {
 	return strings.TrimSpace(preferredSeriesOriginalTitle(metadata))
 }
 
-func searchRequestNormalisationLogValues(metadata *resolvedSearchMetadata, contentType, language string, includeYear bool, season, episode, scope string) (string, string, string, bool) {
-	var originalTitle string
-	var selectedTitle string
-	if contentType == "movie" {
-		originalTitle = buildMovieOriginalQueryFromMetadata(metadata)
-		selectedTitle = buildMovieSearchQueryFromMetadata(metadata, language, false)
-	} else {
-		originalTitle = buildSeriesOriginalQueryFromMetadata(metadata)
-		selectedTitle = buildSeriesSearchTitleFromMetadata(metadata, language)
+func uniqueTitleLogValues(values []string) []string {
+	if len(values) == 0 {
+		return nil
 	}
-	if selectedTitle == "" {
-		return "", "", "", false
+	out := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, trimmed)
 	}
+	return out
+}
 
-	normalized := strings.TrimSpace(release.NormalizeTitleForSearchQuery(selectedTitle))
-	if normalized == "" || strings.EqualFold(normalized, selectedTitle) {
-		return "", "", "", false
+func validationTitleLanguages(searchMode, language string, languages []string) []string {
+	if strings.EqualFold(strings.TrimSpace(searchMode), "id") {
+		normalized := config.NormalizeSearchTitleLanguages(languages)
+		if len(normalized) > 0 {
+			return normalized
+		}
+		single := config.NormalizeSearchTitleLanguage(language)
+		if single != "" {
+			return []string{single}
+		}
+		return config.DefaultIDSearchTitleLanguages()
 	}
-	return strings.TrimSpace(originalTitle), selectedTitle, normalized, true
+	single := config.NormalizeSearchTitleLanguage(language)
+	if single == "" {
+		return []string{""}
+	}
+	return []string{single}
+}
+
+type titleLogEntry struct {
+	Languages       []string
+	InputTitle      string
+	NormalizedTitle string
+}
+
+func searchRequestNormalisationLogEntries(metadata *resolvedSearchMetadata, contentType string, languages []string) ([]titleLogEntry, bool) {
+	grouped := make(map[string]*titleLogEntry, len(languages))
+	order := make([]string, 0, len(languages))
+	changed := false
+	for _, language := range languages {
+		var selectedTitle string
+		if contentType == "movie" {
+			selectedTitle = buildMovieSearchQueryFromMetadata(metadata, language, false)
+		} else {
+			selectedTitle = buildSeriesSearchTitleFromMetadata(metadata, language)
+		}
+		selectedTitle = strings.TrimSpace(selectedTitle)
+		if selectedTitle == "" {
+			continue
+		}
+		normalized := strings.TrimSpace(release.NormalizeTitleForSearchQuery(selectedTitle))
+		if normalized == "" {
+			continue
+		}
+		logLanguage := searchTitleLanguageForLog(language)
+		key := strings.ToLower(selectedTitle) + "\x00" + strings.ToLower(normalized)
+		entry, ok := grouped[key]
+		if !ok {
+			entry = &titleLogEntry{
+				Languages:       []string{logLanguage},
+				InputTitle:      selectedTitle,
+				NormalizedTitle: normalized,
+			}
+			grouped[key] = entry
+			order = append(order, key)
+		} else {
+			exists := false
+			for _, existing := range entry.Languages {
+				if strings.EqualFold(existing, logLanguage) {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				entry.Languages = append(entry.Languages, logLanguage)
+			}
+		}
+		if !strings.EqualFold(strings.TrimSpace(normalized), strings.TrimSpace(selectedTitle)) {
+			changed = true
+		}
+	}
+	entries := make([]titleLogEntry, 0, len(order))
+	for _, key := range order {
+		entry := grouped[key]
+		if entry == nil {
+			continue
+		}
+		entries = append(entries, *entry)
+	}
+	if len(entries) == 0 {
+		return nil, false
+	}
+	if len(entries) > 1 {
+		changed = true
+	}
+	for _, entry := range entries {
+		if len(entry.Languages) > 1 {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return nil, false
+	}
+	return entries, true
+}
+
+func validationQueryProfilesFromMetadata(metadata *resolvedSearchMetadata, contentType string, languages []string, includeYear bool) []indexer.ValidationQueryProfile {
+	grouped := make(map[string]*indexer.ValidationQueryProfile, len(languages))
+	order := make([]string, 0, len(languages))
+	for _, language := range languages {
+		var query string
+		if contentType == "movie" {
+			query = strings.TrimSpace(buildMovieValidationQueryFromMetadata(metadata, language, includeYear))
+		} else {
+			query = strings.TrimSpace(buildSeriesValidationQueryFromMetadata(metadata, language, includeYear))
+		}
+		if query == "" {
+			continue
+		}
+		logLanguage := searchTitleLanguageForLog(language)
+		key := strings.ToLower(query)
+		profile, ok := grouped[key]
+		if !ok {
+			profile = &indexer.ValidationQueryProfile{
+				Languages: []string{logLanguage},
+				Query:     query,
+			}
+			grouped[key] = profile
+			order = append(order, key)
+			continue
+		}
+		exists := false
+		for _, existing := range profile.Languages {
+			if strings.EqualFold(existing, logLanguage) {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			profile.Languages = append(profile.Languages, logLanguage)
+		}
+	}
+	profiles := make([]indexer.ValidationQueryProfile, 0, len(order))
+	for _, key := range order {
+		if profile := grouped[key]; profile != nil {
+			profiles = append(profiles, *profile)
+		}
+	}
+	return profiles
+}
+
+func validationQueriesFromProfiles(profiles []indexer.ValidationQueryProfile) []string {
+	queries := make([]string, 0, len(profiles))
+	seen := make(map[string]bool, len(profiles))
+	for _, profile := range profiles {
+		query := strings.TrimSpace(profile.Query)
+		if query == "" {
+			continue
+		}
+		key := strings.ToLower(query)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		queries = append(queries, query)
+	}
+	return queries
 }
 
 func buildMovieQueriesFromMetadata(metadata *resolvedSearchMetadata, language string, includeYear bool) []string {
@@ -535,6 +780,11 @@ func logMetadataLookupFinished(streamLabel, contentType, id string, params *Sear
 	}
 	if alternativeTitle := metadataAlternativeTitle(params.Metadata, contentType); alternativeTitle != "" {
 		attrs = append(attrs, "alternative_title", alternativeTitle)
+	} else if fallbackTitle := metadataFallbackTitle(params.Metadata, contentType); fallbackTitle != "" {
+		attrs = append(attrs,
+			"fallback_reason", "no_romaji",
+			"fallback_title", fallbackTitle,
+		)
 	}
 	if contentType == "series" {
 		attrs = append(attrs,
@@ -573,11 +823,23 @@ func logStreamConfiguration(streamLabel, contentType string, stream *auth.Stream
 }
 
 func searchTitleLanguageForLog(language string) string {
-	trimmed := strings.TrimSpace(language)
+	trimmed := config.NormalizeSearchTitleLanguage(language)
 	if trimmed == "" {
 		return "original"
 	}
 	return trimmed
+}
+
+func searchTitleLanguagesForLog(languages []string) []string {
+	normalized := config.NormalizeSearchTitleLanguages(languages)
+	if len(normalized) == 0 {
+		return []string{"original"}
+	}
+	values := make([]string, 0, len(normalized))
+	for _, language := range normalized {
+		values = append(values, searchTitleLanguageForLog(language))
+	}
+	return values
 }
 
 func searchLimitForLog(limit int) any {
@@ -653,7 +915,11 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 		applyStreamIndexerSelection(&profileParams.Req, stream)
 		profileParams.Req.DisableResultFiltering = stream == nil || strings.TrimSpace(stream.FilterSortingMode) == "" || strings.EqualFold(strings.TrimSpace(stream.FilterSortingMode), "none") || streamUsesAIOStreamsProfile(stream)
 		searchMode := strings.ToLower(strings.TrimSpace(searchQuery.SearchMode))
-		if strings.TrimSpace(profileParams.Req.ValidationQuery) == "" {
+		validationQueries := append([]string(nil), profileParams.Req.ValidationQueries...)
+		if len(validationQueries) == 0 && strings.TrimSpace(profileParams.Req.ValidationQuery) != "" {
+			validationQueries = []string{profileParams.Req.ValidationQuery}
+		}
+		if len(validationQueries) == 0 {
 			logger.Debug("Skipping search request without validation basis",
 				"stream", streamLabel,
 				"request", searchQuery.Name,
@@ -662,6 +928,7 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 			)
 			continue
 		}
+		titleLanguages := validationTitleLanguages(searchQuery.SearchMode, searchQuery.SearchTitleLanguage, searchQuery.SearchTitleLanguages)
 		if searchMode == "id" && !hasUsableIDSearchIdentifier(profileParams.Req, contentType) {
 			logger.Debug("Skipping search request without resolved metadata identifiers",
 				"stream", streamLabel,
@@ -694,10 +961,14 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 			"search_mode", searchQuery.SearchMode,
 			"type", contentType,
 			"id", id,
-			"title_language", searchTitleLanguageForLog(searchQuery.SearchTitleLanguage),
 			"year", profileParams.Req.EnableYearValidation,
 			"extra_terms", searchQuery.ExtraSearchTerms,
 			"limit", searchLimitForLog(effectiveLimit),
+		}
+		if searchMode == "id" {
+			configAttrs = append(configAttrs, "title_languages", searchTitleLanguagesForLog(titleLanguages))
+		} else {
+			configAttrs = append(configAttrs, "title_language", searchTitleLanguageForLog(searchQuery.SearchTitleLanguage))
 		}
 		if contentType == "series" {
 			configAttrs = append(configAttrs,
@@ -710,26 +981,25 @@ func (s *Server) runConfiguredSearchRequests(contentType, id, streamLabel string
 			)
 		}
 		logger.Debug("Search request config", configAttrs...)
-		logIncludeYear := true
-		if searchQuery.IncludeYear != nil {
-			logIncludeYear = *searchQuery.IncludeYear
-		}
-		if originalTitle, inputTitle, normalizedTitle, ok := searchRequestNormalisationLogValues(
+		if entries, ok := searchRequestNormalisationLogEntries(
 			profileParams.Metadata,
 			contentType,
-			searchQuery.SearchTitleLanguage,
-			logIncludeYear,
-			profileParams.Req.Season,
-			profileParams.Req.Episode,
-			profileParams.Req.SeriesSearchScope,
+			titleLanguages,
 		); ok {
-			logger.Debug("Search request normalisation",
-				"stream", streamLabel,
-				"request", searchQuery.Name,
-				"original_title", originalTitle,
-				"input_title", inputTitle,
-				"normalised_title", normalizedTitle,
-			)
+			for _, entry := range entries {
+				attrs := []any{
+					"stream", streamLabel,
+					"request", searchQuery.Name,
+					"input_title", entry.InputTitle,
+					"normalised_title", entry.NormalizedTitle,
+				}
+				if len(entry.Languages) == 1 {
+					attrs = append(attrs, "title_language", entry.Languages[0])
+				} else {
+					attrs = append(attrs, "title_languages", entry.Languages)
+				}
+				logger.Debug("Search request normalisation", attrs...)
+			}
 		}
 		queryVariants := profileParams.PreparedQueries
 		if searchMode == "id" || len(queryVariants) == 0 {
@@ -1138,12 +1408,14 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 	req := &params.Req
 	searchMode := ""
 	searchTitleLanguage := ""
+	searchTitleLanguages := []string(nil)
 	includeYear := true
 	scope := config.NormalizeSeriesSearchScope(req.SeriesSearchScope)
 	var queryIndexerConfig *config.IndexerSearchConfig
 	if searchQuery != nil {
 		searchMode = strings.ToLower(strings.TrimSpace(searchQuery.SearchMode))
-		searchTitleLanguage = strings.TrimSpace(searchQuery.SearchTitleLanguage)
+		searchTitleLanguage = config.NormalizeSearchTitleLanguage(searchQuery.SearchTitleLanguage)
+		searchTitleLanguages = config.NormalizeSearchTitleLanguages(searchQuery.SearchTitleLanguages)
 		queryIndexerConfig = searchQuery.AsIndexerSearchConfig()
 		if searchQuery.IncludeYear != nil {
 			includeYear = *searchQuery.IncludeYear
@@ -1156,10 +1428,14 @@ func (s *Server) buildSearchParamsFromBase(base *SearchParams, searchQuery *conf
 	req.EnableYearValidation = includeYear
 	req.SearchMode = "text"
 	req.Query = ""
-	if contentType == "movie" {
-		req.ValidationQuery = buildMovieValidationQueryFromMetadata(params.Metadata, searchTitleLanguage, includeYear)
-	} else {
-		req.ValidationQuery = buildSeriesValidationQueryFromMetadata(params.Metadata, searchTitleLanguage, includeYear)
+	req.ValidationQueryProfiles = nil
+	req.ValidationQueries = nil
+	validationLanguages := validationTitleLanguages(searchMode, searchTitleLanguage, searchTitleLanguages)
+	req.ValidationQueryProfiles = validationQueryProfilesFromMetadata(params.Metadata, contentType, validationLanguages, includeYear)
+	req.ValidationQueries = validationQueriesFromProfiles(req.ValidationQueryProfiles)
+	req.ValidationQuery = ""
+	if len(req.ValidationQueries) > 0 {
+		req.ValidationQuery = req.ValidationQueries[0]
 	}
 	if searchMode == "id" {
 		req.SearchMode = "id"

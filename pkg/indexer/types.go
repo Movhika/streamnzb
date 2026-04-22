@@ -30,26 +30,33 @@ type Usage struct {
 }
 
 type SearchRequest struct {
-	Query                  string
-	IMDbID                 string
-	TMDBID                 string
-	TVDBID                 string
-	Cat                    string
-	Limit                  int
-	Season                 string
-	Episode                string
-	SeriesSearchScope      string
-	SearchMode             string
-	DisableResultFiltering bool
-	EnableYearValidation   bool
-	IndexerMode            string
-	ValidationQuery        string
-	StreamLabel            string `json:"-"`
-	RequestLabel           string `json:"-"`
+	Query                   string
+	IMDbID                  string
+	TMDBID                  string
+	TVDBID                  string
+	Cat                     string
+	Limit                   int
+	Season                  string
+	Episode                 string
+	SeriesSearchScope       string
+	SearchMode              string
+	DisableResultFiltering  bool
+	EnableYearValidation    bool
+	IndexerMode             string
+	ValidationQuery         string
+	ValidationQueries       []string
+	ValidationQueryProfiles []ValidationQueryProfile
+	StreamLabel             string `json:"-"`
+	RequestLabel            string `json:"-"`
 
 	EffectiveByIndexer map[string]*config.IndexerSearchConfig `json:"-"`
 
 	OptionalOverrides *config.IndexerSearchConfig `json:"-"`
+}
+
+type ValidationQueryProfile struct {
+	Languages []string
+	Query     string
 }
 
 type SearchResponse struct {

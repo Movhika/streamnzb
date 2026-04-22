@@ -10,12 +10,60 @@ import (
 	"streamnzb/pkg/release"
 )
 
-func compactValidationQueryForLog(query string) string {
-	query = strings.Join(strings.Fields(strings.TrimSpace(query)), " ")
-	if len(query) <= 96 {
-		return query
+func validationQueriesForRequest(req indexer.SearchRequest) []string {
+	profiles := validationProfilesForRequest(req)
+	if len(profiles) == 0 {
+		return nil
 	}
-	return strings.TrimSpace(query[:93]) + "..."
+	queries := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		queries = append(queries, profile.Query)
+	}
+	return queries
+}
+
+func validationProfilesForRequest(req indexer.SearchRequest) []indexer.ValidationQueryProfile {
+	if len(req.ValidationQueryProfiles) > 0 {
+		profiles := make([]indexer.ValidationQueryProfile, 0, len(req.ValidationQueryProfiles))
+		for _, profile := range req.ValidationQueryProfiles {
+			query := strings.TrimSpace(profile.Query)
+			if query == "" {
+				continue
+			}
+			languages := make([]string, 0, len(profile.Languages))
+			for _, language := range profile.Languages {
+				trimmedLanguage := strings.TrimSpace(language)
+				if trimmedLanguage == "" {
+					continue
+				}
+				languages = append(languages, trimmedLanguage)
+			}
+			profiles = append(profiles, indexer.ValidationQueryProfile{
+				Languages: languages,
+				Query:     query,
+			})
+		}
+		if len(profiles) > 0 {
+			return profiles
+		}
+	}
+	if len(req.ValidationQueries) > 0 {
+		profiles := make([]indexer.ValidationQueryProfile, 0, len(req.ValidationQueries))
+		for _, query := range req.ValidationQueries {
+			trimmed := strings.TrimSpace(query)
+			if trimmed == "" {
+				continue
+			}
+			profiles = append(profiles, indexer.ValidationQueryProfile{Query: trimmed})
+		}
+		if len(profiles) > 0 {
+			return profiles
+		}
+	}
+	if trimmed := strings.TrimSpace(req.ValidationQuery); trimmed != "" {
+		return []indexer.ValidationQueryProfile{{Query: trimmed}}
+	}
+	return nil
 }
 
 func RunIndexerSearches(idx indexer.Indexer, req indexer.SearchRequest, contentType string) ([]*release.Release, error) {
@@ -26,8 +74,8 @@ func RunIndexerSearches(idx indexer.Indexer, req indexer.SearchRequest, contentT
 	runIDSearch := strings.EqualFold(strings.TrimSpace(req.SearchMode), "id")
 	searchReq := req
 
-	validationQuery := req.ValidationQuery
-	if strings.TrimSpace(validationQuery) == "" {
+	validationQueries := validationQueriesForRequest(req)
+	if len(validationQueries) == 0 {
 		mode := "text"
 		if runIDSearch {
 			mode = "id"
@@ -117,40 +165,47 @@ func RunIndexerSearches(idx indexer.Indexer, req indexer.SearchRequest, contentT
 		}
 	}
 
-	var validationStats ValidationStats
-	releases, validationStats = ValidateSearchResultsWithStats(releases, contentType, validationQuery, req.Season, req.Episode, true, req.EnableYearValidation)
-	validationAttrs := []any{
-		"stream", req.StreamLabel,
-		"request", req.RequestLabel,
-		"mode", func() string {
-			if runIDSearch {
-				return "id"
-			}
-			return "text"
-		}(),
-		"type", contentType,
-		"validation_query", compactValidationQueryForLog(validationQuery),
-		"raw_results", validationStats.RawResults,
-		"final_results", validationStats.FinalResults,
-		"rejected_results", validationStats.RejectedResults,
-		"dropped_title", validationStats.DroppedTitle,
-		"dropped_year", validationStats.DroppedYear,
+	releases, _ = ValidateSearchResultsWithStatsForQueries(releases, contentType, validationQueries, req.Season, req.Episode, true, req.EnableYearValidation)
+	for _, profile := range validationProfilesForRequest(req) {
+		_, profileStats := ValidateSearchResultsWithStats(rawReleases, contentType, profile.Query, req.Season, req.Episode, true, req.EnableYearValidation)
+		validationAttrs := []any{
+			"stream", req.StreamLabel,
+			"request", req.RequestLabel,
+			"mode", func() string {
+				if runIDSearch {
+					return "id"
+				}
+				return "text"
+			}(),
+			"type", contentType,
+			"raw_results", profileStats.RawResults,
+			"final_results", profileStats.FinalResults,
+			"rejected_results", profileStats.RejectedResults,
+			"dropped_title", profileStats.DroppedTitle,
+			"dropped_year", profileStats.DroppedYear,
+			"validation_query", profile.Query,
+		}
+		if len(profile.Languages) == 1 {
+			validationAttrs = append(validationAttrs, "title_language", profile.Languages[0])
+		} else if len(profile.Languages) > 1 {
+			validationAttrs = append(validationAttrs, "title_languages", profile.Languages)
+		}
+		if contentType == "series" {
+			validationAttrs = append(validationAttrs,
+				"scope", config.NormalizeSeriesSearchScope(req.SeriesSearchScope),
+				"expected_season", profileStats.ExpectedSeason,
+				"expected_episode", profileStats.ExpectedEpisode,
+				"dropped_episode_request", profileStats.DroppedEpisodeRequest,
+				"dropped_season", profileStats.DroppedSeason,
+				"accepted_exact_episode", profileStats.AcceptedExactEpisode,
+				"accepted_multi_episode", profileStats.AcceptedMultiEpisode,
+				"accepted_season_pack", profileStats.AcceptedSeasonPack,
+				"accepted_complete_pack", profileStats.AcceptedCompletePack,
+				"accepted_season_match", profileStats.AcceptedSeasonMatch,
+			)
+		}
+		logger.Debug("Search request validation", validationAttrs...)
 	}
-	if contentType == "series" {
-		validationAttrs = append(validationAttrs,
-			"scope", config.NormalizeSeriesSearchScope(req.SeriesSearchScope),
-			"expected_season", validationStats.ExpectedSeason,
-			"expected_episode", validationStats.ExpectedEpisode,
-			"dropped_episode_request", validationStats.DroppedEpisodeRequest,
-			"dropped_season", validationStats.DroppedSeason,
-			"accepted_exact_episode", validationStats.AcceptedExactEpisode,
-			"accepted_multi_episode", validationStats.AcceptedMultiEpisode,
-			"accepted_season_pack", validationStats.AcceptedSeasonPack,
-			"accepted_complete_pack", validationStats.AcceptedCompletePack,
-			"accepted_season_match", validationStats.AcceptedSeasonMatch,
-		)
-	}
-	logger.Debug("Search request validation", validationAttrs...)
 
 	switch {
 	case !runIDSearch:

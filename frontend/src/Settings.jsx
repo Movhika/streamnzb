@@ -33,6 +33,37 @@ function normalizeSeriesScopeFromLegacy(scope, legacyUseSeasonEpisodeParams) {
   return ''
 }
 
+function normalizeSearchTitleLanguage(value) {
+  const trimmed = String(value || '').trim()
+  return trimmed.toLowerCase() === 'original' ? '' : trimmed
+}
+
+function normalizeSearchTitleLanguages(values) {
+  const list = Array.isArray(values) ? values : []
+  const normalized = []
+  const seen = new Set()
+  for (const value of list) {
+    const language = normalizeSearchTitleLanguage(value)
+    const key = language.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    normalized.push(language)
+  }
+  return normalized
+}
+
+function normalizeSearchQueryLanguages(query) {
+  const searchMode = String(query?.search_mode || '').trim().toLowerCase()
+  const searchTitleLanguage = normalizeSearchTitleLanguage(query?.search_title_language || '')
+  const searchTitleLanguages = normalizeSearchTitleLanguages(query?.search_title_languages)
+  if (searchMode === 'id') {
+    if (searchTitleLanguages.length > 0) return searchTitleLanguages
+    if (searchTitleLanguage === '') return ['en-US', '']
+    return [searchTitleLanguage]
+  }
+  return []
+}
+
 function Settings({
   initialConfig,
   sendCommand,
@@ -132,7 +163,8 @@ function Settings({
           movie_categories: query.movie_categories || '',
           extra_search_terms: query.extra_search_terms || '',
           search_result_limit: Number(query.search_result_limit || 0),
-          search_title_language: query.search_title_language || '',
+          search_title_language: normalizeSearchTitleLanguage(query.search_title_language || ''),
+          search_title_languages: normalizeSearchQueryLanguages(query),
           include_year: normalizeQueryYearSetting(query.search_mode, query.include_year, query.include_year_in_text_search),
         })) || [],
         series_search_queries: initialConfig.series_search_queries?.map((query) => ({
@@ -141,7 +173,8 @@ function Settings({
           tv_categories: query.tv_categories || '',
           extra_search_terms: query.extra_search_terms || '',
           search_result_limit: Number(query.search_result_limit || 0),
-          search_title_language: query.search_title_language || '',
+          search_title_language: normalizeSearchTitleLanguage(query.search_title_language || ''),
+          search_title_languages: normalizeSearchQueryLanguages(query),
           include_year: normalizeQueryYearSetting(query.search_mode, query.include_year, query.include_year_in_text_search),
           series_search_scope: normalizeSeriesScopeFromLegacy(query.series_search_scope, query.use_season_episode_params),
         })) || []

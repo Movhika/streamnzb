@@ -202,12 +202,93 @@ type ValidationStats struct {
 	DroppedYear           int
 }
 
+type validationExpectation struct {
+	Title string
+	Year  int
+}
+
+func validationExpectationsForQueries(contentType string, validationQueries []string) []validationExpectation {
+	expectations := make([]validationExpectation, 0, len(validationQueries))
+	seen := make(map[string]bool, len(validationQueries))
+	for _, validationQuery := range validationQueries {
+		trimmed := strings.TrimSpace(validationQuery)
+		if trimmed == "" {
+			continue
+		}
+		var title string
+		var year int
+		if contentType == "movie" {
+			title, year = parseValidationQuery(trimmed)
+		} else {
+			title, year = parseSeriesValidationQuery(trimmed)
+		}
+		if title == "" {
+			continue
+		}
+		key := title + "\x00" + strconv.Itoa(year)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		expectations = append(expectations, validationExpectation{
+			Title: title,
+			Year:  year,
+		})
+	}
+	return expectations
+}
+
+func titleMatchesAnyExpectation(expectations []validationExpectation, gotTitle string) bool {
+	if len(expectations) == 0 {
+		return true
+	}
+	for _, expectation := range expectations {
+		if expectation.Title == "" {
+			continue
+		}
+		if normalizedTitleMatches(expectation.Title, gotTitle) {
+			return true
+		}
+	}
+	return false
+}
+
+func anyExpectationHasYear(expectations []validationExpectation) bool {
+	for _, expectation := range expectations {
+		if expectation.Year > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func yearMatchesAnyExpectation(expectations []validationExpectation, gotYear int) bool {
+	for _, expectation := range expectations {
+		if expectation.Year <= 0 {
+			continue
+		}
+		if movieYearMatches(expectation.Year, gotYear) {
+			return true
+		}
+	}
+	return false
+}
+
 func ValidateSearchResults(releases []*release.Release, contentType, validationQuery, season, episode string, enableTitleValidation, enableYearValidation bool) []*release.Release {
 	filtered, _ := ValidateSearchResultsWithStats(releases, contentType, validationQuery, season, episode, enableTitleValidation, enableYearValidation)
 	return filtered
 }
 
+func ValidateSearchResultsForQueries(releases []*release.Release, contentType string, validationQueries []string, season, episode string, enableTitleValidation, enableYearValidation bool) []*release.Release {
+	filtered, _ := ValidateSearchResultsWithStatsForQueries(releases, contentType, validationQueries, season, episode, enableTitleValidation, enableYearValidation)
+	return filtered
+}
+
 func ValidateSearchResultsWithStats(releases []*release.Release, contentType, validationQuery, season, episode string, enableTitleValidation, enableYearValidation bool) ([]*release.Release, ValidationStats) {
+	return ValidateSearchResultsWithStatsForQueries(releases, contentType, []string{validationQuery}, season, episode, enableTitleValidation, enableYearValidation)
+}
+
+func ValidateSearchResultsWithStatsForQueries(releases []*release.Release, contentType string, validationQueries []string, season, episode string, enableTitleValidation, enableYearValidation bool) ([]*release.Release, ValidationStats) {
 	stats := ValidationStats{}
 	if contentType != "movie" && contentType != "series" {
 		stats.RawResults = len(releases)
@@ -219,17 +300,13 @@ func ValidateSearchResultsWithStats(releases []*release.Release, contentType, va
 	stats.ExpectedSeason = expectSeason
 	stats.ExpectedEpisode = expectEpisode
 
-	var expectTitle string
-	var expectYear int
-	if contentType == "movie" {
-		expectTitle, expectYear = parseValidationQuery(validationQuery)
-	} else {
-		expectTitle, expectYear = parseSeriesValidationQuery(validationQuery)
+	expectations := validationExpectationsForQueries(contentType, validationQueries)
+	if len(expectations) > 0 {
+		stats.ExpectedTitle = expectations[0].Title
+		stats.ExpectedYear = expectations[0].Year
 	}
-	stats.ExpectedTitle = expectTitle
-	stats.ExpectedYear = expectYear
-	stats.TitleValidationApplied = enableTitleValidation && expectTitle != ""
-	stats.YearValidationApplied = enableYearValidation && expectYear > 0
+	stats.TitleValidationApplied = enableTitleValidation && len(expectations) > 0
+	stats.YearValidationApplied = enableYearValidation && anyExpectationHasYear(expectations)
 
 	var out []*release.Release
 	for _, rel := range releases {
@@ -247,20 +324,20 @@ func ValidateSearchResultsWithStats(releases []*release.Release, contentType, va
 		}
 
 		if contentType == "movie" {
-			if stats.TitleValidationApplied && !normalizedTitleMatches(expectTitle, parsed.Title) {
+			if stats.TitleValidationApplied && !titleMatchesAnyExpectation(expectations, parsed.Title) {
 				stats.DroppedTitle++
 				logger.Trace("ValidateSearchResults dropped: title",
-					"expect_title", expectTitle,
+					"expect_title", stats.ExpectedTitle,
 					"got_title", parsed.Title,
 					"release", rel.Title,
 				)
 				continue
 			}
 		} else {
-			if stats.TitleValidationApplied && !normalizedTitleMatches(expectTitle, parsed.Title) {
+			if stats.TitleValidationApplied && !titleMatchesAnyExpectation(expectations, parsed.Title) {
 				stats.DroppedTitle++
 				logger.Trace("ValidateSearchResults dropped: title",
-					"expect_title", expectTitle,
+					"expect_title", stats.ExpectedTitle,
 					"got_title", parsed.Title,
 					"release", rel.Title,
 				)
@@ -290,10 +367,10 @@ func ValidateSearchResultsWithStats(releases []*release.Release, contentType, va
 			}
 		}
 
-		if stats.YearValidationApplied && !movieYearMatches(expectYear, parsed.Year) {
+		if stats.YearValidationApplied && !yearMatchesAnyExpectation(expectations, parsed.Year) {
 			stats.DroppedYear++
 			logger.Trace("ValidateSearchResults dropped: year",
-				"expect_year", expectYear,
+				"expect_year", stats.ExpectedYear,
 				"got_year", parsed.Year,
 				"release", rel.Title,
 			)

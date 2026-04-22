@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,9 @@ func TestDefaultSearchQuerySettingsMatchExpectedModes(t *testing.T) {
 	if cfg.MovieSearchQueries[1].IncludeYear == nil || *cfg.MovieSearchQueries[1].IncludeYear {
 		t.Fatalf("expected DefaultMovieID year disabled")
 	}
+	if got := cfg.MovieSearchQueries[1].SearchTitleLanguages; !strings.EqualFold(strings.Join(got, "|"), strings.Join([]string{"en-US", ""}, "|")) {
+		t.Fatalf("expected DefaultMovieID title languages [en-US original], got %#v", got)
+	}
 	if cfg.SeriesSearchQueries[0].SearchResultLimit != 0 {
 		t.Fatalf("expected DefaultTVText limit max/0, got %d", cfg.SeriesSearchQueries[0].SearchResultLimit)
 	}
@@ -101,13 +105,16 @@ func TestDefaultSearchQuerySettingsMatchExpectedModes(t *testing.T) {
 	if cfg.SeriesSearchQueries[1].IncludeYear == nil || *cfg.SeriesSearchQueries[1].IncludeYear {
 		t.Fatalf("expected DefaultTVID year disabled")
 	}
+	if got := cfg.SeriesSearchQueries[1].SearchTitleLanguages; !strings.EqualFold(strings.Join(got, "|"), strings.Join([]string{"en-US", ""}, "|")) {
+		t.Fatalf("expected DefaultTVID title languages [en-US original], got %#v", got)
+	}
 }
 
 func TestBackfillLegacySearchQuerySettings(t *testing.T) {
 	cfg := &Config{
 		MovieSearchQueries: []SearchQueryConfig{
 			{Name: "DefaultMovieText", SearchMode: "text"},
-			{Name: "DefaultMovieID", SearchMode: "id", LegacyIncludeYearInTextSearch: ptrBool(true)},
+			{Name: "DefaultMovieID", SearchMode: "id", LegacyIncludeYearInTextSearch: ptrBool(true), SearchTitleLanguage: "original"},
 		},
 		SeriesSearchQueries: []SearchQueryConfig{
 			{Name: "DefaultTVText", SearchMode: "text", UseSeasonEpisodeParams: ptrBool(false)},
@@ -125,6 +132,9 @@ func TestBackfillLegacySearchQuerySettings(t *testing.T) {
 	if cfg.MovieSearchQueries[1].IncludeYear == nil || !*cfg.MovieSearchQueries[1].IncludeYear {
 		t.Fatal("expected DefaultMovieID year enabled after backfill from legacy year field")
 	}
+	if got := cfg.MovieSearchQueries[1].SearchTitleLanguages; !reflect.DeepEqual(got, []string{"en-US", ""}) {
+		t.Fatalf("expected DefaultMovieID title languages [en-US original] after backfill, got %#v", got)
+	}
 	if cfg.SeriesSearchQueries[0].IncludeYear == nil || !*cfg.SeriesSearchQueries[0].IncludeYear {
 		t.Fatal("expected DefaultTVText year enabled after backfill")
 	}
@@ -133,6 +143,9 @@ func TestBackfillLegacySearchQuerySettings(t *testing.T) {
 	}
 	if cfg.SeriesSearchQueries[1].IncludeYear == nil || *cfg.SeriesSearchQueries[1].IncludeYear {
 		t.Fatal("expected DefaultTVID year disabled after backfill")
+	}
+	if got := cfg.SeriesSearchQueries[1].SearchTitleLanguages; !reflect.DeepEqual(got, []string{"en-US", ""}) {
+		t.Fatalf("expected DefaultTVID title languages [en-US original] after backfill, got %#v", got)
 	}
 }
 

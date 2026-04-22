@@ -1612,7 +1612,10 @@ func (s *Server) openPlaybackSource(ctx context.Context, sess *session.Session) 
 	if sess.ContentIDs != nil {
 		target = unpack.EpisodeTarget{Season: sess.ContentIDs.Season, Episode: sess.ContentIDs.Episode}
 	}
-	stream, name, size, bp, err := unpack.GetMediaStreamForEpisode(ctx, unpackFiles, sess.Blueprint, password, target)
+	hints := unpack.StreamSelectionHints{
+		AllowLargestDirectFallback: allowLargestDirectFallbackForSession(sess),
+	}
+	stream, name, size, bp, err := unpack.GetMediaStreamForEpisodeWithHints(ctx, unpackFiles, sess.Blueprint, password, target, hints)
 	cacheReturnedPlaybackBlueprint(sess, bp)
 	if err != nil {
 		logger.Error("Failed to open media stream", "id", sessionID, "err", err)
@@ -1910,6 +1913,20 @@ func matchTypeForSession(sess *session.Session, contentType string) string {
 		return "season_match"
 	default:
 		return ""
+	}
+}
+
+func allowLargestDirectFallbackForSession(sess *session.Session) bool {
+	if sess == nil {
+		return false
+	}
+	switch strings.TrimSpace(sess.ContentType) {
+	case "movie":
+		return true
+	case "series":
+		return matchTypeForSession(sess, "series") == "exact_episode"
+	default:
+		return false
 	}
 }
 
@@ -2258,7 +2275,10 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, streamC
 	if sess.ContentIDs != nil {
 		target = unpack.EpisodeTarget{Season: sess.ContentIDs.Season, Episode: sess.ContentIDs.Episode}
 	}
-	stream, name, size, bp, err := unpack.GetMediaStreamForEpisode(mergedCtx, unpackFiles, sess.Blueprint, password, target)
+	hints := unpack.StreamSelectionHints{
+		AllowLargestDirectFallback: allowLargestDirectFallbackForSession(sess),
+	}
+	stream, name, size, bp, err := unpack.GetMediaStreamForEpisodeWithHints(mergedCtx, unpackFiles, sess.Blueprint, password, target, hints)
 	cacheReturnedPlaybackBlueprint(sess, bp)
 	if err != nil {
 		logger.Error("Failed to open media stream", "err", err)
